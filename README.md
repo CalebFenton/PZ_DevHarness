@@ -14,7 +14,7 @@ prefix, console tag, scenario, sandbox namespace, fixtures and extra modes.
 | `bin/run-client.sh` | The client runner behind a mod's `dev/run-debug-client.sh`. |
 | `bin/validate-server.sh` | Boots a throwaway dedicated server with the mod and fails on anything the mod logs. |
 | `lib/harness.sh` | Paths, JVM arguments, the game lock, `install_mod`, `compile_java`. A mod's own dev scripts may source it. |
-| `java/ClickToStart.java` | Starts the client and presses "Click to start" on the loading screen. |
+| `java/ClickToStart.java` | Starts the client, presses "Click to start" on the loading screen and gives the asset loader more threads. |
 | `mod/42/` | The harness mod (`cf_test_harness`): `PZHarness/Runner.lua` and `PZHarness/TestLib.lua`. |
 
 ## Adopting it
@@ -160,10 +160,15 @@ run's mark and exits 0 only if the run finished, nothing failed and no Lua error
 - Uncapped frames. Game time per second doesn't depend on the frame rate, so more frames a second
   only shorten what is counted in ticks. `--test` and modes registered `uncapped` draw as many
   frames as they can (about 260 a second on an M3 Max, against 60). A test therefore waits with
-  `waitUntil` on the condition it needs, never for a fixed number of frames.
+  `waitUntil` on the condition it needs, never for a fixed number of frames. Every mode loads
+  uncapped, since the main menu and the loading screen step per frame; the others go back to 60
+  when the scenario starts.
+- More asset loader threads. The game loads textures, meshes and animations on 4 threads, and the
+  loading screen waits about 8 seconds for them with all 4 busy. ClickToStart swaps in a pool of
+  up to 12 (the cores less 4), which cuts that wait to about 2 seconds.
 - Settling by loaded chunks. A run starts once one square in every chunk 40 squares around the
   character has loaded, not after a fixed delay.
-- `--test --stay`. Starting and quitting the game costs about 27 seconds. A kept game reruns the
+- `--test --stay`. Starting and quitting the game costs about 21 seconds. A kept game reruns the
   tests in a second or two plus their own time: the runner unregisters the mod's tests, runs
   `RELOAD_FILES` again with `reloadLuaFile` and reruns. `reloadLuaFile` ignores a file's
   `Events.*.Add` calls (`LuaCompiler.rewriteEvents`), so only files that just register tests

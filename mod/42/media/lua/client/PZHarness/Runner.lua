@@ -342,14 +342,18 @@ function PZHarness.register(config)
     -- only shorten what is counted in ticks: the tests' waits for the game to apply a change, and
     -- from here on the world loading. Measured on an M3 Max, uncapped draws about 260 frames a
     -- second against 60. The option can't do it: Core.loadOptions resets uncappedFPS to false and
-    -- frameRate to 60. A mode whose steps wait fixed tick counts keeps 60.
+    -- frameRate to 60. Every mode loads uncapped: the main menu and the loading screen step per
+    -- frame, and the game takes at most 16 loaded assets a frame. A mode whose steps wait fixed
+    -- tick counts goes back to 60 when the scenario starts, before its first step.
     local mode = PZHarness.config.modes[run.mode]
-    if run.mode == "test" or (mode and mode.uncapped) then
-        getPerformance():setFramerateUncapped(true)
-    end
+    local uncapped = run.mode == "test" or (mode and mode.uncapped)
+    getPerformance():setFramerateUncapped(true)
 
     local originalOnStart = scenario.onStart
     scenario.onStart = function()
+        if not uncapped then
+            getPerformance():setFramerateUncapped(false)
+        end
         originalOnStart()
         if PZHarness.config.onStart then
             PZHarness.config.onStart(run.mode)
