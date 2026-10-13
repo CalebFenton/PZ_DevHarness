@@ -11,11 +11,11 @@ prefix, console tag, scenario, sandbox namespace, fixtures and extra modes.
 
 | Path | What it is |
 | --- | --- |
-| `bin/run-client.sh` | The client runner behind a mod's `dev/run-debug-client.sh`. |
+| `bin/run-client.sh` | The client runner behind a mod's `dev/run-debug-client.sh`, single player and multiplayer (`--mp`). |
 | `bin/validate-server.sh` | Boots a throwaway dedicated server with the mod and fails on anything the mod logs. |
-| `lib/harness.sh` | Paths, JVM arguments, the game lock, `install_mod`, `compile_java`. A mod's own dev scripts may source it. |
+| `lib/harness.sh` | Paths, JVM arguments, the game lock, `install_mod`, `compile_java`, and the dedicated server both scripts start (`prepare_server`, `start_server`, `stop_server`, `server_problems`). A mod's own dev scripts may source it. |
 | `java/ClickToStart.java` | Starts the client, presses "Click to start" on the loading screen and gives the asset loader more threads. |
-| `mod/42/` | The harness mod (`cf_test_harness`): `PZHarness/Runner.lua` and `PZHarness/TestLib.lua`. |
+| `mod/42/` | The harness mod (`cf_test_harness`): `client/PZHarness/Runner.lua`, `TestLib.lua` and `ServerCalls.lua`, and `server/PZHarness/ServerHandlers.lua`, the server's half of the tests' server channel. |
 
 ## Adopting it
 
@@ -36,9 +36,9 @@ Sourced bash. Paths are relative to the repository. The mod's id and name come f
 | --- | --- |
 | `MOD_DIR` | The published mod's folder, such as `Contents/mods/MyMod`. It is copied into the cache. |
 | `DEV_MOD_DIR` | The dev mod's folder, such as `dev/MyModDevHarness`. It is linked into the cache. |
-| `CACHE_NAME` | Cache dirs go to `$TMPDIR/<name>-client`, `-server` and (by convention for the mod's own scripts) `-check`. |
+| `CACHE_NAME` | Cache dirs go to `$TMPDIR/<name>-client`, `-server`, `-mpclient`, `-mpserver` and (by convention for the mod's own scripts) `-check`. |
 | `TAG` | The console tag of the tests' lines, such as `MyModTest`. |
-| `RELOAD_FILES` | A bash array of globs, relative to the dev mod, of the files a kept game loads again for a rerun, in load order (the mod's test library first). |
+| `RELOAD_FILES` | A bash array of globs, relative to the dev mod, of the files a kept game loads again for a rerun, in load order (the mod's test library first). With `--mp` the server loads those under `media/lua/server` and `media/lua/shared` again too, so list the dev mod's server handler files here. |
 | `MODES` | The mod's other modes, space-separated; each becomes a `--<mode>` flag. |
 | `MODE_MARK_<mode>` | The console mark of the mode's lines; the run waits for `<mark> DONE`. |
 | `MODE_SELECTION_<mode>` | Optional: the environment variable whose value the mode's handler gets as its selection, as `TESTS` is for `--test`. |
@@ -51,9 +51,9 @@ Hooks, bash functions the conf may define:
 | --- | --- |
 | `harness_check_<mode>` | Before the lock and the launch. `$SELECTION` holds the selection; exit nonzero to refuse it, so a typo fails at once. |
 | `harness_after_<mode>` | After a run of the mode that finished cleanly, instead of the plain `PASS`, such as to post-process screenshots in `$CACHE/Screenshots`. |
-| `harness_server_setup` | In `validate-server.sh`, after it writes `$CACHE/Server/$SERVER_NAME.ini`; add files such as `${SERVER_NAME}_SandboxVars.lua`. |
+| `harness_server_setup` | After a server's `$CACHE/Server/$SERVER_NAME.ini` is written: in `validate-server.sh`, and for the server of `--mp`, whose sandbox then gets `Zombies = 6` appended; add files such as `${SERVER_NAME}_SandboxVars.lua`. `$MP` is `1` for the `--mp` server. |
 
-Hooks can read `$REPO`, `$CACHE`, `$MOD_DIR`, `$DEV_MOD_DIR` (absolute by then) and `$MODE`.
+Hooks can read `$REPO`, `$CACHE`, `$MOD_DIR`, `$DEV_MOD_DIR` (absolute by then), `$MODE` and `$MP`.
 
 ### Entry points
 
@@ -119,14 +119,31 @@ function T.gadget(self, square) return T.tile(self, square, "mymod_01_0") end
 Test files register tests with `T.test(name, spec)`; `PZHarness/TestLib.lua` explains the spec,
 the restore stack and the rules that keep each test independent of the ones before it.
 
+What only the authority can do goes in the dev mod's server Lua, as named handlers that tests call
+with `T.server` (see [Multiplayer](#multiplayer)):
+
+```lua
+-- <DEV_MOD_DIR>/42/media/lua/server/MyMod/Debug/MyModTestServer.lua
+require "PZHarness/ServerHandlers"
+
+PZHarness.serverHandler("placeThing", function(player, args, defer)
+    local square = getSquare(args.x, args.y, args.z)
+    if not square then return nil, "a loaded square for the thing" end -- fails the test as T.need does
+    local thing = MyMod.place(square)
+    defer(function() MyMod.remove(thing) end) -- undone on the server when the calling test ends
+    return { x = args.x, y = args.y, z = args.z } -- plain values: strings, numbers, booleans, tables
+end)
+```
+
 ## The test library
 
 `PZHarness.Test`, from `PZHarness/TestLib.lua`:
 
-- Registering: `test(name, spec)`, `craftTest(name, spec)`.
+- Registering: `test(name, spec)`, `craftTest(name, spec)`. `spec.spOnly` or `spec.mpOnly`, a reason string, keeps a test out of the other mode.
 - Expectations: `expect`, `expectNear`, `need`.
 - Restore stack: `defer`, `onTick`, `setTime`, `setPerk`, `setSandbox`, `setMultiplier`, `setGrid`, `makeDark`.
 - Queue: `wait`, `waitUntil`, `step`.
+- The server: `server(self, name, args)` calls the dev mod's handler `name` and leaves its answer in `self.server[name]`.
 - Squares and fixtures: `squares`, `track`, `tile`, `placeMoveable`, `bench`, `vehicle`, `lineUpTrailer`.
 - Crafting: `recipeNames`, `learnRecipes`, `forgetRecipes`, `addRecipeInputs`, `placeWorkTable`, `craftRefusal`, `startCraft`. Any test that starts a craft with `startCraft` and fails also reports why the game refused it, so a mod's own craft tests get that without `craftTest`.
 - Lookups: `player`, `objectWithSprite`, `countPairs`.
@@ -158,17 +175,24 @@ that rate left squares dark.
 | none | Play by hand: the main menu, with the scenario under Scenarios and the tests under Debug menu > Dev > Unit Tests > Timed Actions. |
 | `--test` | Runs every test of the mod and quits. Exits 1 on a failure or any Lua error. |
 | `--test --stay` | The same, but the game stays open; the next `--test --stay` reruns the tests in it. |
+| `--test --mp` | The same in multiplayer: a dedicated server and a client that joins it; see [Multiplayer](#multiplayer). |
+| `--test --mp --stay` | Both stay open; the next `--test --mp --stay` reruns the tests in them. |
 | `--<mode>` | Runs the mod's handler for the mode and quits. |
 
 Environment: `TESTS=<prefix>,...` runs only the tests whose names start with one of them;
-`TIMEOUT` caps a run in seconds (default 1200); `CACHE` moves the cache dir; `JAVAC` names the
-compiler for `ClickToStart.java` (any JDK from 8 on; the game's own Java has none); `PZ_APP`
-names another game `Contents` folder.
+`TIMEOUT` caps a run in seconds (default 1200); `CACHE` moves the cache dir (with `--mp` the
+client's; `SERVER_CACHE` the server's); `SERVER_PORT` moves the `--mp` server off 16361 (it also
+takes the next port); `JAVAC` names the compiler for `ClickToStart.java` (any JDK from 8 on; the
+game's own Java has none); `PZ_APP` names another game `Contents` folder.
 
 Console lines, in `<cache>/console.txt`: `<TAG> START <n>`, `TEST: <name>`, `<TAG> PASS <name>`,
-`<TAG> FAIL <name>: <reasons>`, `<TAG> TIME <s> s, <n> frames`, `<TAG> DONE passed=<n> failed=<n>`;
-with `--stay` also `<TAG> RUN <id>` and `<TAG> IDLE ...`. The script prints every line with the
-run's mark and exits 0 only if the run finished, nothing failed and no Lua error was logged.
+`<TAG> FAIL <name>: <reasons>`, `<TAG> SKIP <name>: <why>` for each test that opted out of this
+mode, `<TAG> TIME <s> s, <n> frames`, `<TAG> DONE passed=<n> failed=<n> skipped=<n>`; with
+`--stay` also `<TAG> RUN <id>` and `<TAG> IDLE ...`. With `--mp` the server's log
+(`<server cache>/server-console.txt`) gets `<TAG> SERVER FAIL <test>: <error>` for a handler or
+undo that failed, and `<TAG> RUN <id>` for a rerun. The script prints every line with the run's
+mark and both logs' paths, and exits 0 only if the run finished, at least one test passed, nothing
+failed and no Lua error was logged on either side.
 
 ## Why it is fast, and what that costs
 
@@ -192,33 +216,120 @@ run's mark and exits 0 only if the run finished, nothing failed and no Lua error
 - `--test --stay`. Starting and quitting the game costs about 21 seconds. A kept game reruns the
   tests in a second or two plus their own time: the runner unregisters the mod's tests, runs
   `RELOAD_FILES` again with `reloadLuaFile` and reruns. `reloadLuaFile` ignores a file's
-  `Events.*.Add` calls (`LuaCompiler.rewriteEvents`), so only files that just register tests
-  reload safely; a change to anything else in the dev mod, to the harness mod, or to the published
-  mod restarts the game. What earlier runs left in the kept world stays there, so finish with a
-  plain `--test`. The kept game shows and logs `<TAG> IDLE`, draws 24 frames a second while it
-  waits, and quits after 10 minutes without a run or when another run needs the game.
+  `Events.*.Add` calls (`LuaCompiler.rewriteEvents`), so only files that just register tests or
+  server handlers reload safely; a change to anything else in the dev mod, to the harness mod, or
+  to the published mod restarts the game. What earlier runs left in the kept world stays there, so
+  finish with a plain `--test`. The kept game shows and logs `<TAG> IDLE`, draws 24 frames a second
+  while it waits, and quits after 10 minutes without a run or when another run needs the game.
 - Early stop. In debug mode a Lua error stops the game in its error handler, so it never quits on
-  its own. A stack trace through any of the three mods, or any Lua failure once the harness has
-  started, ends the run at once and prints the trace.
+  its own. A Lua stack trace through any of the three mods, or any Lua failure once the harness
+  has started, ends the run at once and prints the trace. An exception the game logs and goes on
+  from (its frames indented twice), and anything on a server, which never stops at an error, fail
+  the run in the scan after it instead.
 - Silent. Harness runs set every volume in the cache's `options.ini` to 0; the sound engine still
   runs. Playing by hand keeps your volumes.
+
+## Multiplayer
+
+`--test --mp` takes the lock once, then:
+
+1. Prepares two cache dirs, `$TMPDIR/<CACHE_NAME>-mpserver` and `-mpclient`, each with a copy of
+   the mod and links to the harness mod and the dev mod.
+2. Writes the server's `harness.ini` (the three mods, ports 16361 and 16362, `Open`, `PauseEmpty`
+   off) and runs the conf's `harness_server_setup`, then appends `Zombies = 6` to its sandbox, so
+   the world has no zombies, as the scenarios' do. Every cold run starts a new world.
+3. Starts the server, through `start_server` in `lib/harness.sh` as `validate-server.sh` does,
+   and the client with ClickToStart at the same time. The client waits at the main menu until the
+   script writes `<client cache>/Lua/PZHarnessConnect.txt`, once the server's log says it started,
+   then joins as the server's admin: a `-debug` client must have the ConnectWithDebug capability.
+   Overlapping the boots saves about 8 seconds a run (the server boots slower while the client
+   does, 18 seconds instead of 14); joining before the server listens would only fail.
+4. The runner skips character creation (the default unemployed survivor), takes the character to
+   the scenario's `startLoc`, waits for the world to load, runs the scenario's `onStart` and the
+   mod's on the client, and runs the tests as in single player.
+5. After `DONE` the server gets `quit` on its console and saves while the client quits; the script
+   scans the client's log as in single player and the server's up to its exit as
+   `validate-server.sh` does, plus stack traces through the dev mod and the harness mod and
+   `SERVER FAIL` lines. Both processes stop on any exit of the script.
+
+A cold run takes about 44 seconds on an M3 Max: 18 for the server to start (the client boots
+meanwhile), 7 to join, 11 to load the world and reach the start, then the tests, then 7 for the
+server to save and exit. A rerun in a kept `--mp --stay` game takes under a second plus the tests:
+the server first loads its share of `RELOAD_FILES` again (the dev mod's `media/lua/server` and
+`media/lua/shared` files) and marks the run in its log, then the client loads its files and
+reruns. A change to any other file restarts both, as does either process having stopped. The kept
+client quits after its idle time and the server goes with it; the lock is free once both have.
+
+### The server channel
+
+Tests are written once and run in both modes. On a multiplayer client the character, its
+inventory and the world are the client's copies, and the mod's server Lua (which usually returns
+early when `isClient()`) is empty, so what only the authority can do goes through `T.server`:
+
+- `PZHarness.serverHandler(name, fn)` in the dev mod's server Lua registers `fn(player, args,
+  defer)`, which returns a table of plain values (or nil and what is missing). `player` is the
+  server's copy of the calling character. `defer(undo)` takes back what it built when the calling
+  test ends, on the server, in order with the test's own undos; a handler that fails has its undos
+  run at once.
+- `T.server(self, name, args)` queues the call and a wait for its answer, which lands in
+  `self.server[name]`. `args` may be a function of `self`, called when the call goes out, to use an
+  earlier answer. A failed or missing answer fails the test as `T.need` does and drops the steps
+  queued after it.
+- Single player calls the handler in the same Lua state, at once. Multiplayer sends a client
+  command (module `PZHarness`) and the server answers with a server command a tick or more later;
+  an answer lost for 15 seconds fails the call. The runner starts the next test only once every
+  request of the last one, its undos above all, has its answer, so no test meets what the one
+  before built. An undo the server reports failed after the verdict prints its own `FAIL` line and
+  counts in `DONE`.
+
+A test that can't run in one mode says why: `spOnly = "<why>"` or `mpOnly = "<why>"` in its spec.
+The runner skips it in the other mode and prints `<TAG> SKIP <name>: single player only: <why>`
+(or `multiplayer only`). A missing reason, or both fields, fails the test in every mode.
+
+### What a client can and can't do
+
+- Client Lua runs on the client only: setting `SandboxVars`, the clock (`T.setTime`), the game
+  speed (`T.setMultiplier`) or the grid changes the client's copy, which the server overwrites or
+  ignores. The server's own sandbox comes from `harness_server_setup`.
+- Objects a client places with `AddTileObject` (`T.tile`, `T.placeWorkTable`) exist on that client
+  only, and items it adds to the inventory aren't on the server: a timed action with `complete()`
+  runs on the server, which can't find them. `ActionManager.sendAction` then logs "Unable to
+  resolve container location", which fails the run. Build such fixtures in a server handler.
+- Commands through `sendClientCommand`, the Global Object System's syncs to the client's copies,
+  and timed actions without `complete()` (such as the harness's own waits) work as in a real game.
+- The client is admin, so permission checks the server makes for players aren't exercised.
+- `getUsername()` of the client's character can differ from the account (`admin`) the server sees;
+  don't key on it.
+
+### Known noise and limits
+
+- Joining resets the client's Lua (`Core.ResetLua`), so every mod's Lua loads twice on the
+  client: once at boot, as in single player, and once as a multiplayer client. Load-time side
+  effects outside Lua (files, Java state) happen twice. The reset also logs a
+  `NoSuchFileException` for each mod without `media/AnimSets`; vanilla's, harmless, and not
+  counted.
+- The client doesn't pause when it loses focus, but like any run it takes keyboard focus while its
+  window is up.
+- Only `--test` runs in multiplayer; the mod's other modes are single player.
 
 ## Other behaviour
 
 - One game at a time. Every script that starts a game, for any mod, takes the lock
   `$TMPDIR/pz-test-harness-game.lock` and waits while another holds it; a lock whose owner died
-  is taken over. A kept `--stay` game holds the lock itself, and the next run that needs the game
-  stops it, unless that run is a `--test --stay` of the same cache dir that can rerun in it.
+  is taken over. A kept `--stay` game (with `--mp` its client and server) holds the lock itself,
+  and the next run that needs the game stops it, unless that run is a `--stay` run of the same
+  cache dir that can rerun in it.
 - The published mod is copied into the cache's `mods` folder, not linked, and the cache dir is
   under the real path of `$TMPDIR`: the game reads tile depth maps by absolute path and refuses
   paths through a symlink (`ZomboidFileSystem.validatePrefix`). The dev mod and the harness mod
   have no tiles and are linked.
-- The runner reads the run from `<cache>/Lua/PZHarness.txt` and rerun requests from
-  `<cache>/Lua/PZHarnessRerun.txt`. Without the first file, as in a game the script didn't start,
-  there is no mode, and the tests print under the tag `PZHarness`.
-- `debug-options.ini` sets `DebugScenario.ForceLaunch` in harness modes, so the scenario the
-  runner marks `forceLaunch` starts from the main menu, and the runner turns off pausing when the
-  window loses focus.
+- The runner reads the run from `<cache>/Lua/PZHarness.txt`, rerun requests from
+  `<cache>/Lua/PZHarnessRerun.txt` and, with `--mp`, the server to join from
+  `<cache>/Lua/PZHarnessConnect.txt`. Without the first file, as in a game the script didn't
+  start, there is no mode, and the tests print under the tag `PZHarness`.
+- `debug-options.ini` sets `DebugScenario.ForceLaunch` in single player harness modes, so the
+  scenario the runner marks `forceLaunch` starts from the main menu, and the runner turns off
+  pausing when the window loses focus.
 - A run takes keyboard focus while its window is up, and a keypress there (Escape opens the pause
   menu) can break it, so leave it alone until it quits.
 - Each mode's run deletes the `<mode>_*.png` screenshots in `<cache>/Screenshots` before it

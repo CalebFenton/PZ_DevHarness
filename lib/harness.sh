@@ -72,21 +72,31 @@ install_mod() {
     rsync -a --delete "$MOD_DIR/" "$CACHE/mods/$MOD_FOLDER/"
 }
 
+# The harness mod and the dev mod, for a client or a server of a harness run. Symlinks are enough
+# for them: they have no tiles.
+link_dev_mods() {
+    mkdir -p "$CACHE/mods"
+    ln -sfn "$HARNESS_MOD_DIR" "$CACHE/mods/$HARNESS_MOD_FOLDER"
+    ln -sfn "$DEV_MOD_DIR" "$CACHE/mods/$DEV_MOD_FOLDER"
+}
+
 # Only one game process started by these scripts runs at a time, client or server, whichever mod
 # started it: several copies of the scripts may run at once, and parallel games starve each other
 # of memory and fight over the display. macOS has no flock, so the lock is a directory, which mkdir
 # creates atomically, holding the owner's PID. A lock whose owner has died is taken over: a script
 # killed outright never runs its EXIT trap, and the manual client execs into the game.
 #
-# A game kept open by run-client.sh --test --stay owns the lock itself once its script exits: the
-# lock's "session" file holds its PID and cache dir. The next script to want the game takes the
-# lock and the game over; with the argument "reuse" it leaves the game running and sets SESSION_PID
-# and SESSION_CACHE, and otherwise it stops the game.
+# A game kept open by run-client.sh --stay owns the lock itself once its script exits: the lock's
+# pid is the owner's, and its "session" file holds the owner's PID, the cache dir and the PIDs of
+# the game's processes. The owner is the game itself, or with --mp a keeper that exits once the
+# client and the server have. The next script to want the game takes the lock and the game over;
+# with the argument "reuse" it leaves the game running and sets SESSION_PID, SESSION_CACHE and
+# SESSION_GAMES, and otherwise it stops the game.
 GAME_LOCK="${TMPDIR:-/tmp}/pz-test-harness-game.lock"
 
 acquire_game_lock() {
     local owner said=
-    SESSION_PID= SESSION_CACHE=
+    SESSION_PID= SESSION_CACHE= SESSION_GAMES=
     until mkdir "$GAME_LOCK" 2>/dev/null; do
         owner=$(cat "$GAME_LOCK/pid" 2>/dev/null || true)
         if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
@@ -119,16 +129,16 @@ acquire_game_lock() {
 }
 
 # Takes over the lock of a kept game nobody is using: its session file names it, and the lock's pid
-# is the game's own. The claim directory lets only one of several waiters do so.
+# is the owner's own. The claim directory lets only one of several waiters do so.
 claim_session() {
     [ -f "$GAME_LOCK/session" ] && mkdir "$GAME_LOCK/claim" 2>/dev/null || return 1
-    local pid cache
-    { read -r pid && read -r cache; } < "$GAME_LOCK/session" 2>/dev/null || true
+    local pid cache games
+    { read -r pid && read -r cache && read -r games; } < "$GAME_LOCK/session" 2>/dev/null || true
     if [ -z "$pid" ] || [ "$(cat "$GAME_LOCK/pid" 2>/dev/null)" != "$pid" ]; then
         rmdir "$GAME_LOCK/claim"
         return 1
     fi
-    SESSION_PID=$pid SESSION_CACHE=$cache
+    SESSION_PID=$pid SESSION_CACHE=$cache SESSION_GAMES=${games:-$pid}
     echo $$ > "$GAME_LOCK/pid"
     rm -f "$GAME_LOCK/session"
     rmdir "$GAME_LOCK/claim"
@@ -149,35 +159,141 @@ stop_pid() {
     done
 }
 
+# The client first, so it doesn't see its server go.
 stop_session() {
+    local pid
+    for pid in $SESSION_GAMES; do
+        stop_pid "$pid"
+    done
     stop_pid "$SESSION_PID"
-    SESSION_PID=
+    SESSION_PID= SESSION_GAMES=
+}
+
+# The game processes of this script: GAME_PID, the client, and SERVER_PID, a dedicated server
+# (start_server). Stops the client, then the server.
+stop_games() {
+    if [ -n "${GAME_PID:-}" ]; then
+        stop_pid "$GAME_PID"
+    fi
+    if [ -n "${SERVER_PID:-}" ]; then
+        stop_server
+    fi
 }
 
 # Background jobs of a script ignore Ctrl-C, so a game started in the background would outlive the
-# script. Stops the game with PID $1 when the script exits, and releases the lock only once the
-# game has exited.
-stop_game_on_exit() {
-    GAME_PID=$1
-    trap 'stop_pid "$GAME_PID"; release_game_lock' EXIT
+# script. Stops the games when the script exits, and releases the lock only once they have exited.
+stop_games_on_exit() {
+    trap 'stop_games; release_game_lock' EXIT
 }
 
-# For --stay: when the script exits, hands the lock to the game with PID $1 if it still runs.
-keep_game_on_exit() {
-    GAME_PID=$1
+# For --stay: when the script exits, hands the lock to the kept game if all of it still runs, with
+# $1 as the lock's owner (the client by default).
+keep_games_on_exit() {
+    LOCK_OWNER=${1:-$GAME_PID}
     trap hand_lock_to_game EXIT
 }
 
 hand_lock_to_game() {
-    if kill -0 "$GAME_PID" 2>/dev/null && [ "$(cat "$GAME_LOCK/pid" 2>/dev/null)" = "$$" ]; then
-        printf '%s\n%s\n' "$GAME_PID" "$CACHE" > "$GAME_LOCK/session"
-        echo "$GAME_PID" > "$GAME_LOCK/pid"
-        echo "the game stays open (pid $GAME_PID); the next --test --stay reruns the tests in it"
+    local games="$GAME_PID${SERVER_PID:+ $SERVER_PID}" pid running=1
+    for pid in $games $LOCK_OWNER; do
+        kill -0 "$pid" 2>/dev/null || running=
+    done
+    if [ -n "$running" ] && [ "$(cat "$GAME_LOCK/pid" 2>/dev/null)" = "$$" ]; then
+        printf '%s\n%s\n%s\n' "$LOCK_OWNER" "$CACHE" "$games" > "$GAME_LOCK/session"
+        echo "$LOCK_OWNER" > "$GAME_LOCK/pid"
+        echo "the game stays open (pid $games); the next --stay run of the same kind reruns the tests in it"
     else
+        stop_games
         release_game_lock
     fi
 }
 
-stop_game() {
-    stop_pid "$GAME_PID"
+# Dedicated servers ------------------------------------------------------------------------------
+
+SERVER_NAME=harness
+# The server's admin, whom a harness client joins as: a -debug client needs the ConnectWithDebug
+# capability (ConnectToServerState, ConnectToServer:OnConnected), which every role but moderator
+# has.
+SERVER_ADMIN=admin
+SERVER_ADMIN_PASSWORD=admin
+
+# A fresh world for the dedicated server of $CACHE: the published mod copied in, Server/
+# $SERVER_NAME.ini with Mods=$1 (mod ids joined by ";") and the further ini lines given, then the
+# conf's harness_server_setup hook, which can add files such as ${SERVER_NAME}_SandboxVars.lua.
+prepare_server() {
+    local mods=$1
+    shift
+    install_mod
+    mkdir -p "$CACHE/Server"
+    rm -f "$CACHE/Server/$SERVER_NAME"*
+    {
+        printf 'Mods=%s\nMap=Muldraugh, KY\nUPnP=false\nPublic=false\n' "$mods"
+        if [ $# -gt 0 ]; then
+            printf '%s\n' "$@"
+        fi
+    } > "$CACHE/Server/$SERVER_NAME.ini"
+    if declare -F harness_server_setup > /dev/null; then
+        harness_server_setup
+    fi
+    # A new world each time, so whatever the mod does for a new world runs every time.
+    rm -rf "$CACHE/Saves/Multiplayer/$SERVER_NAME"
+}
+
+# Starts the dedicated server of $CACHE in the background, its console reading from file
+# descriptor 3: SERVER_PID, and SERVER_LOG, its console.txt.
+start_server() {
+    SERVER_LOG="$CACHE/server-console.txt"
+    rm -f "$SERVER_LOG"
+    local fifo="$CACHE/stdin"
+    rm -f "$fifo"
+    mkfifo "$fifo"
+    (cd "$PZ/Java" && exec "$JAVA" "${JVM_COMMON[@]}" -cp "$GAME_CLASSPATH" -Ddebug -Xmx4g zombie.network.GameServer \
+        -cachedir="$CACHE" -servername "$SERVER_NAME" -adminpassword "$SERVER_ADMIN_PASSWORD" -nosteam \
+        -debuglog=Mod,Lua < "$fifo" > "$CACHE/stdout.txt" 2>&1) &
+    SERVER_PID=$!
+    # Opening the FIFO waits for the server's end to open too; once both are open it can go. The
+    # server never acts on the end of its input (GameServer.launchCommandHandler waits for input
+    # forever), so it can outlive this script.
+    exec 3>"$fifo"
+    rm -f "$fifo"
+    SERVER_CONSOLE=1 SERVER_QUIT=
+}
+
+server_started() {
+    grep -q "SERVER STARTED" "$SERVER_LOG" 2>/dev/null
+}
+
+# Asks the server to save and exit, through its console if this script started it.
+quit_server() {
+    if [ -n "${SERVER_CONSOLE:-}" ] && [ -z "${SERVER_QUIT:-}" ]; then
+        echo quit >&3 2>/dev/null || true
+        SERVER_QUIT=1
+    fi
+}
+
+# Stops the server and waits until it has exited: quit_server, then a signal if it is still up a
+# minute later. A signal alone also saves and exits (GameServer's shutdownHook), for a server
+# without a console, such as one kept by --stay.
+stop_server() {
+    local waited=0
+    if [ -n "${SERVER_CONSOLE:-}" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
+        quit_server
+        while kill -0 "$SERVER_PID" 2>/dev/null && [ "$waited" -lt 120 ]; do
+            sleep 0.5
+            waited=$((waited + 1))
+        done
+    fi
+    stop_pid "$SERVER_PID"
+    if [ -n "${SERVER_CONSOLE:-}" ]; then
+        exec 3>&-
+        SERVER_CONSOLE=
+    fi
+}
+
+# Prints, with line numbers, the lines of server log $1 that are the mod's problems: a Lua stack
+# trace through the mod, or a line matching the conf's SERVER_PROBLEMS that doesn't match
+# SERVER_IGNORE, or one matching the extended regex $2 if given. Fails if there are none.
+server_problems() {
+    grep -n -E "$MOD_ERROR${SERVER_PROBLEMS:+|$SERVER_PROBLEMS}${2:+|$2}" "$1" \
+        | { if [ -n "${SERVER_IGNORE:-}" ]; then grep -v -E "$SERVER_IGNORE"; else cat; fi; }
 }

@@ -12,60 +12,32 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../lib/harness.sh"
 
 CACHE="${CACHE:-$TMP_REAL/$CACHE_NAME-server}"
-SERVER_NAME=harness
 TIMEOUT=${TIMEOUT:-900}
+# For the conf's hooks: this server serves no --mp run.
+MP=
 
 acquire_game_lock
-install_mod
-mkdir -p "$CACHE/Server"
-rm -f "$CACHE/Server/$SERVER_NAME"*
-cat > "$CACHE/Server/$SERVER_NAME.ini" <<EOF
-Mods=$MOD_ID
-Map=Muldraugh, KY
-UPnP=false
-Public=false
-EOF
-if declare -F harness_server_setup > /dev/null; then
-    harness_server_setup
-fi
-# A new world each time, so whatever the mod does for a new world runs every time.
-rm -rf "$CACHE/Saves/Multiplayer/$SERVER_NAME"
+prepare_server "$MOD_ID"
+start_server
+stop_games_on_exit
 
-LOG="$CACHE/server-console.txt"
-rm -f "$LOG"
-FIFO="$CACHE/stdin"
-rm -f "$FIFO"
-mkfifo "$FIFO"
-
-cd "$PZ/Java"
-"$JAVA" "${JVM_COMMON[@]}" -cp "$GAME_CLASSPATH" -Ddebug -Xmx4g zombie.network.GameServer \
-    -cachedir="$CACHE" -servername "$SERVER_NAME" -adminpassword admin -nosteam -debuglog=Mod,Lua \
-    < "$FIFO" > "$CACHE/stdout.txt" 2>&1 &
-SERVER=$!
-stop_game_on_exit "$SERVER"
-# Opening the FIFO waits for the server's end to open too; once both are open it can go.
-exec 3>"$FIFO"
-rm -f "$FIFO"
-
-started=0
-for _ in $(seq "$TIMEOUT"); do
-    if grep -q "SERVER STARTED" "$LOG" 2>/dev/null; then started=1; break; fi
-    if ! kill -0 "$SERVER" 2>/dev/null; then break; fi
+started=
+SECONDS=0
+while [ "$SECONDS" -lt "$TIMEOUT" ] && kill -0 "$SERVER_PID" 2>/dev/null; do
+    if server_started; then
+        started=1
+        break
+    fi
     sleep 1
 done
-if kill -0 "$SERVER" 2>/dev/null; then
-    echo quit >&3
-    for _ in $(seq 120); do kill -0 "$SERVER" 2>/dev/null || break; sleep 1; done
-fi
-exec 3>&-
+stop_server
 
-echo "log: $LOG"
-if [ "$started" != 1 ]; then
+echo "log: $SERVER_LOG"
+if [ -z "$started" ]; then
     echo "FAIL: server did not start"
     exit 1
 fi
-if grep -n -E "$MOD_ERROR${SERVER_PROBLEMS:+|$SERVER_PROBLEMS}" "$LOG" \
-    | { if [ -n "${SERVER_IGNORE:-}" ]; then grep -v -E "$SERVER_IGNORE"; else cat; fi; }; then
+if server_problems "$SERVER_LOG"; then
     echo "FAIL: the mod logged problems"
     exit 1
 fi

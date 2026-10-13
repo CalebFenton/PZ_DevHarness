@@ -1,6 +1,7 @@
 require "Tests/TimedActionsTests"
 require "Moveables/ISMoveableSpriteProps"
 require "PZHarness/Runner"
+require "PZHarness/ServerCalls"
 
 -- The generic half of a mod's test library. A mod's own library inherits from it
 -- (setmetatable(ModTest, { __index = PZHarness.Test })) and adds the fixtures that know the mod's
@@ -38,6 +39,14 @@ require "PZHarness/Runner"
 --   test with it and skips spec.validate, so validate never indexes a missing fixture.
 -- - A Lua error stops the game in the debug-mode error handler, pcall or not, and the runner never
 --   finishes, so tests never throw.
+--
+-- Single player and multiplayer (run-client.sh --mp) run the same tests. On a multiplayer client
+-- the character, its inventory and the world are the client's copies: what only the authority can
+-- do (place the mod's objects, run its systems, read its records) goes through T.server, which
+-- calls a handler the dev mod registered in its server Lua (server/PZHarness/ServerHandlers.lua)
+-- in this game in single player and on the server in multiplayer. A test that can't run in one of
+-- the two says so with `spOnly = "<why>"` or `mpOnly = "<why>"`; the runner then skips it in the
+-- other and prints "<tag> SKIP <name>: <why>".
 PZHarness.Test = {}
 local T = PZHarness.Test
 
@@ -208,11 +217,89 @@ function T.makeDark(self)
     T.waitUntil(function() return not lit() end, LIGHT_FRAMES)
 end
 
+-- Server ---------------------------------------------------------------------------------------
+
+-- Whether the wrapper is unwinding a test's restore stack, so a server undo answered at once
+-- (single player) still counts in the test's verdict.
+local unwinding = false
+
+-- Takes back on the server what call `id` of handler `name` built. A multiplayer server answers
+-- after the test's verdict, so a failure then is reported on its own line and counted by the
+-- runner.
+local function unwindOnServer(self, name, id)
+    PZHarness.ServerCalls.send("unwind", { test = self.name, call = id }, function(answer)
+        if not answer.error then
+            return
+        end
+        local failure = "the server's undo of " .. name .. " failed: " .. answer.error
+        if unwinding then
+            table.insert(failures, failure)
+        else
+            print(PZHarness.run.tag .. " FAIL " .. self.name .. ": " .. failure)
+            PZHarness.ServerCalls.lateFailures = PZHarness.ServerCalls.lateFailures + 1
+        end
+    end)
+end
+
+-- The queued steps after the current one, which a failed server call leaves nothing to work on.
+local function dropQueuedSteps()
+    local queue = ISTimedActionQueue.getTimedActionQueue(T.player()).queue
+    for i = #queue, 2, -1 do
+        table.remove(queue, i)
+    end
+end
+
+--- Queues a call of the server handler `name` (see server/PZHarness/ServerHandlers.lua) and a
+--- wait for its answer, which lands in `self.server[name]`. `args` is a table of plain values
+--- (strings, numbers, booleans and tables of them), or a function of `self` returning one, called
+--- when the call goes out, so it can use an earlier answer. In single player the handler runs in
+--- this game and answers at once; in multiplayer it runs on the server. What it deferred is undone
+--- on its side when the test ends, in order with the test's own undos. A handler that fails, or
+--- answers that something is missing, fails the test as T.need does and drops the steps queued
+--- after the call.
+function T.server(self, name, args)
+    local answered = false
+    T.step(function()
+        local request = { name = name, test = self.name, args = type(args) == "function" and args(self) or args or {} }
+        PZHarness.ServerCalls.send("call", request, function(answer)
+            answered = true
+            if answer.undo then
+                T.defer(self, function() unwindOnServer(self, name, answer.id) end)
+            end
+            if answer.error or answer.missing then
+                T.need(self, nil, answer.missing or "the server's " .. name .. ", which failed: " .. answer.error)
+                dropQueuedSteps()
+                return
+            end
+            self.server[name] = answer.reply or {}
+        end)
+    end)
+    -- The answer, or the error ServerCalls gives a lost one, always comes, so no frame cap.
+    T.waitUntil(function() return answered end, math.huge)
+end
+
 -- Registering tests ----------------------------------------------------------------------------
 
+-- Why spec's opt-out of single player or multiplayer is malformed, or nil. The reason is required
+-- so that every skip says why in the run's summary.
+local function optOutProblem(spec)
+    if spec.spOnly ~= nil and spec.mpOnly ~= nil then
+        return "spOnly and mpOnly both set: the test would run nowhere"
+    end
+    for _, key in ipairs({ "spOnly", "mpOnly" }) do
+        local reason = spec[key]
+        if reason ~= nil and (type(reason) ~= "string" or reason == "") then
+            return key .. " needs the reason as a string"
+        end
+    end
+    return nil
+end
+
 --- Registers test `name`. `spec`: run(self), validate(self), cleanup(self), all optional; `hour`;
---- `instant`; `sandbox` (option = value, see T.setSandbox); anything else the mod's setup reads.
+--- `instant`; `sandbox` (option = value, see T.setSandbox); `spOnly` or `mpOnly`, the reason the
+--- test runs only in single player or only in multiplayer; anything else the mod's setup reads.
 function T.test(name, spec)
+    local problem = optOutProblem(spec)
     local function start(self, hour)
         local p = T.player()
         local cheat = p:isTimedActionInstantCheat()
@@ -232,9 +319,15 @@ function T.test(name, spec)
         end
     end
     TimedActionTests.getTests()[name] = {
+        -- The runner reads these to skip the test in the other mode.
+        spOnly = not problem and spec.spOnly or nil,
+        mpOnly = not problem and spec.mpOnly or nil,
         run = function(entry)
-            local self = { undo = {}, missing = {}, used = {} }
+            local self = { name = name, undo = {}, missing = {}, used = {}, server = {} }
             entry.state = self
+            if problem then
+                return
+            end
             local p = T.player()
             for _, perk in pairs(settings().perks or {}) do
                 local level = p:getPerkLevel(perk)
@@ -256,7 +349,9 @@ function T.test(name, spec)
             local self = entry.state or { undo = {}, missing = { "a run before validate" } }
             entry.state = nil
             failures = {}
-            if #self.missing > 0 then
+            if problem then
+                table.insert(failures, problem)
+            elseif #self.missing > 0 then
                 table.insert(failures, "missing " .. table.concat(self.missing, "; "))
             elseif spec.validate then
                 spec.validate(self)
@@ -268,9 +363,11 @@ function T.test(name, spec)
             if spec.cleanup then
                 spec.cleanup(self)
             end
+            unwinding = true
             for i = #self.undo, 1, -1 do
                 self.undo[i]()
             end
+            unwinding = false
             if #failures > 0 then
                 print(PZHarness.run.tag .. " FAIL " .. name .. ": " .. table.concat(failures, "; "))
                 return false
@@ -652,6 +749,8 @@ function T.craftTest(name, spec)
         sandbox = spec.sandbox,
         hour = spec.hour,
         instant = spec.instant ~= false,
+        spOnly = spec.spOnly,
+        mpOnly = spec.mpOnly,
         run = function(self)
             local p = T.player()
             local recipe = T.need(self, getScriptManager():getCraftRecipe(spec.recipe), "the recipe " .. spec.recipe)

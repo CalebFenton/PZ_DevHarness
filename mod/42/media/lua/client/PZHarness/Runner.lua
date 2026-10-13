@@ -1,15 +1,20 @@
 -- Development only, not published. bin/run-client.sh loads this mod with the mod under test and
 -- its dev mod, and writes <cachedir>/Lua/PZHarness.txt: the mode (empty when playing by hand), the
--- selection (TESTS prefixes, or the mod's own for its modes), whether to stay, the console mark
--- of the mode and the tests' console tag.
+-- selection (TESTS prefixes, or the mod's own for its modes), whether to stay, whether the client
+-- joins a dedicated server (--mp), the console mark of the mode and the tests' console tag.
 --
 -- The dev mod calls PZHarness.register (see README.md). In a mode, the mod's debug scenario then
 -- starts from the main menu (with -debug and DebugScenario.ForceLaunch=true in debug-options.ini);
 -- once the world around the character has loaded, the runner runs the mod's tests ("test") or the
 -- mod's handler for the mode, prints "<mark> DONE" and quits. With --test --stay the game stays
 -- open and reruns the tests on request instead. run-client.sh reads those lines from console.txt.
+--
+-- With --mp the client instead joins the server run-client.sh started, as its admin, makes a
+-- default character, takes it to the scenario's start and runs the scenario's onStart there; the
+-- tests then run the same way.
 
 require "ISUI/ISUIElement"
+require "PZHarness/ServerCalls"
 
 PZHarness = PZHarness or {}
 
@@ -28,26 +33,41 @@ local STAY_IDLE_MS = 10 * 60 * 1000
 local IDLE_FPS = 24
 -- The highest uiRenderFPS the option takes (Core.optionUiRenderFps).
 local FAST_UI_FPS = 120
+-- With --mp, run-client.sh writes this file in <cachedir>/Lua once the server has started; the
+-- client waits at the main menu until then, looking for it every CONNECT_POLL_TICKS ticks.
+local CONNECT_FILE = "PZHarnessConnect.txt"
+local CONNECT_POLL_TICKS = 15
 
--- The run run-client.sh asked for. Without the file, as in a game the script didn't start, there
--- is no mode and the tests print under a generic tag.
-local function readRun()
-    local run = { mode = "", selection = "", stay = false, mark = "PZHarness", tag = "PZHarness" }
-    local reader = getFileReader("PZHarness.txt", false)
+-- The key=value lines of <cachedir>/Lua/<name>, or nil without the file.
+local function readKeys(name)
+    local reader = getFileReader(name, false)
     if not reader then
-        return run
+        return nil
     end
+    local keys = {}
     local line = reader:readLine()
     while line do
         local key, value = string.match(line, "^(%w+)=(.*)$")
-        if key == "stay" then
-            run.stay = value ~= ""
-        elseif key then
-            run[key] = value
+        if key then
+            keys[key] = value
         end
         line = reader:readLine()
     end
     reader:close()
+    return keys
+end
+
+-- The run run-client.sh asked for. Without the file, as in a game the script didn't start, there
+-- is no mode and the tests print under a generic tag.
+local function readRun()
+    local run = { mode = "", selection = "", stay = false, mp = false, mark = "PZHarness", tag = "PZHarness" }
+    for key, value in pairs(readKeys("PZHarness.txt") or {}) do
+        if key == "stay" or key == "mp" then
+            run[key] = value ~= ""
+        else
+            run[key] = value
+        end
+    end
     return run
 end
 
@@ -87,15 +107,27 @@ local function selected(name)
     return false
 end
 
+-- Why the test `entry` doesn't run in this game, or nil: the opt-out of its spec (TestLib's
+-- spOnly and mpOnly) for the other mode.
+local function skipReason(entry)
+    if isClient() then
+        return entry.spOnly and "single player only: " .. entry.spOnly
+    end
+    return entry.mpOnly and "multiplayer only: " .. entry.mpOnly
+end
+
+-- The selected tests to run, and those skipped in this mode as "<name>: <why>"; both sorted.
 local function testNames()
-    local result = {}
-    for name in pairs(TimedActionTests.getTests()) do
+    local result, skipped = {}, {}
+    for name, entry in pairs(TimedActionTests.getTests()) do
         if selected(name) then
-            table.insert(result, name)
+            local reason = skipReason(entry)
+            table.insert(reason and skipped or result, reason and name .. ": " .. reason or name)
         end
     end
     table.sort(result)
-    return result
+    table.sort(skipped)
+    return result, skipped
 end
 
 -- Runs the selected tests one after another with the resets of the debug menu's runner (RunTest
@@ -104,15 +136,17 @@ end
 -- name said aloud; validate() once the action queue is empty; then the cheat back and the
 -- character back on the square the test started on. Vanilla pauses a second after every test so
 -- you can read the result; here the next test starts on the next tick, or once the character's
--- square has loaded again after a test that went far (at most SQUARE_WAIT_MS). Calls onDone() at
--- the end.
+-- square has loaded again after a test that went far (at most SQUARE_WAIT_MS), and, in
+-- multiplayer, once the server has answered what the last test sent it, its undos above all, so a
+-- test never meets what the one before built. Calls onDone() at the end.
 local function runTests(onDone)
-    local names = testNames()
+    local names, skipped = testNames()
     local tests = TimedActionTests.getTests()
     print(run.tag .. " START " .. #names)
     local passed, failed, index, ticks = 0, 0, 0, 0
     local startedMs = getTimestampMs()
     local doneMs = startedMs
+    local lateFailures = PZHarness.ServerCalls.lateFailures
     -- Where the current test started, as numbers: the square object itself goes back to the pool
     -- when a test takes the character far enough for its chunk to unload, and comes back as some
     -- other square (IsoGridSquare.discard, getNew), so teleporting to its coordinates then lands
@@ -145,13 +179,20 @@ local function runTests(onDone)
         if not player:getCurrentSquare() and getTimestampMs() - doneMs < SQUARE_WAIT_MS then
             return
         end
+        if PZHarness.ServerCalls.busy() then
+            return
+        end
         index = index + 1
         local name = names[index]
         if not name then
             Events.OnTick.Remove(onTick)
+            failed = failed + PZHarness.ServerCalls.lateFailures - lateFailures
+            for _, skip in ipairs(skipped) do
+                print(run.tag .. " SKIP " .. skip)
+            end
             local seconds = (getTimestampMs() - startedMs) / 1000
             print(string.format("%s TIME %.1f s, %d frames (%.0f a second)", run.tag, seconds, ticks, ticks / math.max(seconds, 0.001)))
-            print(run.tag .. " DONE passed=" .. passed .. " failed=" .. failed)
+            print(run.tag .. " DONE passed=" .. passed .. " failed=" .. failed .. " skipped=" .. #skipped)
             onDone()
             return
         end
@@ -173,16 +214,18 @@ local function runTests(onDone)
 end
 
 -- The request run-client.sh writes to REQUEST_FILE: an id, the TESTS prefixes, then the Lua files
--- to run again, in the order the mod listed them. Nil if there is none.
+-- to run again, in the order the mod listed them: this game's paths, then, with --mp, "server "
+-- and the server's paths of those it loads too. Nil if there is none.
 local function readRequest()
     local reader = getFileReader(REQUEST_FILE, false)
     if not reader then
         return nil
     end
-    local request = { id = reader:readLine(), tests = reader:readLine(), files = {} }
+    local request = { id = reader:readLine(), tests = reader:readLine(), files = {}, serverFiles = {} }
     local line = reader:readLine()
     while line do
-        table.insert(request.files, line)
+        local serverFile = string.match(line, "^server (.*)$")
+        table.insert(serverFile and request.serverFiles or request.files, serverFile or line)
         line = reader:readLine()
     end
     reader:close()
@@ -191,7 +234,7 @@ end
 
 -- What the kept game shows on screen and prints while it waits for a request, so whoever watches
 -- the window can tell an idle game from a stuck one.
-local IDLE_TEXT = run.tag .. " IDLE waiting for the next --test --stay run (quits after " .. STAY_IDLE_MS / 60000 .. " minutes)"
+local IDLE_TEXT = run.tag .. " IDLE waiting for the next --stay run (quits after " .. STAY_IDLE_MS / 60000 .. " minutes)"
 
 local IdleNote = ISUIElement:derive("PZHarnessIdleNote")
 
@@ -201,8 +244,9 @@ end
 
 -- Runs the tests again for every new request until STAY_IDLE_MS pass without one. reloadLuaFile
 -- runs a file again but ignores its Events.*.Add calls (LuaCompiler.rewriteEvents), which suits
--- test files: they only register tests. Every test of the mod is unregistered first, so a test
--- that was renamed or deleted doesn't run again.
+-- test files: they only register tests, or server handlers. Every test of the mod is unregistered
+-- first, so a test that was renamed or deleted doesn't run again. In multiplayer the server
+-- reloads its files first and marks the run in its log.
 local function serveReruns()
     local performance = getPerformance()
     local fps, uncapped = performance:getFramerate(), performance:isFramerateUncapped()
@@ -240,21 +284,29 @@ local function serveReruns()
         performance:setFramerate(fps)
         performance:setFramerateUncapped(uncapped)
         print(run.tag .. " RUN " .. request.id)
-        local tests = TimedActionTests.getTests()
-        local registered = {}
-        for name in pairs(tests) do
-            if startsWith(name, PZHarness.config.prefix) then
-                table.insert(registered, name)
+        local function rerun()
+            local tests = TimedActionTests.getTests()
+            local registered = {}
+            for name in pairs(tests) do
+                if startsWith(name, PZHarness.config.prefix) then
+                    table.insert(registered, name)
+                end
             end
+            for _, name in ipairs(registered) do
+                tests[name] = nil
+            end
+            for _, file in ipairs(request.files) do
+                reloadLuaFile(file)
+            end
+            setFilters(request.tests)
+            runTests(idle)
         end
-        for _, name in ipairs(registered) do
-            tests[name] = nil
+        if not isClient() then
+            rerun()
+            return
         end
-        for _, file in ipairs(request.files) do
-            reloadLuaFile(file)
-        end
-        setFilters(request.tests)
-        runTests(idle)
+        -- A failure is in the server's log as SERVER FAIL, which fails the run.
+        PZHarness.ServerCalls.send("reload", { run = request.id, files = request.serverFiles }, rerun)
     end
     idle()
 end
@@ -349,6 +401,99 @@ local function startMode()
     mode.run(run.selection, done)
 end
 
+-- Multiplayer (--mp) -----------------------------------------------------------------------------
+
+-- How long the character may take to reach the scenario's start, whose chunks the server sends.
+local START_WAIT_MS = 30000
+
+-- Joins the server once run-client.sh says it has started, with the call the server list's
+-- Connect button makes. The client and the server boot at the same time, which saves the
+-- client's boot from a run; connecting before the server listens would only fail.
+local function connectWhenServerUp()
+    -- Joining resets Lua (Core.ResetLua), which fires OnMainMenuEnter again in a client that is
+    -- already joining; isClient() holds from then on.
+    if isClient() then
+        return
+    end
+    local ticks = 0
+    local function poll()
+        ticks = ticks + 1
+        local server = ticks % CONNECT_POLL_TICKS == 0 and readKeys(CONNECT_FILE)
+        if not server then
+            return
+        end
+        Events.OnFETick.Remove(poll)
+        print("PZHarness: joining " .. server.host .. ":" .. server.port .. " as " .. server.user)
+        ConnectToServer.instance:connect(MainScreen.instance.bottomPanel, "", server.user, server.password,
+            server.host, "", server.port, "", false, true, 1)
+    end
+    Events.OnFETick.Add(poll)
+end
+
+-- After vanilla's OnConnected, which shows a new character the spawn region list or character
+-- creation: the default unemployed survivor in the default spawn region, as those screens would
+-- make. CharacterCreationProfession.initWorld places it on OnInitWorld.
+local function skipCharacterCreation()
+    if checkSavePlayerExists() then
+        return
+    end
+    for _, screen in pairs({ MapSpawnSelect.instance, WorldSelect.instance, MainScreen.instance.charCreationProfession }) do
+        screen:setVisible(false)
+    end
+    MainScreen.instance.desc = SurvivorFactory.CreateSurvivor(SurvivorType.Neutral, false)
+    MapSpawnSelect.instance:useDefaultSpawnRegion()
+    GameWindow.doRenderEvent(false)
+    forceChangeState(LoadingQueueState.new())
+end
+
+local function connectFailed(message, detail)
+    print("PZHarness: joining the server failed: " .. tostring(message) .. " " .. tostring(detail or ""))
+    quit()
+end
+
+-- The server places a new character on a point of a spawn region (CreatePlayerPacket), so the
+-- character goes to the scenario's start, where single player starts, as soon as it is in the
+-- game. Then, once the world around it has loaded as it has when single player starts the
+-- scenario: the scenario's onStart and the mod's, then the run. Both run on this client: what they
+-- do to the character or the world reaches the server only as far as the game syncs it.
+local function startMultiplayer()
+    local scenario = debugScenarios[PZHarness.config.scenario] or {}
+    local loc = scenario.startLoc
+    local sinceMs, teleported = getTimestampMs(), false
+    local function onTick()
+        local player = getSpecificPlayer(0)
+        local here = player:getCurrentSquare()
+        if loc and not (here and here:getX() == loc.x and here:getY() == loc.y and here:getZ() == loc.z) then
+            if not teleported then
+                player:teleportTo(loc.x + 0.5, loc.y + 0.5, loc.z)
+                teleported = true
+            end
+            if getTimestampMs() - sinceMs < START_WAIT_MS then
+                return
+            end
+            print("PZHarness: the character didn't reach the scenario's start; the tests run where it is")
+        end
+        Events.OnTick.Remove(onTick)
+        afterSettling(function()
+            if scenario.onStart then
+                scenario.onStart()
+            end
+            if PZHarness.config.onStart then
+                PZHarness.config.onStart(run.mode)
+            end
+            startMode()
+        end)
+    end
+    Events.OnTick.Add(onTick)
+end
+
+if run.mp then
+    Events.OnMainMenuEnter.Add(connectWhenServerUp)
+    Events.OnConnected.Add(skipCharacterCreation)
+    Events.OnConnectFailed.Add(connectFailed)
+    Events.OnGameStart.Add(startMultiplayer)
+end
+
 --- Called once by the dev mod, at load. `config`:
 --- - `scenario`: the key of the mod's scenario in `debugScenarios`, which every mode starts.
 --- - `prefix`: the name prefix of the mod's tests in TimedActionTests; --test runs those.
@@ -359,6 +504,8 @@ end
 ---   draws the UI at its highest rate until `done()`, which puts the option back.
 --- - `onStart(mode)`: optional, called after the scenario's own onStart in every mode.
 --- - `tests`: settings of the test library, see PZHarness/TestLib.lua.
+--- With --mp no scenario starts: the client joins the server, the runner takes the character to
+--- the scenario's `startLoc` and calls its onStart and the mod's (see Multiplayer above).
 function PZHarness.register(config)
     PZHarness.config = {
         scenario = config.scenario,
@@ -370,8 +517,6 @@ function PZHarness.register(config)
     if run.mode == "" then
         return
     end
-    local scenario = debugScenarios[config.scenario]
-    scenario.forceLaunch = true
 
     -- Single player pauses when the window loses focus, and paused games don't tick, so the run
     -- would stop whenever someone switches to another window.
@@ -387,6 +532,12 @@ function PZHarness.register(config)
     local mode = PZHarness.config.modes[run.mode]
     local uncapped = run.mode == "test" or (mode and mode.uncapped)
     getPerformance():setFramerateUncapped(true)
+    if run.mp then
+        return
+    end
+
+    local scenario = debugScenarios[config.scenario]
+    scenario.forceLaunch = true
 
     local originalOnStart = scenario.onStart
     scenario.onStart = function()
