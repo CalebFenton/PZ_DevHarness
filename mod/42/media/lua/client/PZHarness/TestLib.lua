@@ -1129,11 +1129,11 @@ end
 --- by a table, and carries exactly the inputs of one craft (T.recipeInputs with `spec.prefer`,
 --- given with T.give, so this client's copies are in `self.items.inputs`) and whatever
 --- `spec.setup(self)` adds; setup runs once the inputs are there, and the craft starts after the
---- waits it queued. validate() expects the counts in `spec.counts` in the inventory of the
---- server's copy of the character or dropped at its feet (T.count, into `self.counts.craft`),
---- then runs `spec.validate(self)`. `spec.after(self)`, if given, runs in a step after that count,
---- before validate, to queue more reads of what the craft made. A failing test also reports why
---- the game refused the craft.
+--- waits it queued, once there is light to craft by. validate() expects the counts in
+--- `spec.counts` in the inventory of the server's copy of the character or dropped at its feet
+--- (T.count, into `self.counts.craft`), then runs `spec.validate(self)`. `spec.after(self)`, if
+--- given, runs in a step after that count, before validate, to queue more reads of what the
+--- craft made. A failing test also reports why the game refused the craft.
 function T.craftTest(name, spec)
     local counted = {}
     for fullType in pairs(spec.counts or {}) do
@@ -1166,6 +1166,9 @@ function T.craftTest(name, spec)
                 if spec.setup then
                     spec.setup(self)
                 end
+                -- The light can still lag the clock the previous test put back, and the game
+                -- refuses a craft in the dark; the test is about the craft, not the dusk.
+                waitForLight(true)
                 T.step(function()
                     local from = T.need(self, p:getInventory():getFirstTypeRecurse(spec.from), "a " .. spec.from .. " to craft from")
                     if not from then return end
