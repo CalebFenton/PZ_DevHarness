@@ -142,9 +142,29 @@ function T.wait(ticks, onTick)
 end
 
 --- Queues a wait that ends as soon as `condition()` holds, or after `maxFrames` ticks; the
---- following validate checks what it waited for.
-function T.waitUntil(condition, maxFrames)
-    ISTimedActionQueue.add(Wait:new(T.player(), maxFrames, nil, condition))
+--- following validate checks what it waited for. `what`, if given, says what it waits for when
+--- the runner's per-test limit stops it (T.describeAction).
+function T.waitUntil(condition, maxFrames, what)
+    local wait = Wait:new(T.player(), maxFrames, nil, condition)
+    wait.what = what
+    ISTimedActionQueue.add(wait)
+end
+
+--- What a queued action is, for the runner's message when a test overruns its limit: a harness
+--- wait's `what`, else where the wait or step was queued, else the action's type.
+function T.describeAction(action)
+    if not action then
+        return "nothing queued"
+    end
+    if action.Type ~= Wait.Type then
+        return tostring(action.Type)
+    end
+    if action.what then
+        return action.what
+    end
+    local fn = action.done or action.onTick
+    local file = fn and tostring(getFilenameOfClosure(fn)):match("[^/]*$")
+    return "a wait queued at " .. tostring(file) .. ":" .. tostring(fn and getFirstLineOfClosure(fn))
 end
 
 --- Runs `fn` once the actions queued before it are done. What fn queues (actions, T.server,
@@ -314,7 +334,7 @@ local function queueCall(self, name, args, itemsKey, onReply)
     end)
     -- The answer, or the error ServerCalls gives a lost one, always comes, so no frame cap. A step
     -- skipped after a missing fixture leaves no poll.
-    T.waitUntil(function() return not poll or poll() end, math.huge)
+    T.waitUntil(function() return not poll or poll() end, math.huge, "the server's answer to " .. name)
 end
 
 --- Queues a call of the server handler `name` (see server/PZHarness/ServerHandlers.lua) and a
@@ -352,7 +372,7 @@ function T.serverUntil(self, name, args, done, maxMs)
             self.server[name] = reply
         end)
         return false
-    end, math.huge)
+    end, math.huge, "the server's answers to " .. name)
 end
 
 --- Gives the character `items` the way the server does: each a table { type = full type, count,
@@ -380,7 +400,7 @@ end
 -- server has made the change. Single player has made it already, in its one copy.
 local function alsoOnServer(self, name, args, onReply)
     if isClient() then
-        T.waitUntil(call(self, name, args, nil, onReply), math.huge)
+        T.waitUntil(call(self, name, args, nil, onReply), math.huge, "the server's answer to " .. name)
     end
 end
 
@@ -407,7 +427,7 @@ local function alsoOnServerOutsideTest(name, args, ready)
             return true
         end
         return false
-    end, math.huge)
+    end, math.huge, "the server's answer to " .. name)
 end
 
 -- Restore stack --------------------------------------------------------------------------------
@@ -434,9 +454,23 @@ function T.setTime(self, hour)
     end)
 end
 
+--- Sets the character's level of `perk` for the test. On a multiplayer client the server replaces
+--- this client's perk list with its own copy's every second (PlayerXpPacket), and one it sent
+--- before it had the level can land after its answer, so the client's checks (the craft menu, an
+--- action's isValid) would see the old level: until the test ends, this client puts its level
+--- back whenever such a sync changes it. Waiting for a sync after the answer would cost up to a
+--- second per call.
 function T.setPerk(self, perk, level)
-    T.defer(self, PZHarness.Fixtures.setPerk(T.player(), perk, level))
+    local p = T.player()
+    T.defer(self, PZHarness.Fixtures.setPerk(p, perk, level))
     alsoOnServer(self, "PZHarness.setPerk", { perk = perk:getId(), level = level })
+    if isClient() then
+        T.onTick(self, function()
+            if p:getPerkLevel(perk) ~= level then
+                p:setPerkLevelDebug(perk, level)
+            end
+        end)
+    end
 end
 
 local function sandboxChanged()
@@ -527,6 +561,8 @@ function T.test(name, spec)
         -- The runner reads these to skip the test in the other mode.
         spOnly = not problem and spec.spOnly or nil,
         mpOnly = not problem and spec.mpOnly or nil,
+        -- The runner's per-test limit in real seconds, if the test needs more than its default.
+        timeoutSeconds = spec.timeoutSeconds,
         run = function(entry)
             local self = { name = name, undo = {}, missing = {}, used = {}, server = {}, items = {}, counts = {} }
             entry.state = self
@@ -565,6 +601,10 @@ function T.test(name, spec)
             failures = {}
             if problem then
                 table.insert(failures, problem)
+            elseif entry.timedOut then
+                -- The runner stopped the test (Runner.lua): what validate reads may never have come.
+                table.insert(failures, entry.timedOut)
+                entry.timedOut = nil
             elseif #self.missing > 0 then
                 table.insert(failures, "missing " .. table.concat(self.missing, "; "))
             elseif spec.validate then
@@ -744,7 +784,7 @@ local function placeOnServer(self, handle, name, args, find, what, key, onReply)
             return true
         end
         return false
-    end, math.huge)
+    end, math.huge, "this client's copy of " .. what)
     return handle
 end
 
@@ -865,6 +905,16 @@ function T.vehicle(self, script, opts)
     return nil
 end
 
+-- This client's copies of the vehicles T.placeVehicle found, to the handle each was found for.
+-- The server hands a new vehicle the id it freed last (VehicleIDMap keeps freed ids on a stack),
+-- often the one the previous test's undo just removed, and a client that hasn't taken that
+-- removal yet still finds the old copy under the id, which then never updates. A copy found for
+-- one handle is never taken for another.
+local foundVehicles = {}
+-- How long a multiplayer client waits after its copy of a new vehicle arrives, for the server's
+-- second full update of it (see T.placeVehicle): three of the server's 100 ms send cycles.
+local VEHICLE_SETTLE_MS = 300
+
 --- T.vehicle placed the way the authority does: on the server in multiplayer, which sends it to
 --- the clients nearby; removed when the test ends. `opts`: `square` or `near` as for T.vehicle,
 --- `facing` ("N" unless given), `args` (plain values for the dev mod's
@@ -880,12 +930,30 @@ function T.placeVehicle(self, script, opts)
     end
     local handle = {}
     local args = { script = script, squares = squares, facing = opts.facing, args = opts.args }
-    return placeOnServer(self, handle, "PZHarness.vehicle", args, function()
-        return PZHarness.Fixtures.vehicleById(handle.id, handle)
+    placeOnServer(self, handle, "PZHarness.vehicle", args, function()
+        local vehicle = PZHarness.Fixtures.vehicleById(handle.id, handle)
+        if not vehicle or vehicle:isRemovedFromWorld() or (foundVehicles[vehicle] or handle) ~= handle then
+            return nil
+        end
+        foundVehicles[vehicle] = handle
+        return vehicle
     end, "a " .. script, "vehicle", function(reply)
         handle.id, handle.x, handle.y, handle.z = reply.id, reply.x, reply.y, reply.z
         handle.square = getSquare(reply.x, reply.y, reply.z)
     end)
+    -- A client that meets a vehicle id it doesn't know asks for a full update, and can ask twice.
+    -- The server sends the second instead of the part changes it has pending and clears them,
+    -- while a client that already has the vehicle takes only its position from a full update
+    -- (VehicleManager.sendVehicles, VehicleFullUpdatePacket): a part change made before the second
+    -- one arrives is lost here until that part changes again. The server sends every 100 ms.
+    if isClient() then
+        local sinceMs
+        T.waitUntil(function()
+            sinceMs = sinceMs or getTimestampMs()
+            return getTimestampMs() - sinceMs >= VEHICLE_SETTLE_MS
+        end, math.huge, "the second full update of a " .. script)
+    end
+    return handle
 end
 
 -- Lookups and data -----------------------------------------------------------------------------

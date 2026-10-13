@@ -77,7 +77,14 @@ fi
 if [ -n "$MODE" ] && declare -F "harness_check_$MODE" > /dev/null; then
     "harness_check_$MODE"
 fi
-TIMEOUT=${TIMEOUT:-1200}
+# Only a game that died or hung outside a test: the runner fails a stuck test itself after its
+# per-test limit (Runner.lua). A cold --mp run of a whole suite takes about 2.5 minutes. The other
+# modes, such as a mod's long reports, keep the old cap.
+if [ "$MODE" = test ]; then
+    TIMEOUT=${TIMEOUT:-300}
+else
+    TIMEOUT=${TIMEOUT:-1200}
+fi
 LOG="$CACHE/console.txt"
 # The harness Lua reads the run from the first file, with --stay rerun requests from the second
 # and with --mp the server to join from the third, written once the server has started

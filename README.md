@@ -139,7 +139,7 @@ end)
 
 `PZHarness.Test`, from `PZHarness/TestLib.lua`:
 
-- Registering: `test(name, spec)`, `craftTest(name, spec)`. `spec.spOnly` or `spec.mpOnly`, a reason string, keeps a test out of the other mode.
+- Registering: `test(name, spec)`, `craftTest(name, spec)`. `spec.spOnly` or `spec.mpOnly`, a reason string, keeps a test out of the other mode. A test still busy after 30 seconds of real time fails with what it was waiting on (the queued action's type, or which server answer or wait; `waitUntil(condition, maxFrames, what)` names a wait), its queue is cleared, its undos run and the next test starts; `spec.timeoutSeconds` raises the limit for a test that is slow on purpose.
 - Expectations: `expect`, `expectNear`, `need`. Once a test misses something, its later queued steps and waits don't run.
 - Restore stack, two-sided (see [Two-sided fixtures](#two-sided-fixtures)): `defer`, `onTick`, `setTime`, `setPerk`, `setSandbox`, `setMultiplier`, `setGrid`, `makeDark`, `changeItem`; `spec.instant` and the `perks` setting too.
 - Queue: `wait`, `waitUntil`, `step`. What a step queues runs right after it, in order (vanilla's adding-actions mode), and a clear of the queue inside it (`luautils.walkAdj`) drops only that.
@@ -180,7 +180,8 @@ that rate left squares dark.
 | `--<mode>` | Runs the mod's handler for the mode and quits. |
 
 Environment: `TESTS=<prefix>,...` runs only the tests whose names start with one of them;
-`TIMEOUT` caps a run in seconds (default 1200); `CACHE` moves the cache dir (with `--mp` the
+`TIMEOUT` caps a run in seconds (default 300 for `--test`, enough for a cold `--mp` run of a
+whole suite, so it only catches a game that died; 1200 for the other modes); `CACHE` moves the cache dir (with `--mp` the
 client's; `SERVER_CACHE` the server's); `SERVER_PORT` moves the `--mp` server off 16361 (it also
 takes the next port); `JAVAC` names the compiler for `ClickToStart.java` (any JDK from 8 on; the
 game's own Java has none); `PZ_APP` names another game `Contents` folder.
@@ -310,6 +311,13 @@ player behaves as before:
   once whose `.object` (`.vehicle`) is this client's copy after a queued wait; the server removes
   them when the test ends, through `PZHarness.serverSettings.remove(object)` if set.
   `PZHarness.serverSettings.spawnVehicle(script, square, facing, args)` may make the vehicles.
+  The server gives a new vehicle the id it freed last, often the previous test's vehicle's, so
+  `placeVehicle` never takes a copy it found for an earlier handle, which a client still holds
+  until it takes the removal.
+  On a multiplayer client it also waits 300 ms after its copy arrives: a client meeting a new
+  vehicle id can ask for two full updates, the server sends the second in place of pending part
+  changes, and a client that has the vehicle takes only its position from it, so a part change
+  made in between would never reach the copy.
   `placeAsPlayer` gives the item (`give`), and the character places it with the moveables action,
   whose `complete()` the server carries out; `PZHarness.trackPlaced` then removes it on the server
   when the test ends, as above.
@@ -321,7 +329,9 @@ player behaves as before:
   first test starts once the server has them and this client shows the levels again: the server
   replaces the client's perk list with its own copy's every second (`PlayerXpPacket`), and one it
   sent before it had the levels can land after its answer, leaving the skills too low for the first
-  crafts. Waiting more than 5 seconds for that prints a `FAIL` of its own.
+  crafts. Waiting more than 5 seconds for that prints a `FAIL` of its own. For the same reason
+  `setPerk` on a multiplayer client puts its level back on this client whenever such a sync
+  changes it, until the test ends; a stale sync otherwise made a mid-run craft "skills too low".
 - After each reset the runner refreshes the inventory windows at once, in both modes. Crafts and
   the craft menu take their inputs from the containers those windows list, which otherwise catch up
   only when the UI next draws; a multiplayer character starts with a key ring, and its removed

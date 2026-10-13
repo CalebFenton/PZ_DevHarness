@@ -25,6 +25,10 @@ local LOADED_RADIUS = 40
 local SETTLE_MAX_TICKS = 600
 -- How long a test waits for the character's square to load after the last test took it far away.
 local SQUARE_WAIT_MS = 10000
+-- A test still busy after this many real seconds fails with what it was waiting on, its queue is
+-- cleared and its undos run, so one hung step can't stall the run. A spec's `timeoutSeconds`
+-- raises it for a test that is slow on purpose. The slowest tests take under 10 seconds.
+local TEST_TIMEOUT_SECONDS = 30
 -- With --stay, run-client.sh writes this file in <cachedir>/Lua to rerun the tests; the game looks
 -- for it every REQUEST_POLL_TICKS ticks and quits after STAY_IDLE_MS without one.
 local REQUEST_FILE = "PZHarnessRerun.txt"
@@ -151,10 +155,12 @@ end
 -- empty; then the cheat back and the character back in the middle of the square the test started
 -- on. Vanilla pauses a second after every test so you can read the result; here the next test
 -- starts on the next tick, or once the character's square has loaded again after a test that went
--- far (at most SQUARE_WAIT_MS), and, in
--- multiplayer, once the server has answered what the last test sent it, its undos above all, so a
--- test never meets what the one before built. In multiplayer the server's copy of the character
--- gets the same reset first (PZHarness.Fixtures.resetCharacter). Calls onDone() at the end.
+-- far (at most SQUARE_WAIT_MS), and, in multiplayer, once the server has answered what the last
+-- test sent it, its undos above all, so a test never meets what the one before built. In
+-- multiplayer the server's copy of the character gets the same reset first
+-- (PZHarness.Fixtures.resetCharacter). A test still busy after TEST_TIMEOUT_SECONDS (or its
+-- spec's timeoutSeconds) is stopped: its queue cleared, validate() fails it with what it was
+-- waiting on and runs its undos. Calls onDone() at the end.
 local function runTests(onDone)
     local names, skipped = testNames()
     local tests = TimedActionTests.getTests()
@@ -167,12 +173,19 @@ local function runTests(onDone)
     -- when a test takes the character far enough for its chunk to unload, and comes back as some
     -- other square (IsoGridSquare.discard, getNew), so teleporting to its coordinates then lands
     -- somewhere else entirely.
-    local current, player, start, wasCheat, resetFor
+    local current, player, start, wasCheat, resetFor, testStartMs
     local function onTick()
         ticks = ticks + 1
         if current then
-            if ISTimedActionQueue.getTimedActionQueue(player).queue[1] then
-                return
+            local queue = ISTimedActionQueue.getTimedActionQueue(player).queue
+            if queue[1] then
+                local limit = current.timeoutSeconds or TEST_TIMEOUT_SECONDS
+                if getTimestampMs() - testStartMs < limit * 1000 then
+                    return
+                end
+                current.timedOut = string.format("still running after %d s, waiting on %s", limit,
+                    PZHarness.Test.describeAction(queue[1]))
+                ISTimedActionQueue.clear(player)
             end
             if not current.validate or current:validate() then
                 passed = passed + 1
@@ -220,6 +233,7 @@ local function runTests(onDone)
         player:Say(name)
         wasCheat = ISBuildMenu.cheat
         ISBuildMenu.cheat = false
+        testStartMs = getTimestampMs()
         current:run()
     end
     Events.OnTick.Add(onTick)
