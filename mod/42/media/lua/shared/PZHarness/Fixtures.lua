@@ -1,0 +1,254 @@
+-- Development only, not published. What the test library's two-sided fixtures do to one side's
+-- copy of the game: the client's or single player's (client/PZHarness/TestLib.lua) and, in
+-- multiplayer, the server's too (server/PZHarness/ServerFixtures.lua). Shared, so both sides make
+-- the same change, and so a dev mod's server handlers have the lookups too. Each setter returns
+-- the function that undoes it.
+
+PZHarness = PZHarness or {}
+local Fixtures = {}
+PZHarness.Fixtures = Fixtures
+
+-- The Shoddy Table players build, a crafting surface.
+Fixtures.WORK_TABLE_SPRITE = "carpentry_01_60"
+
+--- The table holding sandbox option `key`: SandboxVars[modTable] if it has the option, else
+--- SandboxVars if the game has it, else nil.
+function Fixtures.sandboxOptions(modTable, key)
+    local mod = modTable and SandboxVars[modTable]
+    if mod and mod[key] ~= nil then
+        return mod
+    end
+    return SandboxVars[key] ~= nil and SandboxVars or nil
+end
+
+--- Sets `options[key]` and calls `changed()`, if given, after the change and after the undo.
+function Fixtures.setSandbox(options, key, value, changed)
+    local saved = options[key]
+    options[key] = value
+    if changed then changed() end
+    return function()
+        options[key] = saved
+        if changed then changed() end
+    end
+end
+
+function Fixtures.setTime(hour)
+    local time = getGameTime()
+    local saved = time:getTimeOfDay()
+    time:setTimeOfDay(hour)
+    return function() time:setTimeOfDay(saved) end
+end
+
+function Fixtures.setMultiplier(multiplier)
+    local time = getGameTime()
+    local saved = time:getTrueMultiplier()
+    time:setMultiplier(multiplier)
+    return function() time:setMultiplier(saved) end
+end
+
+function Fixtures.setGrid(on)
+    local option = getSandboxOptions():getOptionByName("ElecShutModifier")
+    local hydro, shut = getWorld():isHydroPowerOn(), option and option:getValue()
+    if option then option:setValue(on and 100000 or -1) end
+    getWorld():setHydroPowerOn(on)
+    return function()
+        if option then option:setValue(shut) end
+        getWorld():setHydroPowerOn(hydro)
+    end
+end
+
+function Fixtures.setPerk(player, perk, level)
+    local saved = player:getPerkLevel(perk)
+    player:setPerkLevelDebug(perk, level)
+    return function() player:setPerkLevelDebug(perk, saved) end
+end
+
+--- Sets the levels in `levels`, perk ids (perk:getId()) to levels, as they are elsewhere.
+function Fixtures.setPerkLevels(player, levels)
+    for id, level in pairs(levels) do
+        local perk = Perks.FromString(id)
+        if perk and perk ~= Perks.MAX then
+            player:setPerkLevelDebug(perk, level)
+        end
+    end
+end
+
+--- Timed actions of the character finish in one tick, or take their time. A server makes the
+--- actions a client sends it, so it decides their length.
+function Fixtures.setInstant(player, on)
+    local saved = player:isTimedActionInstantCheat()
+    player:setTimedActionInstantCheat(on)
+    return function() player:setTimedActionInstantCheat(saved) end
+end
+
+--- Every perk's level, by perk id, for Fixtures.setPerkLevels.
+function Fixtures.perkLevels(player)
+    local levels = {}
+    for i = 0, PerkFactory.PerkList:size() - 1 do
+        local perk = PerkFactory.PerkList:get(i)
+        levels[perk:getId()] = player:getPerkLevel(perk)
+    end
+    return levels
+end
+
+function Fixtures.learnRecipes(player, names)
+    for _, name in ipairs(names) do
+        player:learnRecipe(name)
+    end
+end
+
+function Fixtures.forgetRecipes(player, names)
+    for _, name in ipairs(names) do
+        player:getKnownRecipes():remove(name)
+    end
+end
+
+--- Every recipe the character knows, by name.
+function Fixtures.knownRecipes(player)
+    local names = {}
+    local known = player:getKnownRecipes()
+    for i = 0, known:size() - 1 do
+        table.insert(names, known:get(i))
+    end
+    return names
+end
+
+--- The first object on `square` drawn as `sprite`, or nil. Takes a nil square.
+function Fixtures.objectWithSprite(square, sprite)
+    local objects = square and square:getObjects()
+    for i = 0, (objects and objects:size() or 0) - 1 do
+        if objects:get(i):getTextureName() == sprite then
+            return objects:get(i)
+        end
+    end
+    return nil
+end
+
+--- How often `fullType` appears in a flat { item, weight, ... } loot list, and its last weight.
+function Fixtures.countPairs(items, fullType)
+    local count, weight = 0, nil
+    for i = 1, #items - 1, 2 do
+        if items[i] == fullType then
+            count = count + 1
+            weight = items[i + 1]
+        end
+    end
+    return count, weight
+end
+
+-- How far from `near` vehicleById looks in single player, in squares.
+local VEHICLE_SEARCH = 6
+
+--- The vehicle with this id, or nil. A multiplayer server and its clients share vehicle ids
+--- (getVehicleById). Single player keeps them elsewhere (VehicleIDMap), so there the vehicle is
+--- found over the squares within a few of `near` ({ x, y, z }).
+function Fixtures.vehicleById(id, near)
+    if id == nil then
+        return nil
+    end
+    local vehicle = getVehicleById(id)
+    for dx = -VEHICLE_SEARCH, VEHICLE_SEARCH do
+        for dy = -VEHICLE_SEARCH, VEHICLE_SEARCH do
+            local square = not vehicle and near and getSquare(near.x + dx, near.y + dy, near.z)
+            local found = square and square:getVehicleContainer()
+            if found and found:getId() == id then
+                vehicle = found
+            end
+        end
+    end
+    return vehicle
+end
+
+--- Turns `car` and `trailer` square to `facing` ("N", "E", "S" or "W") and moves the trailer so its
+--- coupler sits on the car's tow bar, as a player lines them up to hitch: vanilla hitches a trailer
+--- only with the two points within a square and the vehicles near parallel
+--- (BaseVehicle.canAttachTrailer). addVehicleDebug skews each heading by up to about 11 degrees at
+--- random, and a hitch left to pull a trailer in from farther off can fail to or jackknife it.
+function Fixtures.lineUpTrailer(car, trailer, facing)
+    -- The rotation addVehicleDebug gives a heading, before its random skew.
+    local yaw = ((IsoDirections[facing]:toAngle() + math.pi) * 180 / math.pi) % 360
+    car:setAngles(0, yaw, 0)
+    trailer:setAngles(0, yaw, 0)
+    local towing = car:getTowingWorldPos("trailer", Vector3f.new())
+    local towed = trailer:getTowedByWorldPos("trailer", Vector3f.new())
+    local transform = trailer:getWorldTransform(Transform.new())
+    local origin = transform:getOrigin()
+    -- The transform's x and z are the world's x and y.
+    origin:set(origin:x() + towing:x() - towed:x(), origin:y(), origin:z() + towing:y() - towed:y())
+    trailer:setWorldTransform(transform)
+end
+
+local function isWorkTable(object)
+    local sprite = object:getSprite()
+    return sprite ~= nil and sprite:getName() == Fixtures.WORK_TABLE_SPRITE
+end
+
+--- The work table next to the character, or nil.
+function Fixtures.workTableNear(player)
+    local here = player:getSquare()
+    for _, direction in ipairs({ IsoDirections.N, IsoDirections.W, IsoDirections.S, IsoDirections.E }) do
+        local square = here and here:getAdjacentSquare(direction)
+        local objects = square and square:getObjects()
+        for i = 0, (objects and objects:size() or 0) - 1 do
+            if isWorkTable(objects:get(i)) then
+                return objects:get(i)
+            end
+        end
+    end
+    return nil
+end
+
+--- Puts a work table on a free square next to the character, with no wall in between, unless one
+--- is there already, and sends it to the clients when this is a server. IsoObject.new with a name
+--- gives the object the sprite's properties, Surface included. Returns the table, or nil without
+--- a free square.
+function Fixtures.placeWorkTable(player)
+    local existing = Fixtures.workTableNear(player)
+    if existing then
+        return existing
+    end
+    local here = player:getSquare()
+    for _, direction in ipairs({ IsoDirections.N, IsoDirections.W, IsoDirections.S, IsoDirections.E }) do
+        local square = here and here:getAdjacentSquare(direction)
+        if square and square:isFree(false) and not here:isBlockedTo(square) then
+            local object = IsoObject.new(square, Fixtures.WORK_TABLE_SPRITE, "Table")
+            square:AddTileObject(object)
+            if isServer() then
+                object:transmitCompleteItemToClients()
+            end
+            return object
+        end
+    end
+    return nil
+end
+
+--- The runner's reset before every test: full health, an empty inventory, nothing worn or held.
+--- A server also tells the clients what was worn and held.
+function Fixtures.resetCharacter(player)
+    player:getBodyDamage():RestoreToFullHealth()
+    player:getInventory():removeAllItems()
+    player:clearWornItems()
+    player:setPrimaryHandItem(nil)
+    player:setSecondaryHandItem(nil)
+    if isServer() then
+        syncVisuals(player)
+        sendEquip(player)
+    end
+end
+
+--- Changes `item` as `changes` says: `condition`, `uses` (the fraction of a full drainable item,
+--- setCurrentUsesFloat), `modData` (keys to set). Returns the item.
+function Fixtures.changeItem(item, changes)
+    if changes.condition then
+        item:setCondition(changes.condition)
+    end
+    if changes.uses then
+        item:setCurrentUsesFloat(changes.uses)
+    end
+    for key, value in pairs(changes.modData or {}) do
+        item:getModData()[key] = value
+    end
+    return item
+end
+
+return Fixtures

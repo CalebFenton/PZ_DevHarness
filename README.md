@@ -15,7 +15,7 @@ prefix, console tag, scenario, sandbox namespace, fixtures and extra modes.
 | `bin/validate-server.sh` | Boots a throwaway dedicated server with the mod and fails on anything the mod logs. |
 | `lib/harness.sh` | Paths, JVM arguments, the game lock, `install_mod`, `compile_java`, and the dedicated server both scripts start (`prepare_server`, `start_server`, `stop_server`, `server_problems`). A mod's own dev scripts may source it. |
 | `java/ClickToStart.java` | Starts the client, presses "Click to start" on the loading screen and gives the asset loader more threads. |
-| `mod/42/` | The harness mod (`cf_test_harness`): `client/PZHarness/Runner.lua`, `TestLib.lua` and `ServerCalls.lua`, and `server/PZHarness/ServerHandlers.lua`, the server's half of the tests' server channel. |
+| `mod/42/` | The harness mod (`cf_test_harness`): `client/PZHarness/Runner.lua`, `TestLib.lua` and `ServerCalls.lua`; `server/PZHarness/ServerHandlers.lua`, the server's half of the tests' server channel, and `ServerFixtures.lua`, the server's half of the two-sided fixtures; `shared/PZHarness/Fixtures.lua`, what both halves do. |
 
 ## Adopting it
 
@@ -140,13 +140,13 @@ end)
 `PZHarness.Test`, from `PZHarness/TestLib.lua`:
 
 - Registering: `test(name, spec)`, `craftTest(name, spec)`. `spec.spOnly` or `spec.mpOnly`, a reason string, keeps a test out of the other mode.
-- Expectations: `expect`, `expectNear`, `need`.
-- Restore stack: `defer`, `onTick`, `setTime`, `setPerk`, `setSandbox`, `setMultiplier`, `setGrid`, `makeDark`.
-- Queue: `wait`, `waitUntil`, `step`.
-- The server: `server(self, name, args)` calls the dev mod's handler `name` and leaves its answer in `self.server[name]`.
-- Squares and fixtures: `squares`, `track`, `tile`, `placeMoveable`, `bench`, `vehicle`, `lineUpTrailer`.
-- Crafting: `recipeNames`, `learnRecipes`, `forgetRecipes`, `addRecipeInputs`, `placeWorkTable`, `craftRefusal`, `startCraft`. Any test that starts a craft with `startCraft` and fails also reports why the game refused it, so a mod's own craft tests get that without `craftTest`.
-- Lookups: `player`, `objectWithSprite`, `countPairs`.
+- Expectations: `expect`, `expectNear`, `need`. Once a test misses something, its later queued steps and waits don't run.
+- Restore stack, two-sided (see [Two-sided fixtures](#two-sided-fixtures)): `defer`, `onTick`, `setTime`, `setPerk`, `setSandbox`, `setMultiplier`, `setGrid`, `makeDark`, `changeItem`; `spec.instant` and the `perks` setting too.
+- Queue: `wait`, `waitUntil`, `step`. What a step queues runs right after it, in order (vanilla's adding-actions mode), and a clear of the queue inside it (`luautils.walkAdj`) drops only that.
+- The server: `server(self, name, args)` calls the dev mod's handler `name` and leaves its answer in `self.server[name]`; `serverUntil(self, name, args, done, maxMs)` calls it until `done(reply)`; `give(self, name, items)`; `count(self, name, types, opts)`.
+- Squares and fixtures: `squares`, `track`; placed by the server: `placeTile`, `placeBench`, `placeVehicle`; this game only: `tile`, `placeMoveable`, `bench`, `vehicle`; `lineUpTrailer`.
+- Crafting: `recipeNames`, `learnRecipes`, `forgetRecipes`, `recipeInputs`, `addRecipeInputs` (this game only), `placeWorkTable`, `craftRefusal`, `startCraft`. Any test that starts a craft with `startCraft` and fails also reports why the game refused it, so a mod's own craft tests get that without `craftTest`.
+- Lookups: `player`, `objectWithSprite`, `countPairs`; `PZHarness.Fixtures` has these and `vehicleById` for server handlers too.
 
 ## Capture settings
 
@@ -286,15 +286,47 @@ A test that can't run in one mode says why: `spOnly = "<why>"` or `mpOnly = "<wh
 The runner skips it in the other mode and prints `<TAG> SKIP <name>: single player only: <why>`
 (or `multiplayer only`). A missing reason, or both fields, fails the test in every mode.
 
+### Two-sided fixtures
+
+The library's fixtures act on both copies, so a test written once runs in both modes and single
+player behaves as before:
+
+- Setters (`setSandbox`, `setTime`, `setMultiplier`, `setGrid`, `setPerk`, `changeItem`, the
+  test's `instant` and `perks`) change this game's copy at once; on a multiplayer client they also
+  send the change to the server (handlers named `PZHarness.*` in `ServerFixtures.lua`) at once and
+  queue a wait for its answer, so actions queued after them start once the server has it. The
+  server undoes it when the test ends. A dev mod's server Lua sets
+  `PZHarness.serverSettings.sandboxChanged` for what the client's `tests.sandboxChanged` does.
+- Items: `T.give(self, name, items)` (`{ type, count, uses, condition, modData, worn, equip }`)
+  makes them on the server, which sends them; once this client has them it puts them on and in
+  hand (`PZHarness.dress`: clothing synced before its item reaches the client as a stray copy),
+  and `self.items[name]` holds this client's copies. A dev mod's handler gives its own items with
+  `PZHarness.giveItem(player, item, { worn, equip })` and lists the results as `given` in its
+  reply; `T.server` then does the same. `T.count` counts the server's inventory.
+- World: `placeTile`, `placeBench` and `placeVehicle` place on the server and return a handle at
+  once whose `.object` (`.vehicle`) is this client's copy after a queued wait; the server removes
+  them when the test ends, through `PZHarness.serverSettings.remove(object)` if set.
+  `PZHarness.serverSettings.spawnVehicle(script, square, facing, args)` may make the vehicles.
+  `T.placeWorkTable`, `T.learnRecipes` and `T.forgetRecipes` work outside tests too, as in a
+  scenario's onStart; `PZHarness.ServerCalls.callOutsideTest(name, args, onReply)` calls any
+  handler there.
+- The runner resets the server's copy of the character before every test too, and after the
+  scenario's and the mod's onStart copies the client's perk levels and known recipes to it.
+
 ### What a client can and can't do
 
-- Client Lua runs on the client only: setting `SandboxVars`, the clock (`T.setTime`), the game
-  speed (`T.setMultiplier`) or the grid changes the client's copy, which the server overwrites or
-  ignores. The server's own sandbox comes from `harness_server_setup`.
-- Objects a client places with `AddTileObject` (`T.tile`, `T.placeWorkTable`) exist on that client
-  only, and items it adds to the inventory aren't on the server: a timed action with `complete()`
-  runs on the server, which can't find them. `ActionManager.sendAction` then logs "Unable to
-  resolve container location", which fails the run. Build such fixtures in a server handler.
+- Client Lua runs on the client only: setting `SandboxVars`, the clock, the game speed or the grid
+  directly changes the client's copy, which the server overwrites or ignores; use the setters
+  above. The server's own sandbox at start comes from `harness_server_setup`.
+- Objects a client places with `AddTileObject` (`T.tile`, `T.bench`) exist on that client only,
+  and items it adds to the inventory aren't on the server: a timed action with `complete()` runs on
+  the server, which can't find them. `ActionManager.sendAction` then logs "Unable to resolve
+  container location", which fails the run. Use the two-sided fixtures or a server handler.
+- An action's `complete()` runs on the server, and what it removes (an item the action used) can
+  reach the client before the action ends there; an `isValid()` that then fails stops the action,
+  and `ISBaseTimedAction:stop` empties the whole action queue, dropping the test's later steps.
+- The server never sends a client the recipes it forgets (`SyncPlayerFieldsPacket`), and the game
+  deletes a drainable item whose uses run out (`DrainableComboItem.update`).
 - Commands through `sendClientCommand`, the Global Object System's syncs to the client's copies,
   and timed actions without `complete()` (such as the harness's own waits) work as in a real game.
 - The client is admin, so permission checks the server makes for players aren't exercised.

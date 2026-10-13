@@ -43,6 +43,21 @@ function ServerCalls.busy()
     return false
 end
 
+--- Calls the server handler `name` for something outside any one test, such as the runner's reset
+--- or a scenario's setup, and `onReply(reply)` with its reply. A failure prints a FAIL line of its
+--- own, which the runner counts as it does a late undo's.
+function ServerCalls.callOutsideTest(name, args, onReply)
+    ServerCalls.send("call", { name = name, test = name, args = args or {} }, function(answer)
+        local problem = answer.error or answer.missing
+        if problem then
+            print(PZHarness.run.tag .. " FAIL " .. name .. ": " .. tostring(problem))
+            ServerCalls.lateFailures = ServerCalls.lateFailures + 1
+        elseif onReply then
+            onReply(answer.reply or {})
+        end
+    end)
+end
+
 local function answered(id, answer)
     local entry = pending[id]
     pending[id] = nil

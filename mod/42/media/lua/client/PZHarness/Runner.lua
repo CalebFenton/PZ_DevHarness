@@ -15,6 +15,7 @@
 
 require "ISUI/ISUIElement"
 require "PZHarness/ServerCalls"
+require "PZHarness/Fixtures"
 
 PZHarness = PZHarness or {}
 
@@ -138,7 +139,8 @@ end
 -- you can read the result; here the next test starts on the next tick, or once the character's
 -- square has loaded again after a test that went far (at most SQUARE_WAIT_MS), and, in
 -- multiplayer, once the server has answered what the last test sent it, its undos above all, so a
--- test never meets what the one before built. Calls onDone() at the end.
+-- test never meets what the one before built. In multiplayer the server's copy of the character
+-- gets the same reset first (PZHarness.Fixtures.resetCharacter). Calls onDone() at the end.
 local function runTests(onDone)
     local names, skipped = testNames()
     local tests = TimedActionTests.getTests()
@@ -151,7 +153,7 @@ local function runTests(onDone)
     -- when a test takes the character far enough for its chunk to unload, and comes back as some
     -- other square (IsoGridSquare.discard, getNew), so teleporting to its coordinates then lands
     -- somewhere else entirely.
-    local current, player, start, wasCheat
+    local current, player, start, wasCheat, resetFor
     local function atStart()
         local here = player:getCurrentSquare()
         return here ~= nil and here:getX() == start.x and here:getY() == start.y and here:getZ() == start.z
@@ -182,8 +184,13 @@ local function runTests(onDone)
         if PZHarness.ServerCalls.busy() then
             return
         end
+        local name = names[index + 1]
+        if name and isClient() and resetFor ~= index + 1 then
+            resetFor = index + 1
+            PZHarness.ServerCalls.callOutsideTest("PZHarness.reset", {})
+            return
+        end
         index = index + 1
-        local name = names[index]
         if not name then
             Events.OnTick.Remove(onTick)
             failed = failed + PZHarness.ServerCalls.lateFailures - lateFailures
@@ -200,11 +207,7 @@ local function runTests(onDone)
         print("TEST: " .. name)
         local here = player:getCurrentSquare()
         start = { x = here:getX(), y = here:getY(), z = here:getZ() }
-        player:getBodyDamage():RestoreToFullHealth()
-        player:getInventory():removeAllItems()
-        player:clearWornItems()
-        player:setPrimaryHandItem(nil)
-        player:setSecondaryHandItem(nil)
+        PZHarness.Fixtures.resetCharacter(player)
         player:Say(name)
         wasCheat = ISBuildMenu.cheat
         ISBuildMenu.cheat = false
@@ -454,8 +457,11 @@ end
 -- The server places a new character on a point of a spawn region (CreatePlayerPacket), so the
 -- character goes to the scenario's start, where single player starts, as soon as it is in the
 -- game. Then, once the world around it has loaded as it has when single player starts the
--- scenario: the scenario's onStart and the mod's, then the run. Both run on this client: what they
--- do to the character or the world reaches the server only as far as the game syncs it.
+-- scenario: the scenario's onStart and the mod's, then the run. Both run on this client; the
+-- perks and known recipes they gave the character are then copied to the server's copy, which
+-- crafts and actions check, before the first test. The test library's helpers they call
+-- (T.learnRecipes, T.placeWorkTable) reach the server themselves; items needn't, since every test
+-- starts with an empty inventory. Anything else goes through the mod's own server handlers.
 local function startMultiplayer()
     local scenario = debugScenarios[PZHarness.config.scenario] or {}
     local loc = scenario.startLoc
@@ -481,6 +487,9 @@ local function startMultiplayer()
             if PZHarness.config.onStart then
                 PZHarness.config.onStart(run.mode)
             end
+            local player = getSpecificPlayer(0)
+            PZHarness.ServerCalls.callOutsideTest("PZHarness.setPerkLevels", { levels = PZHarness.Fixtures.perkLevels(player) })
+            PZHarness.ServerCalls.callOutsideTest("PZHarness.learnRecipes", { names = PZHarness.Fixtures.knownRecipes(player) })
             startMode()
         end)
     end
