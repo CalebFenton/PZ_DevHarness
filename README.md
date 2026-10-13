@@ -62,15 +62,18 @@ The vanilla debug-menu runner is fine for watching one test. The following table
 A fast run is only worth having if the same tests give the same result every time. Several harness behaviors take run-to-run noise out of the game, so a failure comes from the mod or the test:
 
 - Every cold run starts a new world with no zombies, since the server's sandbox sets `Zombies = 6`, the "None" setting. The survivor gets teleported, stripped, healed and re-skilled before every test without one undead interruption.
+- A test world is quiet. The world normally furnishes itself when a building first loads, at random: generators in garages, survivor houses, crash sites, parked cars, rats. `--test` turns that off, so a test never meets an object nobody placed. [running.md](docs/running.md#a-quiet-world) lists the options.
 - Tests wait on the condition they need with `waitUntil`, never for a fixed number of frames, so an uncapped frame rate changes how long a run takes, not what it checks.
 - Screenshot modes can clear the sky and hold it clear, so the same shot looks the same tomorrow when the in-game weather would have rolled in fog.
 - In multiplayer, the harness waits for the server's confirmation of perks, recipes and daylight before a test reads them, and it waits out a race in the game's own vehicle networking that drops a part change made in the first few hundred milliseconds after a vehicle reaches a client.
 - Only one game runs at a time across every mod that uses the harness. A shared lock queues the next run instead of letting two games fight over ports, cache folders and your keyboard.
 - Runs are silent. The harness sets every volume to 0 in its own cache, so your speakers keep your settings when you play by hand.
+- Every test is checked for what it left behind. Between tests the runner compares the world around the character, the character, the sandbox options, the grid and the clock with how they were before the test, on both sides in multiplayer, and a test that leaves something changed fails with what it left.
 
 ## Documentation
 
 - [Adopting PZ_DevHarness](docs/adopting.md): the conf file, entry scripts, dev mod, and the test library's functions.
-- [Running tests and modes](docs/running.md): every flag and environment variable, the console lines a run prints, and what each speedup costs.
+- [Running tests and modes](docs/running.md): every flag and environment variable, the console lines a run prints, the leak check, and what each speedup costs.
+- [Debugging with the harness](docs/debugging.md): which run to reach for when, and how to read a failure.
 - [Multiplayer](docs/multiplayer.md): how `--mp` works, the server channel, two-sided fixtures, and what a multiplayer client can't do.
 - [`TestLib.lua`](mod/42/media/lua/client/PZHarness/TestLib.lua): the test spec, the restore stack, and the rules that keep each test independent of the ones before it.

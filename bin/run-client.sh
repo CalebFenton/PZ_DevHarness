@@ -19,8 +19,15 @@
 #                    a problem in either log. With --stay both stay open, and the next
 #                    --test --mp --stay reruns the tests, the server loading its share of the
 #                    RELOAD_FILES again too.
+#   --test --failed  runs only the tests that failed, or were running when the game stopped, in
+#                    the last --test run of the same kind (with or without --mp)
+#   --test --changed runs the tests the conf's TEST_MAP gives for the files changed since HEAD
 #   --<mode>         one of the conf's MODES: starts the scenario and runs the mod's handler for it
 #                    instead of the tests
+#
+# With --test, REPEAT=<n> runs the selection n times in one game, ORDER=reverse or
+# ORDER=shuffle[:<seed>] changes the order, and LEAKS=fail (the default), warn or off sets what the
+# leak check between tests does. docs/running.md and docs/debugging.md describe them.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../lib/harness.sh"
 
@@ -29,15 +36,17 @@ usage() {
     for mode in ${MODES:-}; do
         modes="$modes | --$mode"
     done
-    echo "usage: $0 [--test [--mp] [--stay]$modes]" >&2
+    echo "usage: $0 [--test [--mp] [--stay] [--failed | --changed]$modes]" >&2
     exit 2
 }
-MODE= STAY= MP=
+MODE= STAY= MP= FAILED= CHANGED=
 for arg in "$@"; do
     case "$arg" in
         --test) MODE=test ;;
         --stay) STAY=1 ;;
         --mp) MP=1 ;;
+        --failed) FAILED=1 ;;
+        --changed) CHANGED=1 ;;
         --*)
             case " ${MODES:-} " in
                 *" ${arg#--} "*) MODE=${arg#--} ;;
@@ -47,8 +56,15 @@ for arg in "$@"; do
         *) usage ;;
     esac
 done
-if { [ -n "$STAY" ] || [ -n "$MP" ]; } && [ "$MODE" != test ]; then
+if { [ -n "$STAY" ] || [ -n "$MP" ] || [ -n "$FAILED" ] || [ -n "$CHANGED" ]; } && [ "$MODE" != test ]; then
     usage
+fi
+if [ -n "$FAILED" ] && [ -n "$CHANGED" ]; then
+    usage
+fi
+if { [ -n "$FAILED" ] || [ -n "$CHANGED" ]; } && [ -n "${TESTS:-}" ]; then
+    echo "TESTS picks the tests itself; leave it out with --failed or --changed" >&2
+    exit 2
 fi
 if [ -n "$MP" ]; then
     CACHE="${CACHE:-$TMP_REAL/$CACHE_NAME-mpclient}"
@@ -58,12 +74,117 @@ if [ -n "$MP" ]; then
 else
     CACHE="${CACHE:-$TMP_REAL/$CACHE_NAME-client}"
 fi
-# What the run does, comma-separated: TESTS name prefixes for --test, else the variable the conf
-# names in MODE_SELECTION_<mode>.
+# What the run does, comma-separated: for --test TESTS name prefixes or exact "=<name>" names
+# (from --failed or --changed when given), else the variable the conf names in
+# MODE_SELECTION_<mode>.
 SELECTION=
 MARK=$TAG
+# The test runs' settings, which the runner reads with the selection.
+LEAKS=${LEAKS:-fail} ORDER=${ORDER:-} ROUNDS=${REPEAT:-1}
+# Where --failed finds what failed last, one line per kind of run: "<test or test-mp> <names>".
+FAILED_KEY="test${MP:+-mp}"
+
+# The exact names of the tests that failed in the last run of this kind, as a selection.
+select_failed() {
+    local line names
+    line=$(grep "^$FAILED_KEY " "$RUNS_FAILED" 2>/dev/null | tail -1 || true)
+    if [ -z "$line" ]; then
+        echo "--failed: no $FAILED_KEY run has been recorded in ${RUNS_FAILED#"$REPO/"} yet" >&2
+        exit 2
+    fi
+    names=${line#"$FAILED_KEY "}
+    if [ -z "$names" ]; then
+        echo "--failed: nothing failed in the last $FAILED_KEY run; no tests to run"
+        exit 0
+    fi
+    echo "--failed: rerunning what failed in the last $FAILED_KEY run: ${names//,/, }"
+    SELECTION="=${names//,/,=}"
+}
+
+# Every file changed since HEAD, staged, unstaged or untracked, relative to the repository, the
+# harness submodule's own changes included.
+changed_files() {
+    local submodule=${HARNESS#"$REPO/"}
+    {
+        git -C "$REPO" diff --name-only HEAD
+        git -C "$REPO" ls-files --others --exclude-standard
+        { git -C "$HARNESS" diff --name-only HEAD; git -C "$HARNESS" ls-files --others --exclude-standard; } \
+            | sed "s|^|$submodule/|"
+    } | sort -u
+}
+
+# The test prefixes the conf's TEST_MAP gives for the changed files under the mod, the dev mod and
+# the harness mod, saying why for each file. A changed file there that no glob covers runs every
+# test; files elsewhere, such as docs and art, run none.
+select_changed() {
+    local roots=("${MOD_DIR#"$REPO/"}/" "${DEV_MOD_DIR#"$REPO/"}/" "${HARNESS_MOD_DIR#"$REPO/"}/")
+    local file root under matched entry glob prefixes picked= everything= relevant=
+    while read -r file; do
+        under=
+        for root in "${roots[@]}"; do
+            [[ $file == "$root"* ]] && under=1
+        done
+        [ -n "$file" ] && [ -n "$under" ] || continue
+        relevant=1
+        matched=
+        for entry in ${TEST_MAP[@]+"${TEST_MAP[@]}"}; do
+            glob=${entry%%=*}
+            prefixes=${entry#*=}
+            # shellcheck disable=SC2053 # the glob is a pattern
+            if [[ $file == $glob ]]; then
+                matched=1
+                picked="$picked,$prefixes"
+                echo "--changed: $file: ${prefixes:-no tests}"
+            fi
+        done
+        if [ -z "$matched" ]; then
+            echo "--changed: $file: no TEST_MAP glob covers it, so every test runs"
+            everything=1
+        fi
+    done < <(changed_files)
+    if [ -z "$relevant" ]; then
+        echo "--changed: nothing under the mods changed since HEAD; no tests to run"
+        exit 0
+    fi
+    if [ -n "$everything" ]; then
+        SELECTION=
+        return
+    fi
+    SELECTION=$(tr ',' '\n' <<< "$picked" | sed '/^$/d' | sort -u | paste -sd, -)
+    if [ -z "$SELECTION" ]; then
+        echo "--changed: no test covers the changed files; no tests to run"
+        exit 0
+    fi
+    echo "--changed: running $SELECTION"
+}
+
 if [ "$MODE" = test ]; then
     SELECTION=${TESTS:-}
+    if [ -n "$FAILED" ]; then
+        select_failed
+    elif [ -n "$CHANGED" ]; then
+        select_changed
+    fi
+    case $LEAKS in
+        fail | warn | off) ;;
+        *) echo "LEAKS is fail, warn or off" >&2; exit 2 ;;
+    esac
+    if ! [[ $ROUNDS =~ ^[1-9][0-9]*$ ]]; then
+        echo "REPEAT is a whole number of rounds from 1" >&2
+        exit 2
+    fi
+    case $ORDER in
+        "" | reverse) ;;
+        shuffle)
+            # Two of bash's 15-bit random numbers, so seeds don't repeat often.
+            ORDER="shuffle:$(( (RANDOM * 32768 + RANDOM) % 2147483646 ))"
+            echo "order: $ORDER (ORDER=$ORDER repeats it)"
+            ;;
+        shuffle:*)
+            [[ ${ORDER#shuffle:} =~ ^[0-9]+$ ]] || { echo "ORDER=shuffle:<seed> takes a whole number" >&2; exit 2; }
+            ;;
+        *) echo "ORDER is reverse, shuffle or shuffle:<seed>" >&2; exit 2 ;;
+    esac
 elif [ -n "$MODE" ]; then
     selection_var="MODE_SELECTION_$MODE"
     if [ -n "${!selection_var:-}" ]; then
@@ -78,10 +199,10 @@ if [ -n "$MODE" ] && declare -F "harness_check_$MODE" > /dev/null; then
     "harness_check_$MODE"
 fi
 # Only a game that died or hung outside a test: the runner fails a stuck test itself after its
-# per-test limit (Runner.lua). A cold --mp run of a whole suite takes about 2.5 minutes. The other
-# modes, such as a mod's long reports, keep the old cap.
+# per-test limit (Runner.lua). A cold --mp run of a whole suite takes about 2.5 minutes, and REPEAT
+# runs it that many times over. The other modes, such as a mod's long reports, keep the old cap.
 if [ "$MODE" = test ]; then
-    TIMEOUT=${TIMEOUT:-300}
+    TIMEOUT=${TIMEOUT:-$((300 * ROUNDS))}
 else
     TIMEOUT=${TIMEOUT:-1200}
 fi
@@ -148,15 +269,16 @@ if [ -n "$SESSION_PID" ]; then
     fi
 fi
 
-# Sends a kept game the tests to run and the files to load again, in the conf's order. The id
-# names the run in console.txt. With --mp the server loads the shared and server files again too,
-# from its own cache dir.
+# Sends a kept game the tests to run, the run's settings and the files to load again, in the
+# conf's order. The id names the run in console.txt. With --mp the server loads the shared and
+# server files again too, from its own cache dir.
 request_rerun() {
     RUN_ID="$$-$(date +%s)"
     local pattern file relative server_files=()
     {
         echo "$RUN_ID"
-        echo "${TESTS:-}"
+        echo "$SELECTION"
+        printf 'option leaks=%s\noption order=%s\noption rounds=%s\n' "$LEAKS" "$ORDER" "$ROUNDS"
         for pattern in "${RELOAD_FILES[@]}"; do
             for file in "$CACHE/mods/$DEV_MOD_FOLDER/"$pattern; do
                 [ -f "$file" ] || continue
@@ -196,8 +318,15 @@ prepare_cache() {
     link_dev_mods
     mkdir -p "$CACHE/Lua"
     rm -f "$REQUEST_FILE" "$CONNECT_FILE"
-    # Written when playing by hand too: the tests take their console tag from it.
-    printf 'mode=%s\nselection=%s\nstay=%s\nmp=%s\nmark=%s\ntag=%s\n' "$MODE" "$SELECTION" "$STAY" "$MP" "$MARK" "$TAG" > "$HARNESS_FILE"
+    # Written when playing by hand too: the tests take their console tag from it. A --test world
+    # is quiet (QUIET_WORLD, lib/harness.sh); the runner sets those options before the scenario's
+    # own setSandbox, which may override them.
+    local quiet=
+    if [ "$MODE" = test ]; then
+        quiet=$(IFS=,; echo "${QUIET_WORLD[*]+${QUIET_WORLD[*]}}")
+    fi
+    printf 'mode=%s\nselection=%s\nstay=%s\nmp=%s\nmark=%s\ntag=%s\nleaks=%s\norder=%s\nrounds=%s\nquiet=%s\n' \
+        "$MODE" "$SELECTION" "$STAY" "$MP" "$MARK" "$TAG" "$LEAKS" "$ORDER" "$ROUNDS" "$quiet" > "$HARNESS_FILE"
     cat > "$CACHE/mods/default.txt" <<EOF
 VERSION = 1,
 
@@ -221,12 +350,13 @@ EOF
     fi
 }
 
-# The server of --mp: the three mods, no zombies, not paused while nobody plays, open to the client
-# without a whitelist, on its own ports. Every harness test world has no zombies, so nothing
-# attacks the character during the tests; the server runs its sandbox file as Lua, so the line
-# goes after the conf's options.
+# The server of --mp: the three mods, no zombies, a quiet world, not paused while nobody plays,
+# open to the client without a whitelist, on its own ports. Every harness test world has no
+# zombies, so nothing attacks the character during the tests. The server runs its sandbox file as
+# Lua, so the lines go after the conf's options, and the quiet ones (QUIET_WORLD) only where the
+# conf's hook set nothing.
 prepare_mp_server() {
-    local client_cache=$CACHE sandbox
+    local client_cache=$CACHE sandbox option
     CACHE=$SERVER_CACHE
     link_dev_mods
     prepare_server "$MOD_ID;$HARNESS_MOD_ID;$DEV_MOD_ID" "DefaultPort=$SERVER_PORT" \
@@ -237,6 +367,9 @@ prepare_mp_server() {
     else
         echo "SandboxVars = { Zombies = 6 }" > "$sandbox"
     fi
+    for option in ${QUIET_WORLD[@]+"${QUIET_WORLD[@]}"}; do
+        echo "if SandboxVars.${option%%=*} == nil then SandboxVars.${option%%=*} = ${option#*=} end" >> "$sandbox"
+    done
     timing_mark server_start
     start_server
     CACHE=$client_cache
@@ -313,11 +446,41 @@ else
     fi
 fi
 
-# On exit (exit_report, lib/harness.sh): prints this run's phases and appends it to RUNS_LOG. A kept
-# game's rerun has no boot or world phase, and only a game that quits has a quit phase. A run a Lua
-# error stopped has a stopped phase instead of the run, up to the poll that saw the error.
+# The tests that failed in this run, or were running when it stopped, for the next --failed run of
+# the same kind; a run that never started its tests leaves the last record alone. A FAIL line names
+# its test, as do the late failures of its server undos; one for a call outside any test names the
+# handler, which no TEST line does.
+record_failed_tests() {
+    [ "$MODE" = test ] && logged "> $TAG START " || return 0
+    local names
+    names=$(awk -v tag="$TAG" '
+        index($0, "> TEST: ") { current = substr($0, index($0, "> TEST: ") + 8); ran[current] = 1; next }
+        index($0, "> " tag " FAIL ") {
+            name = substr($0, index($0, "> " tag " FAIL ") + length(tag) + 8)
+            sub(/: .*/, "", name)
+            if (name in ran) failed[name] = 1
+            if (name == current) current = ""
+        }
+        index($0, "> " tag " PASS ") { current = "" }
+        index($0, "> " tag " DONE ") { done = 1 }
+        END {
+            if (!done && current != "") failed[current] = 1
+            for (name in failed) print name
+        }' "$RUN_LOG" | sort | paste -sd, -)
+    { grep -v "^$FAILED_KEY " "$RUNS_FAILED" 2>/dev/null || true; echo "$FAILED_KEY $names"; } > "$RUNS_FAILED.tmp"
+    mv "$RUNS_FAILED.tmp" "$RUNS_FAILED"
+    if [ -n "$names" ]; then
+        echo "--failed reruns: ${names//,/, }"
+    fi
+}
+
+# On exit (exit_report, lib/harness.sh): records what failed for --failed, prints this run's phases
+# and appends it to RUNS_LOG. A kept game's rerun has no boot or world phase, and only a game that
+# quits has a quit phase. A run a Lua error stopped has a stopped phase instead of the run, up to
+# the poll that saw the error.
 report_timing() {
     [ -n "$MODE" ] || return 0
+    record_failed_tests
     local counts
     counts=$(sed -n "s/.*> $TAG DONE \(passed=[0-9]* failed=[0-9]* skipped=[0-9]*\)\$/\1/p" "$RUN_LOG" 2>/dev/null | tail -1)
     report_run "$1" "$MODE${MP:+-mp}${SESSION_PID:+-rerun}" "${SELECTION:-all}" \

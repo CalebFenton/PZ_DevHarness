@@ -1,6 +1,6 @@
 # Running tests and modes
 
-What `dev/run-debug-client.sh` does with each flag, why a run is fast, and the rules every run follows.
+What `dev/run-debug-client.sh` does with each flag, why a run is fast, and the rules every run follows. [debugging.md](debugging.md) says which run to reach for when.
 
 ## Flags and environment
 
@@ -13,32 +13,107 @@ What `dev/run-debug-client.sh` does with each flag, why a run is fast, and the r
 | `--test --stay` | The same, but the game stays open; the next `--test --stay` reruns the tests in it. |
 | `--test --mp` | The same in multiplayer: a dedicated server and a client that joins it; see [multiplayer.md](multiplayer.md). |
 | `--test --mp --stay` | Both stay open; the next `--test --mp --stay` reruns the tests in them. |
+| `--test --failed` | Runs only the tests that failed in the last `--test` run of the same kind (with or without `--mp`), and the one a stopped run was in. |
+| `--test --changed` | Runs the tests the conf's `TEST_MAP` gives for the files changed since `HEAD`, staged, unstaged or untracked, and prints each file's share and why. A changed file under the mods that no glob covers runs every test; with nothing changed under the mods, nothing runs. |
 | `--<mode>` | Runs the mod's handler for the mode and quits. |
 
-Environment: `TESTS=<prefix>,...` runs only the tests whose names start with one of them;
-`TIMEOUT` caps a run in seconds (default 300 for `--test`, enough for a cold `--mp` run of a
-whole suite, so it only catches a game that died; 1200 for the other modes); `CACHE` moves the cache dir (with `--mp` the
-client's; `SERVER_CACHE` the server's); `SERVER_PORT` moves the `--mp` server off 16361 (it also
-takes the next port); `JAVAC` names the compiler for `ClickToStart.java` (any JDK from 8 on; the
-game's own Java has none); `PZ_APP` names another game `Contents` folder.
+`--failed` and `--changed` combine with `--mp` and `--stay`, not with each other or with `TESTS`.
 
-Console lines, in `<cache>/console.txt`: `<TAG> START <n>`, `TEST: <name>`, `<TAG> PASS <name>`,
-`<TAG> FAIL <name>: <reasons>`, `<TAG> SKIP <name>: <why>` for each test that opted out of this
-mode, each of those three ending with the test's wall time, `(<s> s)`; then `<TAG> SLOWEST` lines,
-`<TAG> TIME <s> s, <n> frames`, `<TAG> DONE passed=<n> failed=<n> skipped=<n>`; with
-`--stay` also `<TAG> RUN <id>` and `<TAG> IDLE ...`. With `--mp` the server's log
-(`<server cache>/server-console.txt`) gets `<TAG> SERVER FAIL <test>: <error>` for a handler or
-undo that failed, and `<TAG> RUN <id>` for a rerun. The script prints every line with the run's
-mark and both logs' paths, and exits 0 only if the run finished, at least one test passed, nothing
-failed and no Lua error was logged on either side.
+Environment: `TESTS=<prefix>,...` runs only the tests whose names start with one of them, and
+`=<name>` in the list names one test exactly; `REPEAT=<n>` runs the selection n times over in one
+game and ends with a `<TAG> REPEAT <name> passed=<n> failed=<n>` line per test, the most failed
+first; `ORDER=reverse` runs the tests in reverse order, and `ORDER=shuffle` in an order from a
+seed the script picks and prints, which `ORDER=shuffle:<seed>` repeats; `LEAKS=fail` (the
+default), `warn` or `off` sets what the [leak check](#leaks-and-desyncs) does; `TIMEOUT` caps a
+run in seconds (default 300 for `--test`, times `REPEAT`, enough for a cold `--mp` run of a
+whole suite, so it only catches a game that died; 1200 for the other modes); `CACHE` moves the
+cache dir (with `--mp` the client's; `SERVER_CACHE` the server's); `SERVER_PORT` moves the
+`--mp` server off 16361 (it also takes the next port); `JAVAC` names the compiler for
+`ClickToStart.java` (any JDK from 8 on; the game's own Java has none); `PZ_APP` names another
+game `Contents` folder.
+
+Console lines, in `<cache>/console.txt`: `<TAG> START <n>`, `<TAG> ORDER <order>` and
+`<TAG> REPEAT <n> rounds` when set, `<TAG> LEAKS <mode>`, `TEST: <name>`, `<TAG> LEAK <name>: <what>`
+and `<TAG> DESYNC <name>: <square> client [...] server [...]` for what a test left behind,
+`<TAG> PASS <name>`, `<TAG> FAIL <name>: <reasons>`, `<TAG> SKIP <name>: <why>` for each test that
+opted out of this mode, each of those three ending with the test's wall time, `(<s> s)`; then the
+`REPEAT` counts, `<TAG> SLOWEST` lines, `<TAG> TIME <s> s, <n> frames`,
+`<TAG> DONE passed=<n> failed=<n> skipped=<n>`; with `--stay` also `<TAG> RUN <id>`,
+`<TAG> DIRTY <name>: <what>` for what the last run in the kept game left behind, and
+`<TAG> IDLE ...`. With `--mp` the server's log (`<server cache>/server-console.txt`) gets
+`<TAG> SERVER FAIL <test>: <error>` for a handler or undo that failed, and `<TAG> RUN <id>` for a
+rerun. The script prints every line with the run's mark and both logs' paths, and exits 0 only if
+the run finished, at least one test passed, nothing failed and no Lua error was logged on either
+side.
+
+## A quiet world
+
+A `--test` world doesn't populate itself: the world normally fills in a chunk or a building the
+first time it loads, at random, and in the middle of a run that can put a generator, a crash
+site or a parked car beside a test that never placed one, and make one run differ from the next.
+`QUIET_WORLD` in `lib/harness.sh` lists the sandbox options that stop it, each with the vanilla
+code it turns off: generator spawning, survivor houses and other building stories, vehicle and
+zone stories, ranches, animal tracks and paths, rats and cockroaches, parked and jammed cars,
+annotated maps (each of which makes a building a stash), house alarms, the helicopter and the
+random meta events. In single player the runner sets them before the scenario's `setSandbox`,
+which runs after and may set any of them back; on the `--mp` server they are appended to its
+sandbox file wherever the conf's `harness_server_setup` set nothing. A conf that sets
+`QUIET_WORLD` itself replaces the list. Other modes (`--promo`, `--art`, a mod's reports) and
+`validate-server.sh` keep the world's own population.
+
+## Leaks and desyncs
+
+Between tests, and after the last, the runner resets the character and takes a snapshot of the
+world around it (`shared/PZHarness/Snapshot.lua`), which it compares with the one from before the
+test that just ended: the objects on every square within the `leakRadius` setting (by default a
+little past where `T.squares` looks) on the `leakLevels` z levels (the character's own by
+default), each as its sprite or item type and class, with generators and light switches on or
+off; the vehicles there; whether a sparse grid of those squares has power; the character's perk
+levels, known recipes and what it holds after the reset; where it starts; the sandbox options;
+the grid; the game speed; the climate's admin overrides; and the clock, which may only have run
+on.
+
+The comparison leaves out objects the world changes by itself, and grass, which goes from a
+square something was placed on and never comes back: crops and garden plants, erosion's grass,
+plants, trees, bushes, cracks and roof snow, and grass overlays (`Snapshot.DEFAULT_IGNORE`). The
+dev mod's `leakIgnore` setting adds Lua patterns, matched against `<sprite>@<class>`. A square
+whose objects differ only by those doesn't count.
+
+In multiplayer the server snapshots its copy ("PZHarness.snapshot") while the client snapshots
+its own, and the server's differences are the ones reported for objects, vehicles, perks, recipes
+and the clock, since the client only copies those from it. The client reports its own state (what
+it holds, the power it works out itself, the options) and compares its squares with the server's
+wherever either side saw one change. What the server sent can still be on its way, so a
+difference between the copies, or a change of the client's own state, costs a second look half a
+second later, and only what is still there is reported.
+
+Each difference prints a `LEAK` line (the server's start with "on the server"), and each square
+where the copies still differ a `DESYNC` line, at most a handful per test with a count of the
+rest, before the test's verdict. With `LEAKS=fail` they fail the test, as its reasons; with
+`LEAKS=warn` they only print; `LEAKS=off` skips the snapshots. A check that finds nothing costs one
+snapshot, taken on both sides at once in multiplayer, a few tens of milliseconds; the last
+`SLOWEST` line says how long the checks took in all. A kept `--stay` game prints what its last
+run left behind as `DIRTY` lines when the next run starts, since that run starts on top of it.
+
+## Choosing tests
+
+`--failed` reads `dev/.runs-failed` in the mod's repository, which every `--test` run that got as
+far as its tests rewrites for its kind (`test` or `test-mp`): the tests with a `FAIL` line, and
+the test a Lua error or the timeout stopped. A run whose tests all passed leaves the list empty,
+and `--failed` then runs nothing. The mod should gitignore it, as it does `dev/.runs.log`. At the
+end of a run with failures the script prints `--failed reruns: <names>`.
+
+`--changed` reads `git diff --name-only HEAD` and the untracked files, of the repository and of
+the harness submodule, and the conf's `TEST_MAP` ([adopting.md](adopting.md#devharnessconf)).
 
 ## Where the time goes
 
 The `<TAG> SLOWEST <s> s <name>` lines name the slowest tests, slowest first, and in multiplayer
 how long each had a server answer outstanding (`(server <s> s)`). The last `SLOWEST` line splits
 the run into the time in tests and the time between them: the runner waiting for the character's
-square to load again after a test that went far, and in multiplayer for the server's resets and
-undos. In multiplayer it adds how much of both had a server answer outstanding.
+square to load again after a test that went far, the leak checks, and in multiplayer the
+server's resets and undos. In multiplayer it adds how much of both had a server answer
+outstanding.
 
 On exit, `run-client.sh` and `validate-server.sh` print a `timing: <phase> <s> s (<what>)` line
 per phase, each from the end of the one before, then `timing: total`. The clock starts once the

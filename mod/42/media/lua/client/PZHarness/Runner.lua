@@ -1,7 +1,9 @@
 -- Development only, not published. bin/run-client.sh loads this mod with the mod under test and
 -- its dev mod, and writes <cachedir>/Lua/PZHarness.txt: the mode (empty when playing by hand), the
--- selection (TESTS prefixes, or the mod's own for its modes), whether to stay, whether the client
--- joins a dedicated server (--mp), the console mark of the mode and the tests' console tag.
+-- selection (TESTS prefixes and exact "=<name>" names, or the mod's own for its modes), whether to
+-- stay, whether the client joins a dedicated server (--mp), the console mark of the mode, the
+-- tests' console tag, and for tests the leak check (LEAKS), the order (ORDER) and the rounds
+-- (REPEAT).
 --
 -- The dev mod calls PZHarness.register (see docs/adopting.md). In a mode, the mod's debug scenario then
 -- starts from the main menu (with -debug and DebugScenario.ForceLaunch=true in debug-options.ini);
@@ -16,6 +18,7 @@
 require "ISUI/ISUIElement"
 require "PZHarness/ServerCalls"
 require "PZHarness/Fixtures"
+require "PZHarness/Leaks"
 
 PZHarness = PZHarness or {}
 
@@ -31,6 +34,12 @@ local SQUARE_WAIT_MS = 10000
 local TEST_TIMEOUT_SECONDS = 30
 -- How many of the slowest tests the run's summary names.
 local SLOWEST_COUNT = 10
+-- The leak check looks this much further than the test library places fixtures (its
+-- SEARCH_RADIUS), unless the dev mod's `leakRadius` setting says otherwise.
+local LEAK_MARGIN = 2
+-- At most this many LEAK and DESYNC lines per test, and DIRTY lines per run; a count of the rest
+-- follows.
+local LEAK_LINES_SHOWN = 10
 -- With --stay, run-client.sh writes this file in <cachedir>/Lua to rerun the tests; the game looks
 -- for it every REQUEST_POLL_TICKS ticks and quits after STAY_IDLE_MS without one. Starting a
 -- multiplayer game again costs about a minute, so a kept game waits through a long pause.
@@ -95,7 +104,8 @@ function PZHarness.tookSuffix(seconds)
     return string.format(" (%.2f s)", seconds)
 end
 
--- Name prefixes from TESTS; empty runs every test of the mod.
+-- Name prefixes from TESTS, or exact names written "=<name>" (--failed); empty runs every test of
+-- the mod.
 local filters = {}
 
 local function setFilters(tests)
@@ -112,8 +122,9 @@ local function selected(name)
     if #filters == 0 then
         return true
     end
-    for _, prefix in ipairs(filters) do
-        if startsWith(name, prefix) then
+    for _, filter in ipairs(filters) do
+        local exact = string.match(filter, "^=(.*)$")
+        if exact == name or (not exact and startsWith(name, filter)) then
             return true
         end
     end
@@ -143,6 +154,40 @@ local function testNames()
     return result, skipped
 end
 
+-- Random numbers from 1 to n that the same seed repeats (Park and Miller's generator: the products
+-- stay exact in a double), since ZombRand can't be seeded.
+local function seededRandom(seed)
+    local value = seed % 2147483646 + 1
+    return function(n)
+        value = (value * 16807) % 2147483647
+        return value % n + 1
+    end
+end
+
+-- `names` in the run's order (ORDER: "reverse", or "shuffle:<seed>"), `rounds` times over
+-- (REPEAT), each round of a shuffle in a new order.
+local function orderedRounds(names, order, rounds)
+    local seed = tonumber(string.match(order, "^shuffle:(%d+)$"))
+    local random = seed and seededRandom(seed)
+    local result = {}
+    for _ = 1, rounds do
+        local round = {}
+        for i, name in ipairs(names) do
+            round[order == "reverse" and #names + 1 - i or i] = name
+        end
+        if random then
+            for i = #round, 2, -1 do
+                local j = random(i)
+                round[i], round[j] = round[j], round[i]
+            end
+        end
+        for _, name in ipairs(round) do
+            table.insert(result, name)
+        end
+    end
+    return result
+end
+
 -- The inventory windows hold the containers that crafts and the craft menu take their inputs from
 -- (ISInventoryPaneContextMenu.getContainers), and catch up with a change only when the UI next
 -- draws: until then they keep a bag the reset just took away, such as the key ring a multiplayer
@@ -156,11 +201,71 @@ local function refreshInventoryWindows()
     end
 end
 
+-- What the last run in this game left behind, as "<test>: <what>", which a kept game's next run
+-- reports first: it is still in the world that run starts from.
+local leftBehind = {}
+
+-- Prints up to LEAK_LINES_SHOWN of `lines` as "<tag> <kind> <prefix><line>", then how many more.
+local function printCapped(kind, prefix, lines)
+    for i, line in ipairs(lines) do
+        if i > LEAK_LINES_SHOWN then
+            print(string.format("%s %s %sand %d more", run.tag, kind, prefix, #lines - LEAK_LINES_SHOWN))
+            return
+        end
+        print(run.tag .. " " .. kind .. " " .. prefix .. line)
+    end
+end
+
+local function countVerdict(state, name, passed)
+    local tally = state.tally[name] or { passed = 0, failed = 0 }
+    state.tally[name] = tally
+    if passed then
+        state.passed, tally.passed = state.passed + 1, tally.passed + 1
+    else
+        state.failed, tally.failed = state.failed + 1, tally.failed + 1
+    end
+end
+
+-- Prints the verdict of the test that just ended, once the leak check after it is done: its LEAK
+-- and DESYNC lines first, which with LEAKS=fail also fail it.
+local function settleVerdict(state, found)
+    local verdict = state.verdict
+    state.verdict = nil
+    if not verdict then
+        return
+    end
+    local failures = verdict.failures
+    local findings = {}
+    for _, line in ipairs(found and found.leaks or {}) do
+        table.insert(findings, { kind = "LEAK", line = line })
+    end
+    for _, line in ipairs(found and found.desyncs or {}) do
+        table.insert(findings, { kind = "DESYNC", line = line })
+    end
+    for i, finding in ipairs(findings) do
+        if i > LEAK_LINES_SHOWN then
+            local rest = #findings - LEAK_LINES_SHOWN
+            print(string.format("%s LEAK %s: and %d more", run.tag, verdict.name, rest))
+            if state.leaks == "fail" then
+                table.insert(failures, rest .. " more leaks and desyncs")
+            end
+            break
+        end
+        print(run.tag .. " " .. finding.kind .. " " .. verdict.name .. ": " .. finding.line)
+        table.insert(leftBehind, verdict.name .. ": " .. finding.line)
+        if state.leaks == "fail" then
+            table.insert(failures, (finding.kind == "LEAK" and "left behind " or "client and server differ at ") .. finding.line)
+        end
+    end
+    PZHarness.Test.printVerdict(verdict.name, failures, verdict.seconds)
+    countVerdict(state, verdict.name, #failures == 0)
+end
+
 -- The current test is done once its action queue is empty, or stopped once it overruns its limit
 -- (TEST_TIMEOUT_SECONDS or its spec's timeoutSeconds): its queue cleared, and validate() fails it
--- with what it was waiting on. Then validate() runs and counts the verdict, the test's wall time
--- and its time waiting on the server go to the run's summary, and the cheat and the character go
--- back to where the test started.
+-- with what it was waiting on. Then validate() runs, and its verdict waits for the leak check
+-- (settleVerdict); the test's wall time and its time waiting on the server go to the run's
+-- summary, and the cheat and the character go back to where the test started.
 local function finishCurrentTest(state)
     local current, player = state.current, state.player
     local queue = ISTimedActionQueue.getTimedActionQueue(player).queue
@@ -173,28 +278,28 @@ local function finishCurrentTest(state)
             PZHarness.Test.describeAction(queue[1]))
         ISTimedActionQueue.clear(player)
     end
-    if not current.validate or current:validate() then
-        state.passed = state.passed + 1
-    else
-        state.failed = state.failed + 1
-    end
+    local passed = not current.validate or current:validate()
     state.current = nil
     state.doneMs = getTimestampMs()
-    -- TestLib's validate leaves the time it printed; a test registered some other way has none.
+    -- TestLib's validate leaves its failures and the test's time; a test registered some other way
+    -- has only its verdict.
+    local seconds = current.seconds or (state.doneMs - state.testStartMs) / 1000
+    state.verdict = { name = state.name, seconds = seconds,
+        failures = current.failures or (passed and {} or { "validate failed" }) }
     table.insert(state.times, {
         name = state.name,
-        seconds = current.seconds or (state.doneMs - state.testStartMs) / 1000,
+        seconds = seconds,
         serverSeconds = (PZHarness.ServerCalls.waitedMs() - state.testServerMs) / 1000,
     })
     ISBuildMenu.cheat = state.wasCheat
     PZHarness.Fixtures.teleportToMiddle(player, state.start.x, state.start.y, state.start.z)
 end
 
--- Whether the next test (or the end of the run) may come: the character's square has loaded again
--- after a test that went far, or SQUARE_WAIT_MS have passed; the server has answered what the last
--- test sent it, its undos above all, so a test never meets what the one before built; and, in
--- multiplayer, the server has reset its copy of the character for the next test, which the first
--- call asks for.
+-- Whether the leak check may come, then the next test or the end of the run: the character's
+-- square has loaded again after a test that went far, or SQUARE_WAIT_MS have passed; the server
+-- has answered what the last test sent it, its undos above all, so a test never meets what the
+-- one before built; and, in multiplayer, the server has reset its copy of the character, which the
+-- first call asks for.
 local function readyForNextTest(state)
     if not state.player:getCurrentSquare() and getTimestampMs() - state.doneMs < SQUARE_WAIT_MS then
         return false
@@ -203,7 +308,7 @@ local function readyForNextTest(state)
         return false
     end
     local nextIndex = state.index + 1
-    if state.names[nextIndex] and isClient() and state.resetFor ~= nextIndex then
+    if isClient() and state.resetFor ~= nextIndex and (state.names[nextIndex] or state.leaks ~= "off") then
         state.resetFor = nextIndex
         PZHarness.ServerCalls.callOutsideTest("PZHarness.reset", {})
         return false
@@ -211,10 +316,41 @@ local function readyForNextTest(state)
     return true
 end
 
--- Starts test `name` from the character's square after the runner's resets. If that square still
--- hasn't loaded since the last test took the character far away, the test fails without running,
--- since nothing could bring the character back to where it started, and the next one waits again.
--- The time since the last test ended counts as between tests in the run's summary.
+-- Between two tests, and after the last: the runner's reset of the character, then the leak check
+-- (PZHarness/Leaks.lua), which compares the world with how it was before the test that just ended,
+-- then that test's verdict. Returns true once all of it is done. A check whose square never loaded
+-- is skipped.
+local function checkBetweenTests(state)
+    if state.checkedFor == state.index then
+        return true
+    end
+    if not state.check then
+        -- Before the snapshot, so what the reset takes away doesn't count as left behind.
+        PZHarness.Fixtures.resetCharacter(state.player)
+        refreshInventoryWindows()
+        if state.leaks == "off" or not state.player:getCurrentSquare() then
+            settleVerdict(state, nil)
+            state.checkedFor = state.index
+            return true
+        end
+        state.checkStartMs = getTimestampMs()
+        state.check = PZHarness.Leaks.start(state.player, state.leakRadius, state.leakLevels, state.leakIgnore)
+    end
+    local found = state.check()
+    if not found then
+        return false
+    end
+    state.check = nil
+    state.leakMs = state.leakMs + getTimestampMs() - state.checkStartMs
+    settleVerdict(state, found)
+    state.checkedFor = state.index
+    return true
+end
+
+-- Starts test `name` from the character's square, which the leak check's reset has just reset. If
+-- that square still hasn't loaded since the last test took the character far away, the test fails
+-- without running, since nothing could bring the character back to where it started, and the next
+-- one waits again. The time since the last test ended counts as between tests in the run's summary.
 local function startNextTest(state, name)
     local player = state.player
     state.gapMs = state.gapMs + getTimestampMs() - state.doneMs
@@ -223,15 +359,13 @@ local function startNextTest(state, name)
     if not here then
         print(string.format("%s FAIL %s: the character's square was still unloaded %d s after the last test%s",
             run.tag, name, SQUARE_WAIT_MS / 1000, PZHarness.tookSuffix(0)))
-        state.failed = state.failed + 1
+        countVerdict(state, name, false)
         state.doneMs = getTimestampMs()
         return
     end
     state.name = name
     state.current = state.tests[name]
     state.start = { x = here:getX(), y = here:getY(), z = here:getZ() }
-    PZHarness.Fixtures.resetCharacter(player)
-    refreshInventoryWindows()
     player:Say(name)
     state.wasCheat = ISBuildMenu.cheat
     ISBuildMenu.cheat = false
@@ -241,8 +375,8 @@ local function startNextTest(state, name)
 end
 
 -- Prints the SLOWEST_COUNT slowest tests, then where the run's time went: in the tests, between
--- them (square loads, and the server's resets and undos the runner waits for), and in multiplayer
--- how much of both had a server answer outstanding.
+-- them (square loads, the server's resets and undos the runner waits for, the leak checks), and in
+-- multiplayer how much of both had a server answer outstanding.
 local function printSlowest(state)
     local times = state.times
     table.sort(times, function(a, b)
@@ -259,22 +393,46 @@ local function printSlowest(state)
                 isClient() and string.format(" (server %.2f s)", entry.serverSeconds) or ""))
         end
     end
-    local summary = string.format("%s SLOWEST %.1f s in tests, %.1f s between them", run.tag, inTests,
-        state.gapMs / 1000)
+    local summary = string.format("%s SLOWEST %.1f s in tests, %.1f s between them (%.1f s of it checking for leaks)",
+        run.tag, inTests, state.gapMs / 1000, state.leakMs / 1000)
     if isClient() then
-        summary = summary .. string.format(", %.1f s of it waiting on the server",
+        summary = summary .. string.format(", %.1f s of it all waiting on the server",
             (PZHarness.ServerCalls.waitedMs() - state.serverStartMs) / 1000)
     end
     print(summary)
 end
 
--- Prints the skipped tests, the slowest ones, the time the run took and its verdict, counting the
--- failures that came after their tests' verdicts, then calls onDone().
+-- With REPEAT, how often each test passed and failed, the most failed first.
+local function printTally(state)
+    local names = {}
+    for name in pairs(state.tally) do
+        table.insert(names, name)
+    end
+    table.sort(names, function(a, b)
+        local failedA, failedB = state.tally[a].failed, state.tally[b].failed
+        if failedA ~= failedB then
+            return failedA > failedB
+        end
+        return a < b
+    end)
+    for _, name in ipairs(names) do
+        local tally = state.tally[name]
+        print(string.format("%s REPEAT %s passed=%d failed=%d", run.tag, name, tally.passed, tally.failed))
+    end
+end
+
+-- Prints the skipped tests, the counts of a repeated run, the slowest tests, the time the run took
+-- and its verdict, counting the failures that came after their tests' verdicts, then calls
+-- onDone().
 local function finishRun(state)
+    PZHarness.runnerOwnsVerdicts = false
     state.gapMs = state.gapMs + getTimestampMs() - state.doneMs
     local failed = state.failed + PZHarness.ServerCalls.lateFailures - state.lateFailures
     for _, skip in ipairs(state.skipped) do
         print(run.tag .. " SKIP " .. skip .. PZHarness.tookSuffix(0))
+    end
+    if state.rounds > 1 then
+        printTally(state)
     end
     printSlowest(state)
     local seconds = (getTimestampMs() - state.startedMs) / 1000
@@ -284,18 +442,55 @@ local function finishRun(state)
     state.onDone()
 end
 
+-- The leak check's mode (LEAKS: "fail", "warn" or "off"), its radius, its z levels, and the
+-- patterns of the objects it leaves out: the built-in ones and the dev mod's `leakIgnore`.
+local function leakSettings()
+    local mode = run.leaks ~= nil and run.leaks ~= "" and run.leaks or "fail"
+    local tests = PZHarness.config.tests
+    local ignore = {}
+    for _, list in ipairs({ PZHarness.Snapshot.DEFAULT_IGNORE, tests.leakIgnore or {} }) do
+        for _, pattern in ipairs(list) do
+            table.insert(ignore, pattern)
+        end
+    end
+    return mode, tests.leakRadius or PZHarness.Test.SEARCH_RADIUS + LEAK_MARGIN, tests.leakLevels, ignore
+end
+
+-- What the last run in this game left behind, before this one starts on top of it.
+local function printLeftBehind()
+    if #leftBehind > 0 then
+        printCapped("DIRTY", "", leftBehind)
+        leftBehind = {}
+    end
+end
+
 -- Runs the selected tests one after another with the resets of the debug menu's runner (RunTest
 -- and OnTick in vanilla Tests/TimedActionsTests.lua, whose locals Lua can't reach): before each
 -- test full health, an empty inventory, nothing worn or held, the inventory windows caught up with
 -- that, ISBuildMenu.cheat off and the test's name said aloud; validate() once the action queue is
 -- empty; then the cheat back and the character back in the middle of the square the test started
 -- on. Vanilla pauses a second after every test so you can read the result; here the next test
--- starts on the next tick, or once readyForNextTest says so. In multiplayer the server's copy of
--- the character gets the same reset first (PZHarness.Fixtures.resetCharacter). Calls onDone() at
--- the end.
+-- starts on the next tick, or once readyForNextTest says so and the leak check after the last
+-- test is done (checkBetweenTests). In multiplayer the server's copy of the character gets the
+-- same reset first (PZHarness.Fixtures.resetCharacter). The run's ORDER, REPEAT and LEAKS come
+-- from `run` (PZHarness.txt, or a --stay request). Calls onDone() at the end.
 local function runTests(onDone)
     local names, skipped = testNames()
+    local rounds = math.max(1, tonumber(run.rounds) or 1)
+    local order = run.order or ""
+    local leaks, leakRadius, leakLevels, leakIgnore = leakSettings()
+    printLeftBehind()
+    names = orderedRounds(names, order, rounds)
     print(run.tag .. " START " .. #names)
+    if order ~= "" then
+        print(run.tag .. " ORDER " .. order)
+    end
+    if rounds > 1 then
+        print(run.tag .. " REPEAT " .. rounds .. " rounds")
+    end
+    print(run.tag .. " LEAKS " .. leaks .. (leaks ~= "off" and ", " .. leakRadius .. " squares around the character" or ""))
+    PZHarness.Leaks.reset()
+    PZHarness.runnerOwnsVerdicts = true
     local startedMs = getTimestampMs()
     -- `start` holds where the current test started, as numbers: the square object itself goes back
     -- to the pool when a test takes the character far enough for its chunk to unload, and comes
@@ -303,13 +498,18 @@ local function runTests(onDone)
     -- then lands somewhere else entirely.
     local state = {
         names = names, skipped = skipped, tests = TimedActionTests.getTests(), onDone = onDone,
+        rounds = rounds, leaks = leaks, leakRadius = leakRadius, leakLevels = leakLevels, leakIgnore = leakIgnore,
         passed = 0, failed = 0, index = 0, ticks = 0, startedMs = startedMs, doneMs = startedMs,
         lateFailures = PZHarness.ServerCalls.lateFailures,
-        -- For the summary: each test's { name, seconds, serverSeconds }, the time between tests,
-        -- and the server waits so far, which a kept game's earlier runs add to.
-        times = {}, gapMs = 0, serverStartMs = PZHarness.ServerCalls.waitedMs(),
+        -- For the summary: each test's { name, seconds, serverSeconds }, the time between tests and
+        -- the part of it the leak checks took, the server waits so far, which a kept game's
+        -- earlier runs add to, and each test's passes and failures over the rounds.
+        times = {}, gapMs = 0, leakMs = 0, serverStartMs = PZHarness.ServerCalls.waitedMs(), tally = {},
         current = nil, name = nil, player = nil, start = nil, wasCheat = nil, resetFor = nil,
         testStartMs = nil, testServerMs = nil,
+        -- The verdict waiting for the leak check, the check under way, and the test index it ran
+        -- after.
+        verdict = nil, check = nil, checkStartMs = nil, checkedFor = nil,
     }
     local function onTick()
         state.ticks = state.ticks + 1
@@ -318,7 +518,7 @@ local function runTests(onDone)
             return
         end
         state.player = getSpecificPlayer(0)
-        if not readyForNextTest(state) then
+        if not readyForNextTest(state) or not checkBetweenTests(state) then
             return
         end
         state.index = state.index + 1
@@ -333,19 +533,25 @@ local function runTests(onDone)
     Events.OnTick.Add(onTick)
 end
 
--- The request run-client.sh writes to REQUEST_FILE: an id, the TESTS prefixes, then the Lua files
--- to run again, in the order the mod listed them: this game's paths, then, with --mp, "server "
--- and the server's paths of those it loads too. Nil if there is none.
+-- The request run-client.sh writes to REQUEST_FILE: an id, the selection (TESTS prefixes and
+-- "=<name>" names), then "option <key>=<value>" lines for the run's settings (leaks, order,
+-- rounds), then the Lua files to run again, in the order the mod listed them: this game's paths,
+-- then, with --mp, "server " and the server's paths of those it loads too. Nil if there is none.
 local function readRequest()
     local reader = getFileReader(REQUEST_FILE, false)
     if not reader then
         return nil
     end
-    local request = { id = reader:readLine(), tests = reader:readLine(), files = {}, serverFiles = {} }
+    local request = { id = reader:readLine(), tests = reader:readLine(), options = {}, files = {}, serverFiles = {} }
     local line = reader:readLine()
     while line do
+        local key, value = string.match(line, "^option (%w+)=(.*)$")
         local serverFile = string.match(line, "^server (.*)$")
-        table.insert(serverFile and request.serverFiles or request.files, serverFile or line)
+        if key then
+            request.options[key] = value
+        else
+            table.insert(serverFile and request.serverFiles or request.files, serverFile or line)
+        end
         line = reader:readLine()
     end
     reader:close()
@@ -419,6 +625,9 @@ local function serveReruns()
                 reloadLuaFile(file)
             end
             setFilters(request.tests)
+            for key, value in pairs(request.options) do
+                run[key] = value
+            end
             runTests(idle)
         end
         if not isClient() then
@@ -712,6 +921,26 @@ function PZHarness.register(config)
 
     local scenario = debugScenarios[config.scenario]
     scenario.forceLaunch = true
+
+    -- A --test world is quiet: the options run-client.sh lists (QUIET_WORLD in lib/harness.sh)
+    -- go in before the new world is made, and the scenario's own setSandbox after them, so the
+    -- mod's settings win.
+    local quiet = run.mode == "test" and run.quiet or ""
+    if quiet ~= "" then
+        local originalSetSandbox = scenario.setSandbox
+        scenario.setSandbox = function()
+            for key, value in string.gmatch(quiet, "([%w_]+)=([^,]+)") do
+                if value == "true" or value == "false" then
+                    SandboxVars[key] = value == "true"
+                else
+                    SandboxVars[key] = tonumber(value) or value
+                end
+            end
+            if originalSetSandbox then
+                originalSetSandbox()
+            end
+        end
+    end
 
     local originalOnStart = scenario.onStart
     scenario.onStart = function()

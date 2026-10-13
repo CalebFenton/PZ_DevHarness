@@ -56,8 +56,9 @@ function ServerCalls.waitedMs()
 end
 
 --- Calls the server handler `name` for something outside any one test, such as the runner's reset
---- or a scenario's setup, and `onReply(reply)` with its reply. A failure prints a FAIL line of its
---- own, which the runner counts as it does a late undo's.
+--- or a scenario's setup, and `onReply(reply)` with its reply, exactly as the handler returned it:
+--- false, 0 or nil too. A failure prints a FAIL line of its own, which the runner counts as it
+--- does a late undo's, and never calls onReply.
 function ServerCalls.callOutsideTest(name, args, onReply)
     ServerCalls.send("call", { name = name, test = name, args = args or {} }, function(answer)
         local problem = answer.error or answer.missing
@@ -65,7 +66,7 @@ function ServerCalls.callOutsideTest(name, args, onReply)
             print(PZHarness.run.tag .. " FAIL " .. name .. ": " .. tostring(problem))
             ServerCalls.lateFailures = ServerCalls.lateFailures + 1
         elseif onReply then
-            onReply(answer.reply or {})
+            onReply(answer.reply)
         end
     end)
 end

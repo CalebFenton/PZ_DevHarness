@@ -44,6 +44,28 @@ JVM_COMMON=(-Djava.awt.headless=true -Djava.library.path=. --enable-native-acces
     -XX:-OmitStackTraceInFastThrow)
 GAME_CLASSPATH=.:projectzomboid.jar
 
+# The sandbox options of a --test world, as Key=value: the world fills itself in when a chunk or
+# building first loads, and some of it at random, so a test could meet objects nobody placed and
+# a run differ from the last. A conf that sets QUIET_WORLD itself (=() for none) replaces the
+# list, and the mod's own sandbox settings win over it (docs/running.md, "A quiet world").
+if ! declare -p QUIET_WORLD > /dev/null 2>&1; then
+    QUIET_WORLD=(
+        GeneratorSpawning=1   # None: no generators in garages and sheds (IsoCell) or in loot
+        SurvivorHouseChance=1 # Never: no building stories, which furnish, barricade and stock houses
+        VehicleStoryChance=1  # Never: no crash sites and roadside camps
+        ZoneStoryChance=1     # Never: no campsites, picnics and other stories in zones
+        AnimalRanchChance=1   # Never: no ranches with their animals, troughs and fences
+        AnimalTrackChance=1   # Never: no animal tracks left on squares
+        AnimalPathChance=1    # Never: no animal paths among the world's zones
+        MaximumRatIndex=0     # no rats and cockroaches in buildings (RBBasic)
+        CarSpawnRate=1        # None: no parked or jammed cars where fixtures go (IsoChunk.AddVehicles)
+        AnnotatedMapChance=1  # Never: no annotated maps in loot, each of which makes a building a stash
+        Alarm=1               # Never: no house alarms going off when a test enters a building
+        Helicopter=1          # Never: no helicopter event
+        MetaEvent=1           # Never: no distant gunshots and other random sounds
+    )
+fi
+
 # The game reads depth maps by absolute path and refuses paths outside the mod folders and the
 # cache dir without resolving symlinks (ZomboidFileSystem.validatePrefix), so a symlinked mod, or a
 # cache under macOS's /var (really /private/var), loses its tile depth maps. Hence a real copy of
@@ -211,8 +233,10 @@ hand_lock_to_game() {
 # Run timing --------------------------------------------------------------------------------------
 
 # One line per run of the client and server scripts, for a look at where the time goes across many
-# runs. The mod's .gitignore lists it.
+# runs, and what failed in the last test run of each kind, for run-client.sh --failed. The mod's
+# .gitignore lists both.
 RUNS_LOG="$REPO/dev/.runs.log"
+RUNS_FAILED="$REPO/dev/.runs-failed"
 
 # Wall-clock seconds to a tenth: macOS's date has no fractions, and its bash no EPOCHREALTIME.
 now() {

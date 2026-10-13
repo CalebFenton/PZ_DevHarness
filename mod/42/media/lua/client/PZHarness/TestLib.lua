@@ -57,8 +57,10 @@ local T = PZHarness.Test
 -- lighting catches up at its own pace in real time, whatever the frame rate, and on a multiplayer
 -- client only after the server's clock has come back to it.
 local LIGHT_MS = 10000
--- Squares searched around a fixture's centre, in tiles.
+-- Squares searched around a fixture's centre, in tiles. The runner's leak check looks a little
+-- further by default.
 local SEARCH_RADIUS = 30
+T.SEARCH_RADIUS = SEARCH_RADIUS
 -- Squares a vehicle is tried on before a test gives up on it.
 local VEHICLE_TRIES = 8
 
@@ -134,7 +136,37 @@ function Wait:new(character, total, onTick, done)
     o.total, o.onTick, o.done, o.ticks = total, onTick, done, 0
     o.stopOnWalk, o.stopOnRun, o.stopOnAim = false, false, false
     o.maxTime = -1
+    o.test = active
     return o
+end
+
+-- A test's own wait that goes without finishing means a timed action emptied the queue: one that
+-- turned invalid or was refused stops (ISBaseTimedAction.stop), and that cancels everything queued
+-- after it, so the test's later steps would silently never run and validate would read what they
+-- never made. The test then fails with the action that was running. A step's own clear of what
+-- it added (adding-actions mode, as luautils.walkAdj does) drops only that, on purpose.
+local function noteLostWait(wait)
+    local test = wait.test
+    if not test or test ~= active or test.queueCleared then
+        return
+    end
+    local queue = ISTimedActionQueue.getTimedActionQueue(wait.character)
+    if queue:isCurrentActionAddingOtherActions() then
+        return
+    end
+    test.queueCleared = "the action queue was cleared while " .. T.describeAction(queue.queue[1] or wait)
+        .. " was running; a refused or invalid timed action stops the whole queue"
+end
+
+-- Called for a queued action that never started when the queue empties.
+function Wait:forceCancel()
+    noteLostWait(self)
+    ISBaseTimedAction.forceCancel(self)
+end
+
+function Wait:stop()
+    noteLostWait(self)
+    ISBaseTimedAction.stop(self)
 end
 
 --- Queues `ticks` ticks of waiting, calling `onTick(n)` every tick.
@@ -275,10 +307,11 @@ local function dressedAsGiven(items, given)
 end
 
 -- Sends the call of the server handler `name` at once and handles its answer: the server's undo,
--- a failure (as T.need does, dropping the steps queued after it), `onReply(reply)`, and the items
--- the reply lists as `given` (PZHarness.giveItem): once the client has them, worn and held as they
--- should be (the server dresses the character only then, "PZHarness.dress"), their client copies
--- land in self.items[itemsKey]. Returns the condition a queued wait polls until all of it is done.
+-- a failure (as T.need does, dropping the steps queued after it), `onReply(reply)` with the reply
+-- exactly as the handler returned it (false, 0 and nil too), and the items a table reply lists as
+-- `given` (PZHarness.giveItem): once the client has them, worn and held as they should be (the
+-- server dresses the character only then, "PZHarness.dress"), their client copies land in
+-- self.items[itemsKey]. Returns the condition a queued wait polls until all of it is done.
 local function call(self, name, args, itemsKey, onReply)
     local phase, given, sinceMs = "asking", nil, nil
     local function fail(what)
@@ -297,14 +330,14 @@ local function call(self, name, args, itemsKey, onReply)
                 fail(answer.missing or "the server's " .. handler .. ", which failed: " .. answer.error)
                 return
             end
-            onAnswer(answer.reply or {})
+            onAnswer(answer.reply)
         end)
     end
     ask(name, args or {}, function(reply)
         if onReply then
             onReply(reply)
         end
-        given, sinceMs = reply.given, getTimestampMs()
+        given, sinceMs = type(reply) == "table" and reply.given or nil, getTimestampMs()
         phase = given and "receiving" or "done"
     end)
     return function()
@@ -339,7 +372,8 @@ local function queueCall(self, name, args, itemsKey, onReply)
 end
 
 --- Queues a call of the server handler `name` (see server/PZHarness/ServerHandlers.lua) and a
---- wait for its answer, which lands in `self.server[name]`. `args` is a table of plain values
+--- wait for its answer, which lands in `self.server[name]` exactly as the handler returned it, so
+--- a handler's false, 0 or nil reaches the test as that. `args` is a table of plain values
 --- (strings, numbers, booleans and tables of them), or a function of `self` returning one, called
 --- when the call goes out, so it can use an earlier answer. In single player the handler runs in
 --- this game and answers at once; in multiplayer it runs on the server. What it deferred is undone
@@ -411,12 +445,12 @@ local function alsoOnServerOutsideTest(name, args, ready)
     if not isClient() then
         return
     end
-    local reply, sinceMs
+    local answered, reply, sinceMs = false, nil, nil
     PZHarness.ServerCalls.callOutsideTest(name, args, function(answer)
-        reply, sinceMs = answer, getTimestampMs()
+        answered, reply, sinceMs = true, answer, getTimestampMs()
     end)
     T.waitUntil(function()
-        if not reply then
+        if not answered then
             return not PZHarness.ServerCalls.busy()
         end
         if not ready or ready(reply) then
@@ -626,10 +660,24 @@ local function unwindTest(self)
     self.unwound = true
 end
 
+--- Prints a test's verdict: "<tag> PASS <name> (<s> s)", or FAIL with `failures` as its reasons.
+--- The harness runner calls it once it has checked the test for leaks; the debug menu's runner
+--- gets it from validate.
+function T.printVerdict(name, failures, seconds)
+    local took = PZHarness.tookSuffix(seconds)
+    if #failures > 0 then
+        print(PZHarness.run.tag .. " FAIL " .. name .. ": " .. table.concat(failures, "; ") .. took)
+    else
+        print(PZHarness.run.tag .. " PASS " .. name .. took)
+    end
+end
+
 -- The runner's validate of a registered test: its failures (a malformed opt-out, the runner's
--- timeout, a missing fixture, or spec.validate's), then spec.cleanup and the undos. Prints the
--- verdict with the test's wall time, from its run to the end of its undos, leaves that time in
--- `entry.seconds` for the runner's summary, and returns whether the test passed.
+-- timeout, a cleared action queue, a missing fixture, or spec.validate's), then spec.cleanup and
+-- the undos. Leaves the failures in `entry.failures` and the test's wall time, from its run to the
+-- end of its undos, in `entry.seconds`, and returns whether the test passed. The verdict is
+-- printed here only when the harness runner isn't running the test (PZHarness.runnerOwnsVerdicts),
+-- since the runner adds what its leak check finds first.
 local function validateEntry(entry, name, spec, problem)
     local self = entry.state or { undo = {}, missing = { "a run before validate" } }
     entry.state = nil
@@ -640,6 +688,10 @@ local function validateEntry(entry, name, spec, problem)
         -- The runner stopped the test (Runner.lua): what validate reads may never have come.
         table.insert(failures, entry.timedOut)
         entry.timedOut = nil
+    elseif self.queueCleared then
+        -- The steps after the action that emptied the queue never ran, so validate would read
+        -- what they never made.
+        table.insert(failures, self.queueCleared)
     elseif #self.missing > 0 then
         table.insert(failures, "missing " .. table.concat(self.missing, "; "))
     elseif spec.validate then
@@ -655,13 +707,11 @@ local function validateEntry(entry, name, spec, problem)
     unwindTest(self)
     active = nil
     entry.seconds = self.startedMs and (getTimestampMs() - self.startedMs) / 1000 or 0
-    local took = PZHarness.tookSuffix(entry.seconds)
-    if #failures > 0 then
-        print(PZHarness.run.tag .. " FAIL " .. name .. ": " .. table.concat(failures, "; ") .. took)
-        return false
+    entry.failures = failures
+    if not PZHarness.runnerOwnsVerdicts then
+        T.printVerdict(name, failures, entry.seconds)
     end
-    print(PZHarness.run.tag .. " PASS " .. name .. took)
-    return true
+    return #failures == 0
 end
 
 --- Registers test `name`. `spec`: run(self), validate(self), cleanup(self), all optional; `hour`;

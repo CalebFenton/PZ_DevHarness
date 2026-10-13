@@ -1,5 +1,6 @@
 require "PZHarness/ServerHandlers"
 require "PZHarness/Fixtures"
+require "PZHarness/Snapshot"
 
 -- Development only, not published. The server's half of the test library's two-sided fixtures
 -- (client/PZHarness/TestLib.lua): on a multiplayer client a fixture changes the client's copy and
@@ -105,6 +106,58 @@ handler("PZHarness.trackPlaced", function(_, args, defer)
     return {}
 end)
 
+-- How far from the square a vehicle entered the world on its key may land (BaseVehicle.addKeyToSquare).
+local KEY_REACH = 10
+
+-- Whether `item` is a key with `keyId`, or a key ring holding one.
+local function isKeyTo(item, keyId)
+    if item:IsInventoryContainer() then
+        local inside = item:getInventory():getItems()
+        for i = 0, inside:size() - 1 do
+            if isKeyTo(inside:get(i), keyId) then
+                return true
+            end
+        end
+        return false
+    end
+    return item:getKeyId() == keyId
+end
+
+-- Takes away the key a vehicle got as it entered the world on `square`. addVehicleDebug adds it
+-- to the world at once (BaseVehicle.addToWorld, trySpawnKey), so nothing can stop it: in the
+-- ignition or the glove box it goes with the vehicle, but it may also lie on a square near it or
+-- in a container there, alone or on a key ring.
+local function removeVehicleKey(vehicle, square)
+    local keyId = vehicle:getKeyId()
+    for x = square:getX() - KEY_REACH, square:getX() + KEY_REACH do
+        for y = square:getY() - KEY_REACH, square:getY() + KEY_REACH do
+            local near = getSquare(x, y, square:getZ())
+            local worldObjects = near and near:getWorldObjects()
+            for i = (worldObjects and worldObjects:size() or 0) - 1, 0, -1 do
+                local object = worldObjects:get(i)
+                if isKeyTo(object:getItem(), keyId) then
+                    if isServer() then
+                        near:transmitRemoveItemFromSquare(object)
+                    end
+                    near:removeWorldObject(object)
+                end
+            end
+            local objects = near and near:getObjects()
+            for i = 0, (objects and objects:size() or 0) - 1 do
+                local container = objects:get(i):getContainer()
+                local items = container and container:getItems()
+                for j = (items and items:size() or 0) - 1, 0, -1 do
+                    local item = items:get(j)
+                    if isKeyTo(item, keyId) then
+                        container:Remove(item)
+                        sendRemoveItemFromContainer(container, item)
+                    end
+                end
+            end
+        end
+    end
+end
+
 -- T.placeVehicle: a vehicle of `args.script` facing `args.facing` ("N" unless given) on the first
 -- of `args.squares` (each { x, y, z }) that takes it, made by the dev mod's
 -- `PZHarness.serverSettings.spawnVehicle(script, square, facing, args.args)` if that returns one,
@@ -121,7 +174,10 @@ handler("PZHarness.vehicle", function(_, args, defer)
             vehicle = addVehicleDebug(args.script, IsoDirections[facing], nil, square)
         end
         if vehicle and vehicle:getId() ~= -1 then
-            defer(function() vehicle:permanentlyRemove() end)
+            defer(function()
+                vehicle:permanentlyRemove()
+                removeVehicleKey(vehicle, square)
+            end)
             return { id = vehicle:getId(), x = at.x, y = at.y, z = at.z }
         end
     end
@@ -204,6 +260,42 @@ handler("PZHarness.changeItem", function(player, args)
     Fixtures.changeItem(item, args.changes)
     item:syncItemFields()
     return {}
+end)
+
+-- The runner's leak check, on the server's copy (client/PZHarness/Leaks.lua): the last snapshot
+-- each client asked for, which the next one is compared with.
+local baselines = {}
+
+-- Snapshots the server's copy around `args` (x, y, z, radius, levels, ignore) and the caller's
+-- character, compares it with the last one (none after `args.fresh`) and keeps it for the next.
+-- Answers with what changed (`leaks`, lines) and, as a flat list of key and signature pairs
+-- (`changed`), the squares that changed, for the client to compare with its copy. With
+-- `args.peek`, a list of square keys, it only answers with their signatures now (`sigs`), for
+-- the client's second look at squares where the two copies differed.
+handler("PZHarness.snapshot", function(player, args)
+    local Snapshot = PZHarness.Snapshot
+    if args.peek then
+        local sigs = {}
+        for _, key in ipairs(args.peek) do
+            table.insert(sigs, key)
+            table.insert(sigs, Snapshot.signatureAt(key, args.ignore))
+        end
+        return { sigs = sigs }
+    end
+    local snapshot = Snapshot.take(args, player)
+    local owner = player:getUsername()
+    local baseline = not args.fresh and baselines[owner] or nil
+    baselines[owner] = snapshot
+    if not baseline then
+        return { leaks = {}, changed = {} }
+    end
+    local report = Snapshot.diff(baseline, snapshot)
+    local changed = {}
+    for _, key in ipairs(report.changed) do
+        table.insert(changed, key)
+        table.insert(changed, snapshot.squares[key])
+    end
+    return { leaks = Snapshot.addLines({}, report), changed = changed }
 end)
 
 --- Adds `item`, fully set up, to the character's inventory and sends it to the client. Returns the
