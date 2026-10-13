@@ -260,6 +260,10 @@ function T.test(name, spec)
                 table.insert(failures, "missing " .. table.concat(self.missing, "; "))
             elseif spec.validate then
                 spec.validate(self)
+                -- The menu and the crafting windows refuse a craft without saying why.
+                if #failures > 0 and self.refusal then
+                    table.insert(failures, "the game refused the craft: " .. self.refusal)
+                end
             end
             if spec.cleanup then
                 spec.cleanup(self)
@@ -603,7 +607,7 @@ end
 
 --- Starts crafting `recipe` from the item `from` the way the right-click menu does or, with
 --- `bench` (from T.bench), the way the bench's crafting window does. Adds why the game refused
---- to `self.refusal`.
+--- to `self.refusal`, which the test's failures then end with.
 function T.startCraft(self, recipe, from, bench)
     local refusal = T.craftRefusal(recipe, from, bench)
     if refusal then
@@ -672,16 +676,12 @@ function T.craftTest(name, spec)
             T.startCraft(self, recipe, from, bench)
         end,
         validate = function(self)
-            local before = #failures
             for fullType, count in pairs(spec.counts or {}) do
                 local actual = T.player():getInventory():getCountTypeRecurse(fullType) + takeDropped(fullType)
                 T.expect(actual == count, actual .. " " .. fullType .. ", expected " .. count)
             end
             if spec.validate then
                 spec.validate(self)
-            end
-            if #failures > before and self.refusal then
-                table.insert(failures, "the game refused the craft: " .. self.refusal)
             end
         end,
     })

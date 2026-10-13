@@ -127,7 +127,7 @@ the restore stack and the rules that keep each test independent of the ones befo
 - Restore stack: `defer`, `onTick`, `setTime`, `setPerk`, `setSandbox`, `setMultiplier`, `setGrid`, `makeDark`.
 - Queue: `wait`, `waitUntil`, `step`.
 - Squares and fixtures: `squares`, `track`, `tile`, `placeMoveable`, `bench`, `vehicle`, `lineUpTrailer`.
-- Crafting: `recipeNames`, `learnRecipes`, `forgetRecipes`, `addRecipeInputs`, `placeWorkTable`, `craftRefusal`, `startCraft`.
+- Crafting: `recipeNames`, `learnRecipes`, `forgetRecipes`, `addRecipeInputs`, `placeWorkTable`, `craftRefusal`, `startCraft`. Any test that starts a craft with `startCraft` and fails also reports why the game refused it, so a mod's own craft tests get that without `craftTest`.
 - Lookups: `player`, `objectWithSprite`, `countPairs`.
 
 ## Running
