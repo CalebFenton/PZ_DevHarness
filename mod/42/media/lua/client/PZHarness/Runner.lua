@@ -131,13 +131,27 @@ local function testNames()
     return result, skipped
 end
 
+-- The inventory windows hold the containers that crafts and the craft menu take their inputs from
+-- (ISInventoryPaneContextMenu.getContainers), and catch up with a change only when the UI next
+-- draws: until then they keep a bag the reset just took away, such as the key ring a multiplayer
+-- character starts with, whose container the client can't name to the server
+-- ("Unable to resolve container location"), so the action never reaches it.
+local function refreshInventoryWindows()
+    for _, page in ipairs({ getPlayerInventory(0), getPlayerLoot(0) }) do
+        if page then
+            page.inventoryPane.inventoryPage:refreshBackpacks()
+        end
+    end
+end
+
 -- Runs the selected tests one after another with the resets of the debug menu's runner (RunTest
 -- and OnTick in vanilla Tests/TimedActionsTests.lua, whose locals Lua can't reach): before each
--- test full health, an empty inventory, nothing worn or held, ISBuildMenu.cheat off and the test's
--- name said aloud; validate() once the action queue is empty; then the cheat back and the
--- character back on the square the test started on. Vanilla pauses a second after every test so
--- you can read the result; here the next test starts on the next tick, or once the character's
--- square has loaded again after a test that went far (at most SQUARE_WAIT_MS), and, in
+-- test full health, an empty inventory, nothing worn or held, the inventory windows caught up with
+-- that, ISBuildMenu.cheat off and the test's name said aloud; validate() once the action queue is
+-- empty; then the cheat back and the character back in the middle of the square the test started
+-- on. Vanilla pauses a second after every test so you can read the result; here the next test
+-- starts on the next tick, or once the character's square has loaded again after a test that went
+-- far (at most SQUARE_WAIT_MS), and, in
 -- multiplayer, once the server has answered what the last test sent it, its undos above all, so a
 -- test never meets what the one before built. In multiplayer the server's copy of the character
 -- gets the same reset first (PZHarness.Fixtures.resetCharacter). Calls onDone() at the end.
@@ -154,10 +168,6 @@ local function runTests(onDone)
     -- other square (IsoGridSquare.discard, getNew), so teleporting to its coordinates then lands
     -- somewhere else entirely.
     local current, player, start, wasCheat, resetFor
-    local function atStart()
-        local here = player:getCurrentSquare()
-        return here ~= nil and here:getX() == start.x and here:getY() == start.y and here:getZ() == start.z
-    end
     local function onTick()
         ticks = ticks + 1
         if current then
@@ -172,9 +182,7 @@ local function runTests(onDone)
             current = nil
             doneMs = getTimestampMs()
             ISBuildMenu.cheat = wasCheat
-            if not atStart() then
-                player:teleportTo(start.x + 0.5, start.y + 0.5, start.z)
-            end
+            PZHarness.Fixtures.teleportToMiddle(player, start.x, start.y, start.z)
             return
         end
         player = getSpecificPlayer(0)
@@ -208,6 +216,7 @@ local function runTests(onDone)
         local here = player:getCurrentSquare()
         start = { x = here:getX(), y = here:getY(), z = here:getZ() }
         PZHarness.Fixtures.resetCharacter(player)
+        refreshInventoryWindows()
         player:Say(name)
         wasCheat = ISBuildMenu.cheat
         ISBuildMenu.cheat = false
@@ -408,6 +417,8 @@ end
 
 -- How long the character may take to reach the scenario's start, whose chunks the server sends.
 local START_WAIT_MS = 30000
+-- How long the client may take, after the server's answers, to show the onStart perk levels again.
+local SETUP_SYNC_MS = 5000
 
 -- Joins the server once run-client.sh says it has started, with the call the server list's
 -- Connect button makes. The client and the server boot at the same time, which saves the
@@ -454,12 +465,58 @@ local function connectFailed(message, detail)
     quit()
 end
 
+-- Whether every perk of the character is at its level in `levels` (Fixtures.perkLevels).
+local function hasPerkLevels(player, levels)
+    for id, level in pairs(levels) do
+        local perk = Perks.FromString(id)
+        if perk and perk ~= Perks.MAX and player:getPerkLevel(perk) ~= level then
+            return false
+        end
+    end
+    return true
+end
+
+-- Copies the perk levels and known recipes onStart gave this client's character to the server's
+-- copy, which crafts and actions check, and calls `start` once the server has them and this
+-- client shows them. The server replaces this client's perk list with its own copy's every second
+-- (NetworkPlayerManager, PlayerXpPacket), and one it sent before it had the levels can land after
+-- its answer, so the first test would find the skills too low: the wait holds until a sync after
+-- the answers has rebuilt the list (new PerkInfo objects) with the levels, at most SETUP_SYNC_MS.
+-- Recipes the server sends are only added (SyncPlayerFieldsPacket), so they can't go back.
+local function copySetupToServer(start)
+    local player = getSpecificPlayer(0)
+    local levels = PZHarness.Fixtures.perkLevels(player)
+    PZHarness.ServerCalls.callOutsideTest("PZHarness.setPerkLevels", { levels = levels })
+    PZHarness.ServerCalls.callOutsideTest("PZHarness.learnRecipes", { names = PZHarness.Fixtures.knownRecipes(player) })
+    local perkList = player:getPerkList()
+    local answeredMs, before
+    local function onTick()
+        if PZHarness.ServerCalls.busy() then
+            return
+        end
+        if not answeredMs then
+            answeredMs = getTimestampMs()
+            before = not perkList:isEmpty() and perkList:get(0) or nil
+        end
+        local synced = before == nil or perkList:isEmpty() or perkList:get(0) ~= before
+        if not (synced and hasPerkLevels(player, levels)) then
+            if getTimestampMs() - answeredMs < SETUP_SYNC_MS then
+                return
+            end
+            print(run.tag .. " FAIL PZHarness.setPerkLevels: this client never showed the onStart perk levels again")
+            PZHarness.ServerCalls.lateFailures = PZHarness.ServerCalls.lateFailures + 1
+        end
+        Events.OnTick.Remove(onTick)
+        start()
+    end
+    Events.OnTick.Add(onTick)
+end
+
 -- The server places a new character on a point of a spawn region (CreatePlayerPacket), so the
 -- character goes to the scenario's start, where single player starts, as soon as it is in the
 -- game. Then, once the world around it has loaded as it has when single player starts the
--- scenario: the scenario's onStart and the mod's, then the run. Both run on this client; the
--- perks and known recipes they gave the character are then copied to the server's copy, which
--- crafts and actions check, before the first test. The test library's helpers they call
+-- scenario: the scenario's onStart and the mod's, then the run once the server's copy has the
+-- perks and recipes they gave (copySetupToServer). The test library's helpers they call
 -- (T.learnRecipes, T.placeWorkTable) reach the server themselves; items needn't, since every test
 -- starts with an empty inventory. Anything else goes through the mod's own server handlers.
 local function startMultiplayer()
@@ -471,7 +528,7 @@ local function startMultiplayer()
         local here = player:getCurrentSquare()
         if loc and not (here and here:getX() == loc.x and here:getY() == loc.y and here:getZ() == loc.z) then
             if not teleported then
-                player:teleportTo(loc.x + 0.5, loc.y + 0.5, loc.z)
+                PZHarness.Fixtures.teleportToMiddle(player, loc.x, loc.y, loc.z)
                 teleported = true
             end
             if getTimestampMs() - sinceMs < START_WAIT_MS then
@@ -487,10 +544,7 @@ local function startMultiplayer()
             if PZHarness.config.onStart then
                 PZHarness.config.onStart(run.mode)
             end
-            local player = getSpecificPlayer(0)
-            PZHarness.ServerCalls.callOutsideTest("PZHarness.setPerkLevels", { levels = PZHarness.Fixtures.perkLevels(player) })
-            PZHarness.ServerCalls.callOutsideTest("PZHarness.learnRecipes", { names = PZHarness.Fixtures.knownRecipes(player) })
-            startMode()
+            copySetupToServer(startMode)
         end)
     end
     Events.OnTick.Add(onTick)

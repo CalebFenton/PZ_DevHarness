@@ -32,11 +32,25 @@ function Fixtures.setSandbox(options, key, value, changed)
     end
 end
 
+-- A server works out the daylight from its clock on its next climate tick but sends it to the
+-- clients, which light their squares with it, only on the ten-minute ticks (ClimateManager.update):
+-- a clock set from 12:00 to 0:00 would leave them in daylight for up to ten game minutes. This
+-- makes the next climate tick send it.
+local function sendDaylight()
+    if isServer() then
+        getClimateManager():updateEveryTenMins()
+    end
+end
+
 function Fixtures.setTime(hour)
     local time = getGameTime()
     local saved = time:getTimeOfDay()
     time:setTimeOfDay(hour)
-    return function() time:setTimeOfDay(saved) end
+    sendDaylight()
+    return function()
+        time:setTimeOfDay(saved)
+        sendDaylight()
+    end
 end
 
 function Fixtures.setMultiplier(multiplier)
@@ -234,6 +248,19 @@ function Fixtures.resetCharacter(player)
         syncVisuals(player)
         sendEquip(player)
     end
+end
+
+--- Puts the character in the middle of the square at x, y, z. teleportTo alone leaves it on the
+--- square's north-west corner (IsoGameCharacter.teleportTo floors), from where vanilla's walkAdj
+--- counts a square two to the north or west as within reach (1.6 tiles of its middle) and walks
+--- nowhere, while actions that need the square adjacent, such as ISMoveablesAction, then stop and
+--- empty the queue.
+function Fixtures.teleportToMiddle(player, x, y, z)
+    player:teleportTo(x, y, z)
+    player:setX(x + 0.5)
+    player:setY(y + 0.5)
+    player:setLastX(x + 0.5)
+    player:setLastY(y + 0.5)
 end
 
 --- Changes `item` as `changes` says: `condition`, `uses` (the fraction of a full drainable item,

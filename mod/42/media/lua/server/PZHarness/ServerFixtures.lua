@@ -4,9 +4,10 @@ require "PZHarness/Fixtures"
 -- Development only, not published. The server's half of the test library's two-sided fixtures
 -- (client/PZHarness/TestLib.lua): on a multiplayer client a fixture changes the client's copy and
 -- calls one of these handlers for the server's, which the server undoes when the test ends. Single
--- player changes its one copy on the client side and calls only the handlers that make things
--- ("PZHarness.give", "PZHarness.dress", "PZHarness.count", "PZHarness.tile", "PZHarness.bench"),
--- which work the same in both. Names start with "PZHarness." so they never meet a dev mod's.
+-- player changes its one copy on the client side and calls only the handlers that make or track
+-- things ("PZHarness.give", "PZHarness.dress", "PZHarness.count", "PZHarness.tile",
+-- "PZHarness.bench", "PZHarness.trackPlaced"), which work the same in both. Names start with
+-- "PZHarness." so they never meet a dev mod's.
 --
 -- A dev mod's server Lua may set, in `PZHarness.serverSettings`:
 -- - `sandboxChanged()`: called after the server's copy of a sandbox option is set or restored,
@@ -90,6 +91,17 @@ handler("PZHarness.bench", function(player, args, defer)
         return nil, "a craft bench in " .. args.entity
     end
     bench:setUsingPlayer(player)
+    return {}
+end)
+
+-- T.placeAsPlayer: the object drawn as `args.sprite` on the square at x, y, z, which the character
+-- placed with the moveables action, goes when the test ends.
+handler("PZHarness.trackPlaced", function(_, args, defer)
+    local object = Fixtures.objectWithSprite(getSquare(args.x, args.y, args.z), args.sprite)
+    if not object then
+        return nil, "the placed " .. tostring(args.sprite) .. " on the server"
+    end
+    track(defer, object)
     return {}
 end)
 

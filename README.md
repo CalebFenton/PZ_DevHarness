@@ -144,9 +144,9 @@ end)
 - Restore stack, two-sided (see [Two-sided fixtures](#two-sided-fixtures)): `defer`, `onTick`, `setTime`, `setPerk`, `setSandbox`, `setMultiplier`, `setGrid`, `makeDark`, `changeItem`; `spec.instant` and the `perks` setting too.
 - Queue: `wait`, `waitUntil`, `step`. What a step queues runs right after it, in order (vanilla's adding-actions mode), and a clear of the queue inside it (`luautils.walkAdj`) drops only that.
 - The server: `server(self, name, args)` calls the dev mod's handler `name` and leaves its answer in `self.server[name]`; `serverUntil(self, name, args, done, maxMs)` calls it until `done(reply)`; `give(self, name, items)`; `count(self, name, types, opts)`.
-- Squares and fixtures: `squares`, `track`; placed by the server: `placeTile`, `placeBench`, `placeVehicle`; this game only: `tile`, `placeMoveable`, `bench`, `vehicle`; `lineUpTrailer`.
+- Squares and fixtures: `squares`, `track`; placed by the server: `placeTile`, `placeBench`, `placeVehicle`; placed and picked up by the character, as a player does with the moveables cursor: `placeAsPlayer(self, square, itemType, sprite, modData)` (a handle `{ x, y, z, square }`, `object` once this client has it, removed when the test ends) and `pickUpAsPlayer(self, handleOrSquare, sprite)`; this game only: `tile`, `placeMoveable`, `bench`, `vehicle`; `lineUpTrailer`.
 - Crafting: `recipeNames`, `learnRecipes`, `forgetRecipes`, `recipeInputs`, `addRecipeInputs` (this game only), `placeWorkTable`, `craftRefusal`, `startCraft`. Any test that starts a craft with `startCraft` and fails also reports why the game refused it, so a mod's own craft tests get that without `craftTest`.
-- Lookups: `player`, `objectWithSprite`, `countPairs`; `PZHarness.Fixtures` has these and `vehicleById` for server handlers too.
+- Lookups: `player`, `objectWithSprite`, `countPairs`; `PZHarness.Fixtures` has these and `vehicleById` for server handlers too, and `teleportToMiddle(player, x, y, z)`: `teleportTo` alone leaves the character on the square's north-west corner, from where vanilla's `walkAdj` takes a square two to the north or west as in reach, walks nowhere, and an action that needs the square adjacent stops.
 
 ## Capture settings
 
@@ -297,6 +297,9 @@ player behaves as before:
   queue a wait for its answer, so actions queued after them start once the server has it. The
   server undoes it when the test ends. A dev mod's server Lua sets
   `PZHarness.serverSettings.sandboxChanged` for what the client's `tests.sandboxChanged` does.
+  A client lights its squares with the daylight the server sends it, which the server does only
+  every ten game minutes, so the server's `setTime` (and its undo) makes its next climate tick
+  send it; `makeDark` then waits, up to 10 seconds, for this client's light to follow.
 - Items: `T.give(self, name, items)` (`{ type, count, uses, condition, modData, worn, equip }`)
   makes them on the server, which sends them; once this client has them it puts them on and in
   hand (`PZHarness.dress`: clothing synced before its item reaches the client as a stray copy),
@@ -307,11 +310,23 @@ player behaves as before:
   once whose `.object` (`.vehicle`) is this client's copy after a queued wait; the server removes
   them when the test ends, through `PZHarness.serverSettings.remove(object)` if set.
   `PZHarness.serverSettings.spawnVehicle(script, square, facing, args)` may make the vehicles.
+  `placeAsPlayer` gives the item (`give`), and the character places it with the moveables action,
+  whose `complete()` the server carries out; `PZHarness.trackPlaced` then removes it on the server
+  when the test ends, as above.
   `T.placeWorkTable`, `T.learnRecipes` and `T.forgetRecipes` work outside tests too, as in a
   scenario's onStart; `PZHarness.ServerCalls.callOutsideTest(name, args, onReply)` calls any
   handler there.
 - The runner resets the server's copy of the character before every test too, and after the
-  scenario's and the mod's onStart copies the client's perk levels and known recipes to it.
+  scenario's and the mod's onStart copies the client's perk levels and known recipes to it. The
+  first test starts once the server has them and this client shows the levels again: the server
+  replaces the client's perk list with its own copy's every second (`PlayerXpPacket`), and one it
+  sent before it had the levels can land after its answer, leaving the skills too low for the first
+  crafts. Waiting more than 5 seconds for that prints a `FAIL` of its own.
+- After each reset the runner refreshes the inventory windows at once, in both modes. Crafts and
+  the craft menu take their inputs from the containers those windows list, which otherwise catch up
+  only when the UI next draws; a multiplayer character starts with a key ring, and its removed
+  container, still listed, can't be named to the server ("Unable to resolve container location"),
+  so the first test's craft never started.
 
 ### What a client can and can't do
 

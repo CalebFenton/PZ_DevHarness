@@ -1,5 +1,6 @@
 require "Tests/TimedActionsTests"
 require "Moveables/ISMoveableSpriteProps"
+require "Moveables/ISMoveablesAction"
 require "PZHarness/Runner"
 require "PZHarness/ServerCalls"
 require "PZHarness/Fixtures"
@@ -51,9 +52,10 @@ require "PZHarness/Fixtures"
 PZHarness.Test = {}
 local T = PZHarness.Test
 
--- The longest a test waits for the light to follow the clock or the grid. The lighting catches up
--- at its own pace in real time, so at a high frame rate it takes more ticks.
-local LIGHT_FRAMES = 600
+-- The longest a test waits for the light to follow the clock or the grid, in real milliseconds. The
+-- lighting catches up at its own pace in real time, whatever the frame rate, and on a multiplayer
+-- client only after the server's clock has come back to it.
+local LIGHT_MS = 10000
 -- Squares searched around a fixture's centre, in tiles.
 local SEARCH_RADIUS = 30
 -- Squares a vehicle is tried on before a test gives up on it.
@@ -153,6 +155,16 @@ end
 
 local function lit()
     return not T.player():tooDarkToRead()
+end
+
+-- Queues a wait until it is light (`wantLit`) or dark where the character stands, or LIGHT_MS
+-- pass.
+local function waitForLight(wantLit)
+    local sinceMs
+    T.waitUntil(function()
+        sinceMs = sinceMs or getTimestampMs()
+        return lit() == wantLit or getTimestampMs() - sinceMs > LIGHT_MS
+    end, math.huge)
 end
 
 -- Server ---------------------------------------------------------------------------------------
@@ -461,7 +473,7 @@ end
 function T.makeDark(self)
     T.setGrid(self, false)
     T.setTime(self, 0)
-    T.waitUntil(function() return not lit() end, LIGHT_FRAMES)
+    waitForLight(false)
 end
 
 --- Changes `item`, a client copy such as T.give's, as `changes` says: `condition`, `uses` (the
@@ -543,7 +555,7 @@ function T.test(name, spec)
             if not hour or lit() then
                 start(self, hour)
             else
-                T.waitUntil(lit, LIGHT_FRAMES)
+                waitForLight(true)
                 T.step(function() start(self, hour) end)
             end
         end,
@@ -763,6 +775,70 @@ function T.placeBench(self, entity, sprite)
         local bench = T.objectWithSprite(getSquare(handle.x, handle.y, handle.z), sprite)
         return bench and bench:getComponent(ComponentType.CraftBench) and bench
     end, "a " .. entity)
+end
+
+-- Queues a wait until `condition()` holds on this client, at most RECEIVE_MS.
+local function waitOnClient(condition)
+    local sinceMs
+    T.waitUntil(function()
+        sinceMs = sinceMs or getTimestampMs()
+        return condition() or getTimestampMs() - sinceMs > RECEIVE_MS
+    end, math.huge)
+end
+
+-- Queues the moveables action `mode` ("place" or "pickup") of `sprite` on `square` the way the
+-- moveables cursor does (ISMoveableCursor.create): the character walks next to the square and the
+-- action does the job, in multiplayer in its complete() on the server. The character first stands
+-- in the middle of its square (Fixtures.teleportToMiddle), as vanilla's walkAdj misjudges the reach
+-- from a square's edge. Returns false if the character can't get there.
+local function moveablesAction(square, mode, sprite, item, object)
+    local p = T.player()
+    local here = p:getCurrentSquare()
+    PZHarness.Fixtures.teleportToMiddle(p, here:getX(), here:getY(), here:getZ())
+    local props = object and ISMoveableSpriteProps.fromObject(object) or ISMoveableSpriteProps.new(sprite)
+    if not props:walkToAndEquip(p, square, mode, sprite) then
+        return false
+    end
+    local direction = props:getFaceDirectionFromSpriteName(sprite)
+    ISTimedActionQueue.add(ISMoveablesAction:new(p, square, mode, sprite, object, direction, item, nil))
+    return true
+end
+
+--- Queues placing a new `itemType`, with `modData` on the item, on `square` the way a player does:
+--- the character is given it (T.give), walks next to the square and places it with the moveables
+--- action, which a multiplayer server carries out. What it placed goes when the test ends, as
+--- T.placeTile's does. Returns a handle { x, y, z, square } at once; handle.object is this client's
+--- copy of the placed object, drawn as `sprite`, once it has arrived.
+function T.placeAsPlayer(self, square, itemType, sprite, modData)
+    self.placedAsPlayer = (self.placedAsPlayer or 0) + 1
+    local key = "PZHarness.placeAsPlayer" .. self.placedAsPlayer
+    local handle = { x = square:getX(), y = square:getY(), z = square:getZ(), square = square }
+    T.give(self, key, { { type = itemType, modData = modData } })
+    T.step(function()
+        if not T.need(self, moveablesAction(square, "place", sprite, self.items[key][1], nil), "a way to place a " .. itemType) then
+            return
+        end
+        waitOnClient(function() return T.objectWithSprite(square, sprite) ~= nil end)
+        T.server(self, "PZHarness.trackPlaced", { x = handle.x, y = handle.y, z = handle.z, sprite = sprite })
+        T.step(function()
+            handle.object = T.need(self, T.objectWithSprite(square, sprite), "this client's copy of a placed " .. itemType)
+        end)
+    end)
+    return handle
+end
+
+--- Queues picking up the object drawn as `sprite` on `at` (a square, or a handle with a `square`)
+--- the way a player does, with the moveables action, and a wait until this client no longer has
+--- it.
+function T.pickUpAsPlayer(self, at, sprite)
+    local square = type(at) == "table" and at.square or at
+    T.step(function()
+        local object = T.objectWithSprite(square, sprite)
+        if not T.need(self, object and moveablesAction(square, "pickup", sprite, nil, object), "a way to pick up the " .. sprite) then
+            return
+        end
+        waitOnClient(function() return T.objectWithSprite(square, sprite) == nil end)
+    end)
 end
 
 -- The squares T.vehicle tries, nearest first: `opts.square`, else open ground near `opts.near`
@@ -987,7 +1063,9 @@ end
 --- `spec.setup(self)` adds; setup runs once the inputs are there, and the craft starts after the
 --- waits it queued. validate() expects the counts in `spec.counts` in the inventory of the
 --- server's copy of the character or dropped at its feet (T.count, into `self.counts.craft`),
---- then runs `spec.validate(self)`. A failing test also reports why the game refused the craft.
+--- then runs `spec.validate(self)`. `spec.after(self)`, if given, runs in a step after that count,
+--- before validate, to queue more reads of what the craft made. A failing test also reports why
+--- the game refused the craft.
 function T.craftTest(name, spec)
     local counted = {}
     for fullType in pairs(spec.counts or {}) do
@@ -1026,6 +1104,9 @@ function T.craftTest(name, spec)
                     T.startCraft(self, recipe, from, bench and bench.object)
                     -- Queued after the craft's actions, which T.startCraft has just queued.
                     T.count(self, "craft", counted, { dropped = true })
+                    if spec.after then
+                        T.step(function() spec.after(self) end)
+                    end
                 end)
             end)
         end,
