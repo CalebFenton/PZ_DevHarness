@@ -1,4 +1,4 @@
-name=PZ Test Harness
+name=PZ_DevHarness
 id=cf_test_harness
 description=Development only. Starts a mod's debug scenario, runs its in-game tests and other unattended modes. Not published.
 versionMin=42.20

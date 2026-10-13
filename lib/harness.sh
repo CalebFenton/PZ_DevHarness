@@ -92,7 +92,7 @@ link_dev_mods() {
 # client and the server have. The next script to want the game takes the lock and the game over;
 # with the argument "reuse" it leaves the game running and sets SESSION_PID, SESSION_CACHE and
 # SESSION_GAMES, and otherwise it stops the game.
-GAME_LOCK="${TMPDIR:-/tmp}/pz-test-harness-game.lock"
+GAME_LOCK="${TMPDIR:-/tmp}/PZ_DevHarness-game.lock"
 
 acquire_game_lock() {
     local owner said=
