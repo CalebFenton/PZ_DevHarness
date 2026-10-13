@@ -81,8 +81,12 @@ SELECTION=
 MARK=$TAG
 # The test runs' settings, which the runner reads with the selection.
 LEAKS=${LEAKS:-fail} ORDER=${ORDER:-} ROUNDS=${REPEAT:-1}
-# Where --failed finds what failed last, one line per kind of run: "<test or test-mp> <names>".
+# Where --failed finds what failed last, one line per kind of run: "<test or test-mp>
+# <name>:<runs>,...", each test that failed with the number of runs of that kind in a row it has
+# failed.
 FAILED_KEY="test${MP:+-mp}"
+# Runs in a row a test may fail before the script says reruns aren't narrowing it down.
+STUCK_RUNS=3
 
 # The exact names of the tests that failed in the last run of this kind, as a selection.
 select_failed() {
@@ -92,7 +96,7 @@ select_failed() {
         echo "--failed: no $FAILED_KEY run has been recorded in ${RUNS_FAILED#"$REPO/"} yet" >&2
         exit 2
     fi
-    names=${line#"$FAILED_KEY "}
+    names=$(sed 's/:[0-9]*//g' <<< "${line#"$FAILED_KEY "}")
     if [ -z "$names" ]; then
         echo "--failed: nothing failed in the last $FAILED_KEY run; no tests to run"
         exit 0
@@ -113,12 +117,47 @@ changed_files() {
     } | sort -u
 }
 
+# Every file of the repository and the harness submodule, tracked or untracked, relative to the
+# repository.
+repo_files() {
+    local submodule=${HARNESS#"$REPO/"}
+    git -C "$REPO" ls-files --cached --others --exclude-standard
+    git -C "$HARNESS" ls-files --cached --others --exclude-standard | sed "s|^|$submodule/|"
+}
+
+# Fails the run on a TEST_MAP glob that matches no file, such as one for a file since renamed,
+# whose new name then runs every test until the conf says what covers it.
+check_test_map() {
+    local files entry glob file found stale=
+    files=$(repo_files)
+    for entry in ${TEST_MAP[@]+"${TEST_MAP[@]}"}; do
+        glob=${entry%%=*}
+        found=
+        while read -r file; do
+            # shellcheck disable=SC2053 # the glob is a pattern
+            if [[ $file == $glob ]]; then
+                found=1
+                break
+            fi
+        done <<< "$files"
+        if [ -z "$found" ]; then
+            echo "--changed: TEST_MAP's $glob matches no file" >&2
+            stale=1
+        fi
+    done
+    if [ -n "$stale" ]; then
+        echo "--changed: fix TEST_MAP in dev/harness.conf" >&2
+        exit 2
+    fi
+}
+
 # The test prefixes the conf's TEST_MAP gives for the changed files under the mod, the dev mod and
 # the harness mod, saying why for each file. A changed file there that no glob covers runs every
 # test; files elsewhere, such as docs and art, run none.
 select_changed() {
     local roots=("${MOD_DIR#"$REPO/"}/" "${DEV_MOD_DIR#"$REPO/"}/" "${HARNESS_MOD_DIR#"$REPO/"}/")
     local file root under matched entry glob prefixes picked= everything= relevant=
+    check_test_map
     while read -r file; do
         under=
         for root in "${roots[@]}"; do
@@ -205,6 +244,33 @@ if [ "$MODE" = test ]; then
     TIMEOUT=${TIMEOUT:-$((300 * ROUNDS))}
 else
     TIMEOUT=${TIMEOUT:-1200}
+fi
+
+# What a --test run's verdict depends on: the kind of run, the selection and settings, and the
+# contents of the files the game loads from the three mods, the harness and the conf. RUNS_LOG
+# keeps it with each run.
+run_fingerprint() {
+    {
+        printf '%s\n' "$MP" "$STAY" "$SELECTION" "$LEAKS" "$ORDER" "$ROUNDS"
+        find "$MOD_DIR" "$DEV_MOD_DIR" "$HARNESS_MOD_DIR" "$HARNESS/bin" "$HARNESS/lib" "$HARNESS/java" \
+            "$REPO/dev/harness.conf" -type f -print0 | sort -z | xargs -0 md5 -r
+    } | md5 -q
+}
+
+# The same run on the same files gives the same verdict, so a run that already got one repeats it
+# rather than spend a game on it, unless RERUN is set. A run that never reached its verdict, such
+# as one a Lua error stopped, doesn't count.
+if [ "$MODE" = test ]; then
+    RUN_FINGERPRINT=$(run_fingerprint)
+    previous=$(grep " fingerprint=$RUN_FINGERPRINT\$" "$RUNS_LOG" 2>/dev/null | grep -v " passed=- " | tail -1 || true)
+    if [ -n "$previous" ] && [ -z "${RERUN:-}" ]; then
+        echo "this exact run already ran at ${previous%% *}, with $(grep -o 'passed=[^ ]* failed=[^ ]* skipped=[^ ]*' <<< "$previous"), and nothing it loads has changed since"
+        echo "change the code or the selection first; REPEAT=<n> measures a flaky test, and RERUN=1 runs it again when the game rather than a test failed"
+        exit "$(sed -n 's/.* exit=\([0-9]*\) .*/\1/p' <<< "$previous")"
+    fi
+fi
+if [ -n "$MODE" ]; then
+    run_precheck
 fi
 LOG="$CACHE/console.txt"
 # The harness Lua reads the run from the first file, with --stay rerun requests from the second
@@ -447,12 +513,12 @@ else
 fi
 
 # The tests that failed in this run, or were running when it stopped, for the next --failed run of
-# the same kind; a run that never started its tests leaves the last record alone. A FAIL line names
-# its test, as do the late failures of its server undos; one for a call outside any test names the
-# handler, which no TEST line does.
+# the same kind, each with how many such runs in a row it has failed; a run that never started its
+# tests leaves the last record alone. A FAIL line names its test, as do the late failures of its
+# server undos; one for a call outside any test names the handler, which no TEST line does.
 record_failed_tests() {
     [ "$MODE" = test ] && logged "> $TAG START " || return 0
-    local names
+    local names previous name entry runs record= stuck=
     names=$(awk -v tag="$TAG" '
         index($0, "> TEST: ") { current = substr($0, index($0, "> TEST: ") + 8); ran[current] = 1; next }
         index($0, "> " tag " FAIL ") {
@@ -467,10 +533,26 @@ record_failed_tests() {
             if (!done && current != "") failed[current] = 1
             for (name in failed) print name
         }' "$RUN_LOG" | sort | paste -sd, -)
-    { grep -v "^$FAILED_KEY " "$RUNS_FAILED" 2>/dev/null || true; echo "$FAILED_KEY $names"; } > "$RUNS_FAILED.tmp"
+    previous=$(grep "^$FAILED_KEY " "$RUNS_FAILED" 2>/dev/null | tail -1 || true)
+    for name in ${names//,/ }; do
+        runs=1
+        for entry in ${previous//,/ }; do
+            if [ "${entry%:*}" = "$name" ] && [[ ${entry##*:} =~ ^[0-9]+$ ]]; then
+                runs=$((${entry##*:} + 1))
+            fi
+        done
+        record="$record,$name:$runs"
+        if [ "$runs" -ge "$STUCK_RUNS" ]; then
+            stuck="$stuck $name ($runs)"
+        fi
+    done
+    { grep -v "^$FAILED_KEY " "$RUNS_FAILED" 2>/dev/null || true; echo "$FAILED_KEY ${record#,}"; } > "$RUNS_FAILED.tmp"
     mv "$RUNS_FAILED.tmp" "$RUNS_FAILED"
     if [ -n "$names" ]; then
         echo "--failed reruns: ${names//,/, }"
+    fi
+    if [ -n "$stuck" ]; then
+        echo "failed $STUCK_RUNS or more runs in a row:$stuck. Rerunning won't narrow it; read ${HARNESS#"$REPO/"}/docs/debugging.md and change approach first"
     fi
 }
 

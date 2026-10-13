@@ -30,13 +30,15 @@ whole suite, so it only catches a game that died; 1200 for the other modes); `CA
 cache dir (with `--mp` the client's; `SERVER_CACHE` the server's); `SERVER_PORT` moves the
 `--mp` server off 16361 (it also takes the next port); `JAVAC` names the compiler for
 `ClickToStart.java` (any JDK from 8 on; the game's own Java has none); `PZ_APP` names another
-game `Contents` folder.
+game `Contents` folder; `RERUN=1` runs a `--test` run the script would refuse as a
+[repeat](#repeats).
 
 Console lines, in `<cache>/console.txt`: `<TAG> START <n>`, `<TAG> ORDER <order>` and
 `<TAG> REPEAT <n> rounds` when set, `<TAG> LEAKS <mode>`, `TEST: <name>`, `<TAG> LEAK <name>: <what>`
 and `<TAG> DESYNC <name>: <square> client [...] server [...]` for what a test left behind,
 `<TAG> PASS <name>`, `<TAG> FAIL <name>: <reasons>`, `<TAG> SKIP <name>: <why>` for each test that
-opted out of this mode, each of those three ending with the test's wall time, `(<s> s)`; then the
+opted out of this mode, each of those three ending with the test's wall time, `(<s> s)`, and
+`<TAG> FAIL <entry>: the selection names no test` for a `TESTS` entry that matches no test; then the
 `REPEAT` counts, `<TAG> SLOWEST` lines, `<TAG> TIME <s> s, <n> frames`,
 `<TAG> DONE passed=<n> failed=<n> skipped=<n>`; with `--stay` also `<TAG> RUN <id>`,
 `<TAG> DIRTY <name>: <what>` for what the last run in the kept game left behind, and
@@ -71,7 +73,9 @@ default), each as its sprite or item type and class, with generators and light s
 off; the vehicles there; whether a sparse grid of those squares has power; the character's perk
 levels, known recipes and what it holds after the reset; where it starts; the sandbox options;
 the grid; the game speed; the climate's admin overrides; and the clock, which may only have run
-on.
+on. It leaves out what the world keeps globally, such as the global mod data and the records of
+the global object systems (farming, troughs, a mod's own): those grow with every chunk that loads
+for the first time, so a test that only travels would seem to leave them changed.
 
 The comparison leaves out objects the world changes by itself, and grass, which goes from a
 square something was placed on and never comes back: crops and garden plants, erosion's grass,
@@ -99,12 +103,29 @@ run left behind as `DIRTY` lines when the next run starts, since that run starts
 
 `--failed` reads `dev/.runs-failed` in the mod's repository, which every `--test` run that got as
 far as its tests rewrites for its kind (`test` or `test-mp`): the tests with a `FAIL` line, and
-the test a Lua error or the timeout stopped. A run whose tests all passed leaves the list empty,
-and `--failed` then runs nothing. The mod should gitignore it, as it does `dev/.runs.log`. At the
-end of a run with failures the script prints `--failed reruns: <names>`.
+the test a Lua error or the timeout stopped, each with the number of runs of that kind in a row it
+has failed. A run whose tests all passed leaves the list empty, and `--failed` then runs nothing.
+The mod should gitignore it, as it does `dev/.runs.log`. At the end of a run with failures the
+script prints `--failed reruns: <names>`, and, for a test that has failed three runs in a row, a
+line that says reruns aren't narrowing it down and points at [debugging.md](debugging.md).
 
 `--changed` reads `git diff --name-only HEAD` and the untracked files, of the repository and of
-the harness submodule, and the conf's `TEST_MAP` ([adopting.md](adopting.md#devharnessconf)).
+the harness submodule, and the conf's `TEST_MAP` ([adopting.md](adopting.md#devharnessconf)). It
+refuses to run while a `TEST_MAP` glob matches no file in the repository.
+
+### Repeats
+
+A `--test` run's verdict depends on the kind of run (`--mp`, `--stay`), the selection, `LEAKS`,
+`ORDER` and `REPEAT`, and the files the game loads: the three mods, the harness's scripts and the
+conf. `dev/.runs.log` keeps a fingerprint of those with each run, and a run whose fingerprint
+already has a verdict there doesn't start a game: the script prints that verdict and exits with
+that run's status. A run that never got its verdict, such as one a Lua error stopped, doesn't
+count. `RERUN=1` runs it anyway, for when the game rather than a test failed.
+
+### Checks before a run
+
+The conf's `PRECHECK` ([adopting.md](adopting.md#devharnessconf)) runs before every harness game,
+`validate-server.sh` too, and no game starts if it fails.
 
 ## Where the time goes
 
@@ -130,7 +151,8 @@ about half a second.
 Each run also appends one line to `dev/.runs.log` in the mod's repository, which the mod should
 gitignore: the date, `mode=` (`test`, `test-mp`, a mode's name, `validate`; `-rerun` for a run in
 a kept game), `selection=` (`TESTS`, the mode's selection, or `all`), the counts of the `DONE`
-line, `exit=` (the script's exit status), each phase as `<phase>=<s>`, and `total=`.
+line, `exit=` (the script's exit status), each phase as `<phase>=<s>`, `total=`, and for `--test`
+`fingerprint=`, which the script reads to refuse a [repeat](#repeats).
 
 ## Why it is fast, and what that costs
 
@@ -146,7 +168,9 @@ line, `exit=` (the script's exit status), each phase as `<phase>=<s>`, and `tota
   when the scenario starts.
 - More asset loader threads. The game loads textures, meshes and animations on 4 threads, and the
   loading screen waits about 8 seconds for them with all 4 busy. ClickToStart swaps in a pool of
-  up to 12 (the cores less 4), which cuts that wait to about 2 seconds.
+  up to 12 (the cores less 4), which cuts that wait to about 2 seconds. A dedicated server waits
+  for its models and animations the same way before it starts, and FastServer gives it the same
+  pool, which halves that wait.
 - Settling by loaded chunks. A run starts once one square in every chunk 40 squares around the
   character has loaded, not after a fixed delay.
 - Fast UI in captures. A mode registered `fastUI` draws the UI at its highest rate, so its steps

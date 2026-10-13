@@ -10,12 +10,12 @@ How `--test --mp` runs a mod's tests against a dedicated server, and what a test
    off) and runs the conf's `harness_server_setup`, then appends `Zombies = 6` to its sandbox, so
    the world has no zombies, as the scenarios' do, and the `QUIET_WORLD` options the hook didn't
    set ([a quiet world](running.md#a-quiet-world)). Every cold run starts a new world.
-3. Starts the server, through `start_server` in `lib/harness.sh` as `validate-server.sh` does,
-   and the client with ClickToStart at the same time. The client waits at the main menu until the
-   script writes `<client cache>/Lua/PZHarnessConnect.txt`, once the server's log says it started,
-   then joins as the server's admin: a `-debug` client must have the ConnectWithDebug capability.
-   Overlapping the boots saves about 8 seconds a run (the server boots slower while the client
-   does, 18 seconds instead of 14); joining before the server listens would only fail.
+3. Starts the server with FastServer, through `start_server` in `lib/harness.sh` as
+   `validate-server.sh` does, and the client with ClickToStart at the same time. The client waits
+   at the main menu until the script writes `<client cache>/Lua/PZHarnessConnect.txt`, once the
+   server's log says it started, then joins as the server's admin: a `-debug` client must have the
+   ConnectWithDebug capability. Overlapping the boots saves seconds on every run; joining before
+   the server listens would only fail.
 4. The runner skips character creation (the default unemployed survivor), takes the character to
    the scenario's `startLoc`, waits for the world to load, runs the scenario's `onStart` and the
    mod's on the client, and runs the tests as in single player.

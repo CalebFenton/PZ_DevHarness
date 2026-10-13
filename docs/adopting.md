@@ -9,7 +9,8 @@ How a mod takes the harness on, what it tells the harness about itself, and the 
 | `bin/run-client.sh` | The client runner behind a mod's `dev/run-debug-client.sh`, single player and multiplayer (`--mp`). |
 | `bin/validate-server.sh` | Boots a throwaway dedicated server with the mod and fails on anything the mod logs. |
 | `lib/harness.sh` | Paths, JVM arguments, the game lock, `install_mod`, `compile_java`, and the dedicated server both scripts start (`prepare_server`, `start_server`, `stop_server`, `server_problems`). A mod's own dev scripts may source it. |
-| `java/ClickToStart.java` | Starts the client, presses "Click to start" on the loading screen and gives the asset loader more threads. |
+| `java/ClickToStart.java` | Starts the client, presses "Click to start" on the loading screen and gives the asset loader more threads (`java/AssetLoading.java`). |
+| `java/FastServer.java` | Starts the dedicated server of `--mp` and `validate-server.sh` with the same wider asset loader. |
 | `mod/42/` | The harness mod (`cf_test_harness`): `client/PZHarness/Runner.lua`, `TestLib.lua`, `ServerCalls.lua` and `Leaks.lua`, the leak check between tests; `server/PZHarness/ServerHandlers.lua`, the server's half of the tests' server channel, and `ServerFixtures.lua`, the server's half of the two-sided fixtures; `shared/PZHarness/Fixtures.lua`, what both halves do, `Checks.lua`, expectations for server handlers, and `Snapshot.lua`, what the leak check reads on each side. |
 
 ## Adopting it
@@ -37,7 +38,8 @@ Sourced bash. Paths are relative to the repository. The mod's id and name come f
 | `MODES` | The mod's other modes, space-separated; each becomes a `--<mode>` flag. |
 | `MODE_MARK_<mode>` | The console mark of the mode's lines; the run waits for `<mark> DONE`. |
 | `MODE_SELECTION_<mode>` | Optional: the environment variable whose value the mode's handler gets as its selection, as `TESTS` is for `--test`. |
-| `TEST_MAP` | Optional: a bash array of `'<glob>=<prefix>,<prefix>'` entries for `--test --changed`. Each glob is matched against the paths changed since `HEAD`, relative to the repository, with bash's `[[ == ]]`, where `*` crosses `/`; every entry a file matches adds its test name prefixes, and an empty list (`'<glob>='`) adds none. A changed file under the mod, the dev mod or the harness mod that no glob matches runs every test; files elsewhere run none. Leave files every test depends on unmatched. |
+| `TEST_MAP` | Optional: a bash array of `'<glob>=<prefix>,<prefix>'` entries for `--test --changed`. Each glob is matched against the paths changed since `HEAD`, relative to the repository, with bash's `[[ == ]]`, where `*` crosses `/`; every entry a file matches adds its test name prefixes, and an empty list (`'<glob>='`) adds none. A changed file under the mod, the dev mod or the harness mod that no glob matches runs every test; files elsewhere run none. Leave files every test depends on unmatched. `--changed` refuses to run while a glob matches no file, and the runner fails a prefix that names no test, so a rename shows up in the map at once. |
+| `PRECHECK` | Optional: a bash array, the command every game run of the harness runs first from the repository, such as the mod's Lua compile and static checks. If it fails, no game starts. |
 | `QUIET_WORLD` | Optional: a bash array of `Key=value` sandbox options that make a `--test` world quiet, replacing the harness's list ([running.md](running.md#a-quiet-world)); `QUIET_WORLD=()` keeps the world's own population. |
 | `SERVER_PROBLEMS` | Optional: an extended regex of server log lines that count as the mod's problems, besides stack traces through it. |
 | `SERVER_IGNORE` | Optional: an extended regex of matching lines that don't count. |

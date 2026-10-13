@@ -1,11 +1,14 @@
 # Debugging with the harness
 
 Which run to reach for, and how to read a failure, so a change takes a handful of game runs
-rather than dozens. [running.md](running.md) describes every flag and line named here.
+rather than dozens. A game run is the most expensive step of a change, a fresh one most of all, so
+each one should be able to tell you something the last one didn't. [running.md](running.md)
+describes every flag and line named here.
 
 ## What to run when
 
 1. After every edit, the mod's static check, if it has one (it takes seconds and needs no game).
+   The conf's `PRECHECK` runs it before every game run as well.
 2. While you work on a change, a kept game and only the tests it touches:
 
     ```sh
@@ -23,14 +26,28 @@ rather than dozens. [running.md](running.md) describes every flag and line named
     dev/run-debug-client.sh --test --mp
     ```
 
+The script won't repeat a run whose selection, settings and files haven't changed since it last
+got a verdict: it prints that verdict instead ([repeats](running.md#repeats)). Set `RERUN=1` only
+when the game rather than a test failed, such as a crash before the tests started.
+
+## Several agents, one game
+
+Only one game runs at a time; every other run waits for the lock, and each fresh one pays the
+game's start. Let the agents that edit run the static check, and have one agent run the game for
+all of them, with everyone's changes in one run.
+
 ## A test fails
 
 1. Read the `FAIL` line's reasons, the `LEAK` and `DESYNC` lines above it, and the log whose path
    the script prints, before changing anything. The reasons name what was missing, what the
    server answered, the action that cleared the queue, or what a stopped test was waiting on.
-2. If that doesn't explain it, add one diagnostic (an `expect` with the value in its message, or
-   a `print`) and rerun only the failures: `dev/run-debug-client.sh --test --stay --failed`.
+2. If that doesn't explain it, write down the explanations that fit, add the one diagnostic that
+   tells them apart (an `expect` with the value in its message, or a `print`), and rerun only the
+   failures: `dev/run-debug-client.sh --test --stay --failed`.
 3. Fix, then rerun the failures once more, then the suite before you commit.
+4. When the script says a test has failed three runs in a row, stop rerunning. Write down what
+   each run ruled out and change the approach: a different diagnostic, a smaller test, or reading
+   the game's code (decompiled Java and its Lua) for what the step really does.
 
 ## It passes alone and fails in the suite
 

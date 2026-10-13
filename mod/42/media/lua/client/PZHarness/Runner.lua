@@ -115,6 +115,11 @@ local function setFilters(tests)
     end
 end
 
+local function matchesFilter(name, filter)
+    local exact = string.match(filter, "^=(.*)$")
+    return exact == name or (not exact and startsWith(name, filter))
+end
+
 local function selected(name)
     if not startsWith(name, PZHarness.config.prefix) then
         return false
@@ -123,8 +128,7 @@ local function selected(name)
         return true
     end
     for _, filter in ipairs(filters) do
-        local exact = string.match(filter, "^=(.*)$")
-        if exact == name or (not exact and startsWith(name, filter)) then
+        if matchesFilter(name, filter) then
             return true
         end
     end
@@ -140,18 +144,29 @@ local function skipReason(entry)
     return entry.mpOnly and "multiplayer only: " .. entry.mpOnly
 end
 
--- The selected tests to run, and those skipped in this mode as "<name>: <why>"; both sorted.
+-- The selected tests to run, and those skipped in this mode as "<name>: <why>"; both sorted. Then
+-- the selection's entries that name no test at all, such as a typo or a TEST_MAP entry for a test
+-- that has since been renamed.
 local function testNames()
-    local result, skipped = {}, {}
+    local result, skipped, used = {}, {}, {}
     for name, entry in pairs(TimedActionTests.getTests()) do
         if selected(name) then
             local reason = skipReason(entry)
             table.insert(reason and skipped or result, reason and name .. ": " .. reason or name)
+            for _, filter in ipairs(filters) do
+                used[filter] = used[filter] or matchesFilter(name, filter)
+            end
+        end
+    end
+    local unmatched = {}
+    for _, filter in ipairs(filters) do
+        if not used[filter] then
+            table.insert(unmatched, filter)
         end
     end
     table.sort(result)
     table.sort(skipped)
-    return result, skipped
+    return result, skipped, unmatched
 end
 
 -- Random numbers from 1 to n that the same seed repeats (Park and Miller's generator: the products
@@ -475,7 +490,7 @@ end
 -- same reset first (PZHarness.Fixtures.resetCharacter). The run's ORDER, REPEAT and LEAKS come
 -- from `run` (PZHarness.txt, or a --stay request). Calls onDone() at the end.
 local function runTests(onDone)
-    local names, skipped = testNames()
+    local names, skipped, unmatched = testNames()
     local rounds = math.max(1, tonumber(run.rounds) or 1)
     local order = run.order or ""
     local leaks, leakRadius, leakLevels, leakIgnore = leakSettings()
@@ -489,6 +504,9 @@ local function runTests(onDone)
         print(run.tag .. " REPEAT " .. rounds .. " rounds")
     end
     print(run.tag .. " LEAKS " .. leaks .. (leaks ~= "off" and ", " .. leakRadius .. " squares around the character" or ""))
+    for _, filter in ipairs(unmatched) do
+        print(run.tag .. " FAIL " .. filter .. ": the selection names no test")
+    end
     PZHarness.Leaks.reset()
     PZHarness.runnerOwnsVerdicts = true
     local startedMs = getTimestampMs()
@@ -499,7 +517,7 @@ local function runTests(onDone)
     local state = {
         names = names, skipped = skipped, tests = TimedActionTests.getTests(), onDone = onDone,
         rounds = rounds, leaks = leaks, leakRadius = leakRadius, leakLevels = leakLevels, leakIgnore = leakIgnore,
-        passed = 0, failed = 0, index = 0, ticks = 0, startedMs = startedMs, doneMs = startedMs,
+        passed = 0, failed = #unmatched, index = 0, ticks = 0, startedMs = startedMs, doneMs = startedMs,
         lateFailures = PZHarness.ServerCalls.lateFailures,
         -- For the summary: each test's { name, seconds, serverSeconds }, the time between tests and
         -- the part of it the leak checks took, the server waits so far, which a kept game's

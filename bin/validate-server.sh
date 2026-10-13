@@ -24,6 +24,7 @@ report_timing() {
         "quit|exit|to the server's exit"
 }
 
+run_precheck
 acquire_game_lock
 # The phases are timed from here, after any wait for another script's game.
 timing_mark start

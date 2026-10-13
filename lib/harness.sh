@@ -72,16 +72,18 @@ fi
 # the published mod, in a cache dir under a path with no symlink in it.
 TMP_REAL="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
 
-# Compiles a dev Java file into a directory when the source is newer than its class. The game's
-# own Java has no compiler, so it needs a JDK's javac (or JAVAC); class files for Java 8 run on
-# the game's newer JVM, and any JDK from 8 on can write them.
+# Compiles a dev Java file, and the files of its folder it uses, into a directory when one of
+# those sources is newer than its class. The game's own Java has no compiler, so it needs a JDK's
+# javac (or JAVAC); class files for Java 8 run on the game's newer JVM, and any JDK from 8 on can
+# write them.
 compile_java() {
     local source=$1 dir=$2
-    local class
+    local class folder
     class="$dir/$(basename "$source" .java).class"
-    if [ "$source" -nt "$class" ]; then
+    folder=$(dirname "$source")
+    if [ ! -f "$class" ] || [ -n "$(find "$folder" -maxdepth 1 -name '*.java' -newer "$class")" ]; then
         mkdir -p "$dir"
-        "${JAVAC:-javac}" -nowarn -Xlint:-options -source 8 -target 8 -d "$dir" "$source"
+        "${JAVAC:-javac}" -nowarn -Xlint:-options -source 8 -target 8 -sourcepath "$folder" -d "$dir" "$source"
     fi
 }
 
@@ -230,11 +232,21 @@ hand_lock_to_game() {
     fi
 }
 
+# Runs the conf's PRECHECK, the mod's own quick checks such as a Lua compile, from the repository,
+# and fails the script if they fail, before it spends a game on code they reject.
+run_precheck() {
+    declare -p PRECHECK > /dev/null 2>&1 && [ ${#PRECHECK[@]} -gt 0 ] || return 0
+    if ! (cd "$REPO" && "${PRECHECK[@]}"); then
+        echo "FAIL: PRECHECK (${PRECHECK[*]}) failed, so no game started" >&2
+        exit 1
+    fi
+}
+
 # Run timing --------------------------------------------------------------------------------------
 
 # One line per run of the client and server scripts, for a look at where the time goes across many
-# runs, and what failed in the last test run of each kind, for run-client.sh --failed. The mod's
-# .gitignore lists both.
+# runs and for run-client.sh to know a run it has seen, and what failed in the last test run of
+# each kind, for run-client.sh --failed. The mod's .gitignore lists both.
 RUNS_LOG="$REPO/dev/.runs.log"
 RUNS_FAILED="$REPO/dev/.runs-failed"
 
@@ -286,8 +298,8 @@ report_run() {
     done
     seconds=$(seconds_between "$TIMING_start" "$(now)")
     echo "timing: total $seconds s"
-    printf '%s mode=%s selection=%s %s exit=%s%s total=%s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$mode" \
-        "$selection" "$counts" "$status" "$fields" "$seconds" >> "$RUNS_LOG"
+    printf '%s mode=%s selection=%s %s exit=%s%s total=%s%s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$mode" \
+        "$selection" "$counts" "$status" "$fields" "$seconds" "${RUN_FINGERPRINT:+ fingerprint=$RUN_FINGERPRINT}" >> "$RUNS_LOG"
 }
 
 # The EXIT traps call this first, with the script's exit status; a script that times its run
@@ -330,14 +342,16 @@ prepare_server() {
 }
 
 # Starts the dedicated server of $CACHE in the background, its console reading from file
-# descriptor 3: SERVER_PID, and SERVER_LOG, its console.txt.
+# descriptor 3: SERVER_PID, and SERVER_LOG, its console.txt. java/FastServer.java starts it with
+# more asset loader threads.
 start_server() {
     SERVER_LOG="$CACHE/server-console.txt"
     rm -f "$SERVER_LOG"
+    compile_java "$HARNESS/java/FastServer.java" "$CACHE/launcher"
     local fifo="$CACHE/stdin"
     rm -f "$fifo"
     mkfifo "$fifo"
-    (cd "$PZ/Java" && exec "$JAVA" "${JVM_COMMON[@]}" -cp "$GAME_CLASSPATH" -Ddebug -Xmx4g zombie.network.GameServer \
+    (cd "$PZ/Java" && exec "$JAVA" "${JVM_COMMON[@]}" -cp "$CACHE/launcher:$GAME_CLASSPATH" -Ddebug -Xmx4g FastServer \
         -cachedir="$CACHE" -servername "$SERVER_NAME" -adminpassword "$SERVER_ADMIN_PASSWORD" -nosteam \
         -debuglog=Mod,Lua < "$fifo" > "$CACHE/stdout.txt" 2>&1) &
     SERVER_PID=$!
