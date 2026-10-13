@@ -16,8 +16,19 @@ TIMEOUT=${TIMEOUT:-900}
 # For the conf's hooks: this server serves no --mp run.
 MP=
 
+# On exit (exit_report, lib/harness.sh): prints the run's phases and appends it to RUNS_LOG.
+report_timing() {
+    report_run "$1" validate - "passed=- failed=- skipped=-" \
+        "setup|launch|script start to the server's launch" \
+        "boot|ready|server launch to ready" \
+        "quit|exit|to the server's exit"
+}
+
 acquire_game_lock
+# The phases are timed from here, after any wait for another script's game.
+timing_mark start
 prepare_server "$MOD_ID"
+timing_mark launch
 start_server
 stop_games_on_exit
 
@@ -25,12 +36,14 @@ started=
 SECONDS=0
 while [ "$SECONDS" -lt "$TIMEOUT" ] && kill -0 "$SERVER_PID" 2>/dev/null; do
     if server_started; then
+        timing_mark ready
         started=1
         break
     fi
     sleep 1
 done
 stop_server
+timing_mark exit
 
 echo "log: $SERVER_LOG"
 if [ -z "$started" ]; then

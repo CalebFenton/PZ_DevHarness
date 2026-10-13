@@ -121,7 +121,7 @@ acquire_game_lock() {
         sleep 2
     done
     echo $$ > "$GAME_LOCK/pid"
-    trap release_game_lock EXIT
+    trap 'exit_report $?; release_game_lock' EXIT
     if [ -n "$SESSION_PID" ] && [ "${1:-}" != reuse ]; then
         echo "stopping the game kept open by --stay"
         stop_session
@@ -183,14 +183,14 @@ stop_games() {
 # Background jobs of a script ignore Ctrl-C, so a game started in the background would outlive the
 # script. Stops the games when the script exits, and releases the lock only once they have exited.
 stop_games_on_exit() {
-    trap 'stop_games; release_game_lock' EXIT
+    trap 'exit_report $?; stop_games; release_game_lock' EXIT
 }
 
 # For --stay: when the script exits, hands the lock to the kept game if all of it still runs, with
 # $1 as the lock's owner (the client by default).
 keep_games_on_exit() {
     LOCK_OWNER=${1:-$GAME_PID}
-    trap hand_lock_to_game EXIT
+    trap 'exit_report $?; hand_lock_to_game' EXIT
 }
 
 hand_lock_to_game() {
@@ -205,6 +205,72 @@ hand_lock_to_game() {
     else
         stop_games
         release_game_lock
+    fi
+}
+
+# Run timing --------------------------------------------------------------------------------------
+
+# One line per run of the client and server scripts, for a look at where the time goes across many
+# runs. The mod's .gitignore lists it.
+RUNS_LOG="$REPO/dev/.runs.log"
+
+# Wall-clock seconds to a tenth: macOS's date has no fractions, and its bash no EPOCHREALTIME.
+now() {
+    perl -MTime::HiRes=time -e 'printf "%.1f\n", time'
+}
+
+# Notes the time of milestone $1 in TIMING_$1, the first time only, so a script can call it on
+# every poll.
+timing_mark() {
+    local var="TIMING_$1"
+    if [ -z "${!var:-}" ]; then
+        printf -v "$var" '%s' "$(now)"
+    fi
+}
+
+seconds_between() {
+    awk -v from="$1" -v to="$2" 'BEGIN { printf "%.1f", to - from }'
+}
+
+# Prints a "timing:" line per phase and the total since TIMING_start, and appends the run to
+# RUNS_LOG. $1 is the exit status, $2 the mode, $3 the selection, $4 the test counts; each further
+# argument is a phase, "key|milestone|what": it runs from the last milestone reached before it
+# (TIMING_start first) to its own, and a milestone the run never reached leaves its phase out. A
+# fourth field, "|from", names the milestone a phase runs from instead, for one that overlaps the
+# others, such as a server booting while the client does.
+report_run() {
+    local status=$1 mode=$2 selection=$3 counts=$4
+    shift 4
+    [ -n "${TIMING_start:-}" ] || return 0
+    local previous=$TIMING_start fields= phase key milestone what from var at begin seconds
+    for phase in "$@"; do
+        IFS='|' read -r key milestone what from <<< "$phase"
+        var="TIMING_$milestone"
+        at=${!var:-}
+        [ -n "$at" ] || continue
+        if [ -n "$from" ]; then
+            var="TIMING_$from"
+            begin=${!var:-}
+            [ -n "$begin" ] || continue
+        else
+            begin=$previous
+            previous=$at
+        fi
+        seconds=$(seconds_between "$begin" "$at")
+        echo "timing: $key $seconds s ($what)"
+        fields="$fields $key=$seconds"
+    done
+    seconds=$(seconds_between "$TIMING_start" "$(now)")
+    echo "timing: total $seconds s"
+    printf '%s mode=%s selection=%s %s exit=%s%s total=%s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$mode" \
+        "$selection" "$counts" "$status" "$fields" "$seconds" >> "$RUNS_LOG"
+}
+
+# The EXIT traps call this first, with the script's exit status; a script that times its run
+# defines report_timing, which calls report_run.
+exit_report() {
+    if declare -F report_timing > /dev/null; then
+        report_timing "$1" || true
     fi
 }
 

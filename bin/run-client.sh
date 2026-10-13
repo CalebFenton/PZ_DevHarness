@@ -12,7 +12,7 @@
 #   --test --stay    the same, but the game stays open after the run, and the next --test --stay
 #                    reruns the tests in it after loading the conf's RELOAD_FILES again. Any other
 #                    change to the mods restarts the game. While it waits it shows and logs
-#                    "<TAG> IDLE"; it quits after 10 minutes without a run, or when another run
+#                    "<TAG> IDLE"; it quits after 30 minutes without a run, or when another run
 #                    needs the game.
 #   --test --mp      the same in multiplayer: starts a dedicated server with the three mods and a
 #                    client that joins it as the admin, runs the tests on the client, and fails on
@@ -133,6 +133,8 @@ session_stale() {
 }
 
 acquire_game_lock reuse
+# The run's phases are timed from here, after any wait for another script's game (report_timing).
+timing_mark start
 if [ -n "$SESSION_PID" ]; then
     reason=
     if [ -z "$STAY" ]; then
@@ -235,6 +237,7 @@ prepare_mp_server() {
     else
         echo "SandboxVars = { Zombies = 6 }" > "$sandbox"
     fi
+    timing_mark server_start
     start_server
     CACHE=$client_cache
 }
@@ -257,6 +260,7 @@ if [ -n "$SESSION_PID" ]; then
         SERVER_RUN_LOG="$SERVER_CACHE/server-console-rerun.txt"
     fi
     request_rerun
+    timing_mark launch
     RUN_LOG="$CACHE/console-rerun.txt"
     echo "rerunning the tests in the game kept open by --stay (pid $SESSION_GAMES)"
     keep_games_on_exit "$SESSION_PID"
@@ -290,6 +294,7 @@ else
     # Neither the game nor its caffeinate holds this script's stdin or output, so a caller reading
     # that output sees it end when the script exits, even if the game stays open with --stay. With
     # --mp the client boots while the server does and joins once it has started.
+    timing_mark launch
     (cd "$PZ/Java" && exec "${GAME[@]}" -cp "$LAUNCHER:$GAME_CLASSPATH" ClickToStart "${GAME_ARGS[@]}" \
         < /dev/null > "$CACHE/stdout.txt" 2>&1) &
     GAME_PID=$!
@@ -307,6 +312,42 @@ else
         stop_games_on_exit
     fi
 fi
+
+# On exit (exit_report, lib/harness.sh): prints this run's phases and appends it to RUNS_LOG. A kept
+# game's rerun has no boot or world phase, and only a game that quits has a quit phase. A run a Lua
+# error stopped has a stopped phase instead of the run, up to the poll that saw the error.
+report_timing() {
+    [ -n "$MODE" ] || return 0
+    local counts
+    counts=$(sed -n "s/.*> $TAG DONE \(passed=[0-9]* failed=[0-9]* skipped=[0-9]*\)\$/\1/p" "$RUN_LOG" 2>/dev/null | tail -1)
+    report_run "$1" "$MODE${MP:+-mp}${SESSION_PID:+-rerun}" "${SELECTION:-all}" \
+        "${counts:-passed=- failed=- skipped=-}" \
+        "setup|launch|script start to the game's launch, or to the rerun request in a kept game" \
+        "boot|lua|game launch to the harness's Lua" \
+        "world|world|to the world loaded around the character" \
+        "start|first|to the first test" \
+        "run|done|to the last result" \
+        "stopped|stopped|to the Lua error that stopped the run" \
+        "quit|exit|to the game's exit, and with --mp the server's" \
+        "server|server_ready|server launch to ready|server_start"
+}
+
+# The milestones in this run's log, each timed when a poll first sees it.
+note_milestones() {
+    local milestone pattern var
+    for milestone in lua world first done; do
+        case $milestone in
+            lua) pattern="PZHarness: the dev mod registered" ;;
+            world) pattern="PZHarness: starting after" ;;
+            first) pattern="> TEST: " ;;
+            done) pattern="> $MARK DONE" ;;
+        esac
+        var="TIMING_$milestone"
+        if [ -z "${!var:-}" ] && logged "$pattern"; then
+            timing_mark "$milestone"
+        fi
+    done
+}
 
 update_run_log() {
     if [ -n "$RUN_ID" ]; then
@@ -350,14 +391,17 @@ while [ "$SECONDS" -lt "$TIMEOUT" ]; do
             break
         fi
         if [ ! -f "$CONNECT_FILE" ] && server_started; then
+            timing_mark server_ready
             printf 'host=127.0.0.1\nport=%s\nuser=%s\npassword=%s\n' "$SERVER_PORT" "$SERVER_ADMIN" \
                 "$SERVER_ADMIN_PASSWORD" > "$CONNECT_FILE.tmp"
             mv "$CONNECT_FILE.tmp" "$CONNECT_FILE"
         fi
     fi
     update_run_log
+    note_milestones
     if lua_stopped; then
         STOPPED=1
+        timing_mark stopped
         sleep 2 # lets the rest of the stack trace reach the log
         update_run_log
         break
@@ -372,6 +416,10 @@ while [ "$SECONDS" -lt "$TIMEOUT" ]; do
     fi
     sleep 0.5
 done
+# A client that quits right after its last line can be gone before a poll sees that line, and the
+# loop then ends at its first check, so the log gets one more look.
+update_run_log
+note_milestones
 if [ -n "$STOPPED" ]; then
     echo "FAIL: a Lua error stopped the game; the stack trace from $LOG:"
     grep -n -A20 'dumping Lua stack trace' "$RUN_LOG" | grep -v -E '^[0-9]+-\s+(se\.krka|java\.|zombie\.)' | head -40
@@ -392,6 +440,10 @@ fi
 # The server's log counts up to its exit: saving the world runs the mods' code too.
 if [ -n "$MP" ] && [ -z "$STAY" ]; then
     stop_server
+fi
+# The quit phase runs until the client has exited and, with --mp, the server has saved and exited.
+if ! kill -0 "$GAME_PID" 2>/dev/null; then
+    timing_mark exit
 fi
 
 echo "log: $LOG"

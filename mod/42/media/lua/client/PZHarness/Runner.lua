@@ -29,11 +29,14 @@ local SQUARE_WAIT_MS = 10000
 -- cleared and its undos run, so one hung step can't stall the run. A spec's `timeoutSeconds`
 -- raises it for a test that is slow on purpose. The slowest tests take under 10 seconds.
 local TEST_TIMEOUT_SECONDS = 30
+-- How many of the slowest tests the run's summary names.
+local SLOWEST_COUNT = 10
 -- With --stay, run-client.sh writes this file in <cachedir>/Lua to rerun the tests; the game looks
--- for it every REQUEST_POLL_TICKS ticks and quits after STAY_IDLE_MS without one.
+-- for it every REQUEST_POLL_TICKS ticks and quits after STAY_IDLE_MS without one. Starting a
+-- multiplayer game again costs about a minute, so a kept game waits through a long pause.
 local REQUEST_FILE = "PZHarnessRerun.txt"
 local REQUEST_POLL_TICKS = 15
-local STAY_IDLE_MS = 10 * 60 * 1000
+local STAY_IDLE_MS = 30 * 60 * 1000
 -- While --stay waits, the game draws only this many frames a second, so it doesn't keep a core busy.
 local IDLE_FPS = 24
 -- The highest uiRenderFPS the option takes (Core.optionUiRenderFps).
@@ -86,6 +89,11 @@ local function startsWith(text, prefix)
     return string.sub(text, 1, #prefix) == prefix
 end
 PZHarness.startsWith = startsWith
+
+--- What every per-test result line (PASS, FAIL, SKIP) ends with: the test's wall time.
+function PZHarness.tookSuffix(seconds)
+    return string.format(" (%.2f s)", seconds)
+end
 
 -- Name prefixes from TESTS; empty runs every test of the mod.
 local filters = {}
@@ -148,93 +156,179 @@ local function refreshInventoryWindows()
     end
 end
 
+-- The current test is done once its action queue is empty, or stopped once it overruns its limit
+-- (TEST_TIMEOUT_SECONDS or its spec's timeoutSeconds): its queue cleared, and validate() fails it
+-- with what it was waiting on. Then validate() runs and counts the verdict, the test's wall time
+-- and its time waiting on the server go to the run's summary, and the cheat and the character go
+-- back to where the test started.
+local function finishCurrentTest(state)
+    local current, player = state.current, state.player
+    local queue = ISTimedActionQueue.getTimedActionQueue(player).queue
+    if queue[1] then
+        local limit = current.timeoutSeconds or TEST_TIMEOUT_SECONDS
+        if getTimestampMs() - state.testStartMs < limit * 1000 then
+            return
+        end
+        current.timedOut = string.format("still running after %d s, waiting on %s", limit,
+            PZHarness.Test.describeAction(queue[1]))
+        ISTimedActionQueue.clear(player)
+    end
+    if not current.validate or current:validate() then
+        state.passed = state.passed + 1
+    else
+        state.failed = state.failed + 1
+    end
+    state.current = nil
+    state.doneMs = getTimestampMs()
+    -- TestLib's validate leaves the time it printed; a test registered some other way has none.
+    table.insert(state.times, {
+        name = state.name,
+        seconds = current.seconds or (state.doneMs - state.testStartMs) / 1000,
+        serverSeconds = (PZHarness.ServerCalls.waitedMs() - state.testServerMs) / 1000,
+    })
+    ISBuildMenu.cheat = state.wasCheat
+    PZHarness.Fixtures.teleportToMiddle(player, state.start.x, state.start.y, state.start.z)
+end
+
+-- Whether the next test (or the end of the run) may come: the character's square has loaded again
+-- after a test that went far, or SQUARE_WAIT_MS have passed; the server has answered what the last
+-- test sent it, its undos above all, so a test never meets what the one before built; and, in
+-- multiplayer, the server has reset its copy of the character for the next test, which the first
+-- call asks for.
+local function readyForNextTest(state)
+    if not state.player:getCurrentSquare() and getTimestampMs() - state.doneMs < SQUARE_WAIT_MS then
+        return false
+    end
+    if PZHarness.ServerCalls.busy() then
+        return false
+    end
+    local nextIndex = state.index + 1
+    if state.names[nextIndex] and isClient() and state.resetFor ~= nextIndex then
+        state.resetFor = nextIndex
+        PZHarness.ServerCalls.callOutsideTest("PZHarness.reset", {})
+        return false
+    end
+    return true
+end
+
+-- Starts test `name` from the character's square after the runner's resets. If that square still
+-- hasn't loaded since the last test took the character far away, the test fails without running,
+-- since nothing could bring the character back to where it started, and the next one waits again.
+-- The time since the last test ended counts as between tests in the run's summary.
+local function startNextTest(state, name)
+    local player = state.player
+    state.gapMs = state.gapMs + getTimestampMs() - state.doneMs
+    print("TEST: " .. name)
+    local here = player:getCurrentSquare()
+    if not here then
+        print(string.format("%s FAIL %s: the character's square was still unloaded %d s after the last test%s",
+            run.tag, name, SQUARE_WAIT_MS / 1000, PZHarness.tookSuffix(0)))
+        state.failed = state.failed + 1
+        state.doneMs = getTimestampMs()
+        return
+    end
+    state.name = name
+    state.current = state.tests[name]
+    state.start = { x = here:getX(), y = here:getY(), z = here:getZ() }
+    PZHarness.Fixtures.resetCharacter(player)
+    refreshInventoryWindows()
+    player:Say(name)
+    state.wasCheat = ISBuildMenu.cheat
+    ISBuildMenu.cheat = false
+    state.testStartMs = getTimestampMs()
+    state.testServerMs = PZHarness.ServerCalls.waitedMs()
+    state.current:run()
+end
+
+-- Prints the SLOWEST_COUNT slowest tests, then where the run's time went: in the tests, between
+-- them (square loads, and the server's resets and undos the runner waits for), and in multiplayer
+-- how much of both had a server answer outstanding.
+local function printSlowest(state)
+    local times = state.times
+    table.sort(times, function(a, b)
+        if a.seconds ~= b.seconds then
+            return a.seconds > b.seconds
+        end
+        return a.name < b.name
+    end)
+    local inTests = 0
+    for i, entry in ipairs(times) do
+        inTests = inTests + entry.seconds
+        if i <= SLOWEST_COUNT then
+            print(string.format("%s SLOWEST %.2f s %s%s", run.tag, entry.seconds, entry.name,
+                isClient() and string.format(" (server %.2f s)", entry.serverSeconds) or ""))
+        end
+    end
+    local summary = string.format("%s SLOWEST %.1f s in tests, %.1f s between them", run.tag, inTests,
+        state.gapMs / 1000)
+    if isClient() then
+        summary = summary .. string.format(", %.1f s of it waiting on the server",
+            (PZHarness.ServerCalls.waitedMs() - state.serverStartMs) / 1000)
+    end
+    print(summary)
+end
+
+-- Prints the skipped tests, the slowest ones, the time the run took and its verdict, counting the
+-- failures that came after their tests' verdicts, then calls onDone().
+local function finishRun(state)
+    state.gapMs = state.gapMs + getTimestampMs() - state.doneMs
+    local failed = state.failed + PZHarness.ServerCalls.lateFailures - state.lateFailures
+    for _, skip in ipairs(state.skipped) do
+        print(run.tag .. " SKIP " .. skip .. PZHarness.tookSuffix(0))
+    end
+    printSlowest(state)
+    local seconds = (getTimestampMs() - state.startedMs) / 1000
+    print(string.format("%s TIME %.1f s, %d frames (%.0f a second)", run.tag, seconds, state.ticks,
+        state.ticks / math.max(seconds, 0.001)))
+    print(run.tag .. " DONE passed=" .. state.passed .. " failed=" .. failed .. " skipped=" .. #state.skipped)
+    state.onDone()
+end
+
 -- Runs the selected tests one after another with the resets of the debug menu's runner (RunTest
 -- and OnTick in vanilla Tests/TimedActionsTests.lua, whose locals Lua can't reach): before each
 -- test full health, an empty inventory, nothing worn or held, the inventory windows caught up with
 -- that, ISBuildMenu.cheat off and the test's name said aloud; validate() once the action queue is
 -- empty; then the cheat back and the character back in the middle of the square the test started
 -- on. Vanilla pauses a second after every test so you can read the result; here the next test
--- starts on the next tick, or once the character's square has loaded again after a test that went
--- far (at most SQUARE_WAIT_MS), and, in multiplayer, once the server has answered what the last
--- test sent it, its undos above all, so a test never meets what the one before built. In
--- multiplayer the server's copy of the character gets the same reset first
--- (PZHarness.Fixtures.resetCharacter). A test still busy after TEST_TIMEOUT_SECONDS (or its
--- spec's timeoutSeconds) is stopped: its queue cleared, validate() fails it with what it was
--- waiting on and runs its undos. Calls onDone() at the end.
+-- starts on the next tick, or once readyForNextTest says so. In multiplayer the server's copy of
+-- the character gets the same reset first (PZHarness.Fixtures.resetCharacter). Calls onDone() at
+-- the end.
 local function runTests(onDone)
     local names, skipped = testNames()
-    local tests = TimedActionTests.getTests()
     print(run.tag .. " START " .. #names)
-    local passed, failed, index, ticks = 0, 0, 0, 0
     local startedMs = getTimestampMs()
-    local doneMs = startedMs
-    local lateFailures = PZHarness.ServerCalls.lateFailures
-    -- Where the current test started, as numbers: the square object itself goes back to the pool
-    -- when a test takes the character far enough for its chunk to unload, and comes back as some
-    -- other square (IsoGridSquare.discard, getNew), so teleporting to its coordinates then lands
-    -- somewhere else entirely.
-    local current, player, start, wasCheat, resetFor, testStartMs
+    -- `start` holds where the current test started, as numbers: the square object itself goes back
+    -- to the pool when a test takes the character far enough for its chunk to unload, and comes
+    -- back as some other square (IsoGridSquare.discard, getNew), so teleporting to its coordinates
+    -- then lands somewhere else entirely.
+    local state = {
+        names = names, skipped = skipped, tests = TimedActionTests.getTests(), onDone = onDone,
+        passed = 0, failed = 0, index = 0, ticks = 0, startedMs = startedMs, doneMs = startedMs,
+        lateFailures = PZHarness.ServerCalls.lateFailures,
+        -- For the summary: each test's { name, seconds, serverSeconds }, the time between tests,
+        -- and the server waits so far, which a kept game's earlier runs add to.
+        times = {}, gapMs = 0, serverStartMs = PZHarness.ServerCalls.waitedMs(),
+        current = nil, name = nil, player = nil, start = nil, wasCheat = nil, resetFor = nil,
+        testStartMs = nil, testServerMs = nil,
+    }
     local function onTick()
-        ticks = ticks + 1
-        if current then
-            local queue = ISTimedActionQueue.getTimedActionQueue(player).queue
-            if queue[1] then
-                local limit = current.timeoutSeconds or TEST_TIMEOUT_SECONDS
-                if getTimestampMs() - testStartMs < limit * 1000 then
-                    return
-                end
-                current.timedOut = string.format("still running after %d s, waiting on %s", limit,
-                    PZHarness.Test.describeAction(queue[1]))
-                ISTimedActionQueue.clear(player)
-            end
-            if not current.validate or current:validate() then
-                passed = passed + 1
-            else
-                failed = failed + 1
-            end
-            current = nil
-            doneMs = getTimestampMs()
-            ISBuildMenu.cheat = wasCheat
-            PZHarness.Fixtures.teleportToMiddle(player, start.x, start.y, start.z)
+        state.ticks = state.ticks + 1
+        if state.current then
+            finishCurrentTest(state)
             return
         end
-        player = getSpecificPlayer(0)
-        if not player:getCurrentSquare() and getTimestampMs() - doneMs < SQUARE_WAIT_MS then
+        state.player = getSpecificPlayer(0)
+        if not readyForNextTest(state) then
             return
         end
-        if PZHarness.ServerCalls.busy() then
-            return
-        end
-        local name = names[index + 1]
-        if name and isClient() and resetFor ~= index + 1 then
-            resetFor = index + 1
-            PZHarness.ServerCalls.callOutsideTest("PZHarness.reset", {})
-            return
-        end
-        index = index + 1
-        if not name then
+        state.index = state.index + 1
+        local name = state.names[state.index]
+        if name then
+            startNextTest(state, name)
+        else
             Events.OnTick.Remove(onTick)
-            failed = failed + PZHarness.ServerCalls.lateFailures - lateFailures
-            for _, skip in ipairs(skipped) do
-                print(run.tag .. " SKIP " .. skip)
-            end
-            local seconds = (getTimestampMs() - startedMs) / 1000
-            print(string.format("%s TIME %.1f s, %d frames (%.0f a second)", run.tag, seconds, ticks, ticks / math.max(seconds, 0.001)))
-            print(run.tag .. " DONE passed=" .. passed .. " failed=" .. failed .. " skipped=" .. #skipped)
-            onDone()
-            return
+            finishRun(state)
         end
-        current = tests[name]
-        print("TEST: " .. name)
-        local here = player:getCurrentSquare()
-        start = { x = here:getX(), y = here:getY(), z = here:getZ() }
-        PZHarness.Fixtures.resetCharacter(player)
-        refreshInventoryWindows()
-        player:Say(name)
-        wasCheat = ISBuildMenu.cheat
-        ISBuildMenu.cheat = false
-        testStartMs = getTimestampMs()
-        current:run()
     end
     Events.OnTick.Add(onTick)
 end
@@ -594,6 +688,9 @@ function PZHarness.register(config)
     if run.mode == "" then
         return
     end
+    -- run-client.sh times the game's boot up to the first of these; --mp prints one again after
+    -- joining resets the Lua.
+    print("PZHarness: the dev mod registered for " .. run.mode)
 
     -- Single player pauses when the window loses focus, and paused games don't tick, so the run
     -- would stop whenever someone switches to another window.

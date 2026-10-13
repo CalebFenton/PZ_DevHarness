@@ -4,6 +4,7 @@ require "Moveables/ISMoveablesAction"
 require "PZHarness/Runner"
 require "PZHarness/ServerCalls"
 require "PZHarness/Fixtures"
+require "PZHarness/Checks"
 
 -- The generic half of a mod's test library. A mod's own library inherits from it
 -- (setmetatable(ModTest, { __index = PZHarness.Test })) and adds the fixtures that know the mod's
@@ -82,8 +83,8 @@ function T.expect(condition, message)
 end
 
 function T.expectNear(label, actual, expected, tolerance)
-    return T.expect(type(actual) == "number" and math.abs(actual - expected) <= (tolerance or 0.0001),
-        label .. " is " .. tostring(actual) .. ", expected " .. expected)
+    local ok, message = PZHarness.Checks.near(label, actual, expected, tolerance)
+    return T.expect(ok, message)
 end
 
 --- Returns `value`; when it is nil or false, records `what` (a noun phrase: "a free indoor square
@@ -496,10 +497,33 @@ function T.setMultiplier(self, multiplier)
     alsoOnServer(self, "PZHarness.setMultiplier", { multiplier = multiplier })
 end
 
---- The power grid on or off.
+-- In multiplayer a generator taken away while this client's copy of its square holds a different
+-- list of objects (a test's own objects come and go fast) keeps its squares powered here: the
+-- switch-off names it by its place on the square and misses, and the chunks drop a generator's
+-- squares only when they load again (IsoChunk.checkForMissingGenerators). So with the grid off a
+-- test starts with no power but what it brings itself.
+local function dropStaleGeneratorPower()
+    local square = T.player():getCurrentSquare()
+    if not square then return end
+    local cell, reach = getCell(), math.floor(SandboxVars.GeneratorTileRange / 8) + 2
+    local wx, wy = math.floor(square:getX() / 8), math.floor(square:getY() / 8)
+    for x = wx - reach, wx + reach do
+        for y = wy - reach, wy + reach do
+            local chunk = cell:getChunk(x, y)
+            if chunk then
+                chunk:checkForMissingGenerators()
+            end
+        end
+    end
+end
+
+--- The power grid on or off. Off, it also clears power a generator taken away left behind.
 function T.setGrid(self, on)
     T.defer(self, PZHarness.Fixtures.setGrid(on))
     alsoOnServer(self, "PZHarness.setGrid", { on = on })
+    if not on then
+        dropStaleGeneratorPower()
+    end
 end
 
 --- Midnight with the grid off, dark where the character stands; queues a wait for the light to
@@ -535,102 +559,124 @@ local function optOutProblem(spec)
     return nil
 end
 
+-- The spec's own start of a test, once the light has caught up: the instant cheat, the hour, the
+-- sandbox options, the mod's setup, then spec.run unless a fixture is already missing.
+local function startSpec(self, spec, hour)
+    -- The server makes the actions a multiplayer client sends it, so it decides their length.
+    T.defer(self, PZHarness.Fixtures.setInstant(T.player(), spec.instant == true))
+    alsoOnServer(self, "PZHarness.setInstant", { on = spec.instant == true })
+    if hour then
+        T.setTime(self, hour)
+    end
+    for key, value in pairs(spec.sandbox or {}) do
+        T.setSandbox(self, key, value)
+    end
+    if settings().setup then
+        settings().setup(self, spec)
+    end
+    if spec.run and #self.missing == 0 then
+        spec.run(self)
+    end
+end
+
+-- The runner's run of a registered test: a fresh `self`, an undo that gives back the perks of the
+-- `perks` setting, then startSpec. A malformed opt-out runs nothing; validate reports it.
+local function runEntry(entry, name, spec, problem)
+    local self = { name = name, undo = {}, missing = {}, used = {}, server = {}, items = {}, counts = {},
+        startedMs = getTimestampMs() }
+    entry.state = self
+    active = self
+    if problem then
+        return
+    end
+    local p = T.player()
+    local perks = {}
+    for _, perk in pairs(settings().perks or {}) do
+        perks[perk:getId()] = p:getPerkLevel(perk)
+    end
+    -- Actions and crafts that give experience level up the server's copy as well, so it gets back
+    -- these levels too.
+    T.defer(self, function()
+        PZHarness.Fixtures.setPerkLevels(p, perks)
+        if isClient() then
+            PZHarness.ServerCalls.callOutsideTest("PZHarness.setPerkLevels", { levels = perks })
+        end
+    end)
+    -- Read now, not when the test registers: the dev mod may register its settings after its test
+    -- files have loaded.
+    local hour = spec.hour or settings().hour
+    -- The light lags a clock or grid change by some frames, and the previous test may have ended
+    -- in the dark.
+    if not hour or lit() then
+        startSpec(self, spec, hour)
+    else
+        waitForLight(true)
+        T.step(function() startSpec(self, spec, hour) end)
+    end
+end
+
+-- Runs the test's restore stack newest first. A server undo that single player answers at once
+-- still lands in this test's failures while `unwinding` is set.
+local function unwindTest(self)
+    unwinding = true
+    for i = #self.undo, 1, -1 do
+        self.undo[i]()
+    end
+    unwinding = false
+    self.unwound = true
+end
+
+-- The runner's validate of a registered test: its failures (a malformed opt-out, the runner's
+-- timeout, a missing fixture, or spec.validate's), then spec.cleanup and the undos. Prints the
+-- verdict with the test's wall time, from its run to the end of its undos, leaves that time in
+-- `entry.seconds` for the runner's summary, and returns whether the test passed.
+local function validateEntry(entry, name, spec, problem)
+    local self = entry.state or { undo = {}, missing = { "a run before validate" } }
+    entry.state = nil
+    failures = {}
+    if problem then
+        table.insert(failures, problem)
+    elseif entry.timedOut then
+        -- The runner stopped the test (Runner.lua): what validate reads may never have come.
+        table.insert(failures, entry.timedOut)
+        entry.timedOut = nil
+    elseif #self.missing > 0 then
+        table.insert(failures, "missing " .. table.concat(self.missing, "; "))
+    elseif spec.validate then
+        spec.validate(self)
+        -- The menu and the crafting windows refuse a craft without saying why.
+        if #failures > 0 and self.refusal then
+            table.insert(failures, "the game refused the craft: " .. self.refusal)
+        end
+    end
+    if spec.cleanup then
+        spec.cleanup(self)
+    end
+    unwindTest(self)
+    active = nil
+    entry.seconds = self.startedMs and (getTimestampMs() - self.startedMs) / 1000 or 0
+    local took = PZHarness.tookSuffix(entry.seconds)
+    if #failures > 0 then
+        print(PZHarness.run.tag .. " FAIL " .. name .. ": " .. table.concat(failures, "; ") .. took)
+        return false
+    end
+    print(PZHarness.run.tag .. " PASS " .. name .. took)
+    return true
+end
+
 --- Registers test `name`. `spec`: run(self), validate(self), cleanup(self), all optional; `hour`;
 --- `instant`; `sandbox` (option = value, see T.setSandbox); `spOnly` or `mpOnly`, the reason the
 --- test runs only in single player or only in multiplayer; anything else the mod's setup reads.
 function T.test(name, spec)
     local problem = optOutProblem(spec)
-    local function start(self, hour)
-        -- The server makes the actions a multiplayer client sends it, so it decides their length.
-        T.defer(self, PZHarness.Fixtures.setInstant(T.player(), spec.instant == true))
-        alsoOnServer(self, "PZHarness.setInstant", { on = spec.instant == true })
-        if hour then
-            T.setTime(self, hour)
-        end
-        for key, value in pairs(spec.sandbox or {}) do
-            T.setSandbox(self, key, value)
-        end
-        if settings().setup then
-            settings().setup(self, spec)
-        end
-        if spec.run and #self.missing == 0 then
-            spec.run(self)
-        end
-    end
     TimedActionTests.getTests()[name] = {
         -- The runner reads these to skip the test in the other mode.
         spOnly = not problem and spec.spOnly or nil,
         mpOnly = not problem and spec.mpOnly or nil,
         -- The runner's per-test limit in real seconds, if the test needs more than its default.
         timeoutSeconds = spec.timeoutSeconds,
-        run = function(entry)
-            local self = { name = name, undo = {}, missing = {}, used = {}, server = {}, items = {}, counts = {} }
-            entry.state = self
-            active = self
-            if problem then
-                return
-            end
-            local p = T.player()
-            local perks = {}
-            for _, perk in pairs(settings().perks or {}) do
-                perks[perk:getId()] = p:getPerkLevel(perk)
-            end
-            -- Actions and crafts that give experience level up the server's copy as well, so it
-            -- gets back these levels too.
-            T.defer(self, function()
-                PZHarness.Fixtures.setPerkLevels(p, perks)
-                if isClient() then
-                    PZHarness.ServerCalls.callOutsideTest("PZHarness.setPerkLevels", { levels = perks })
-                end
-            end)
-            -- Read now, not when the test registers: the dev mod may register its settings after
-            -- its test files have loaded.
-            local hour = spec.hour or settings().hour
-            -- The light lags a clock or grid change by some frames, and the previous test may
-            -- have ended in the dark.
-            if not hour or lit() then
-                start(self, hour)
-            else
-                waitForLight(true)
-                T.step(function() start(self, hour) end)
-            end
-        end,
-        validate = function(entry)
-            local self = entry.state or { undo = {}, missing = { "a run before validate" } }
-            entry.state = nil
-            failures = {}
-            if problem then
-                table.insert(failures, problem)
-            elseif entry.timedOut then
-                -- The runner stopped the test (Runner.lua): what validate reads may never have come.
-                table.insert(failures, entry.timedOut)
-                entry.timedOut = nil
-            elseif #self.missing > 0 then
-                table.insert(failures, "missing " .. table.concat(self.missing, "; "))
-            elseif spec.validate then
-                spec.validate(self)
-                -- The menu and the crafting windows refuse a craft without saying why.
-                if #failures > 0 and self.refusal then
-                    table.insert(failures, "the game refused the craft: " .. self.refusal)
-                end
-            end
-            if spec.cleanup then
-                spec.cleanup(self)
-            end
-            unwinding = true
-            for i = #self.undo, 1, -1 do
-                self.undo[i]()
-            end
-            unwinding = false
-            self.unwound = true
-            active = nil
-            if #failures > 0 then
-                print(PZHarness.run.tag .. " FAIL " .. name .. ": " .. table.concat(failures, "; "))
-                return false
-            end
-            print(PZHarness.run.tag .. " PASS " .. name)
-            return true
-        end,
+        run = function(entry) runEntry(entry, name, spec, problem) end,
+        validate = function(entry) return validateEntry(entry, name, spec, problem) end,
     }
 end
 
@@ -654,17 +700,18 @@ end
 local function freeSquares(self, count, opts)
     local center = squareOf(opts.near)
     local found = {}
-    if not center then return found end
+    if not center or count < 1 then return found end
+    local z = center:getZ()
     for radius = opts.minDistance or 1, SEARCH_RADIUS do
-        for dx = -radius, radius do
-            for dy = -radius, radius do
-                local square = math.max(math.abs(dx), math.abs(dy)) == radius
-                    and getSquare(center:getX() + dx, center:getY() + dy, center:getZ())
-                if #found < count and square and not self.used[square]
-                    and isFreeSquare(square, opts.indoors == true)
-                    and (not opts.bare or square:getObjects():size() == 1) then
-                    self.used[square] = true
-                    table.insert(found, square)
+        for x, y in PZHarness.Fixtures.ring(center:getX(), center:getY(), radius) do
+            local square = getSquare(x, y, z)
+            if square and not self.used[square]
+                and isFreeSquare(square, opts.indoors == true)
+                and (not opts.bare or square:getObjects():size() == 1) then
+                self.used[square] = true
+                table.insert(found, square)
+                if #found == count then
+                    return found
                 end
             end
         end
@@ -997,7 +1044,11 @@ function T.forgetRecipes(player, prefix)
     alsoOnServerOutsideTest("PZHarness.forgetRecipes", { names = names })
 end
 
-local function pickInputItem(possible, prefer)
+--- The script Item the harness gives for `input`, a recipe's InputScript, or nil when it has no
+--- possible item: the first of its possible items listed in `prefer` (full names), else its first
+--- possible item other than a generic Base.Moveable, else its first.
+function T.inputItem(input, prefer)
+    local possible = input:getPossibleInputItems()
     for _, wanted in ipairs(prefer or {}) do
         for j = 0, possible:size() - 1 do
             if possible:get(j):getFullName() == wanted then
@@ -1013,16 +1064,15 @@ local function pickInputItem(possible, prefer)
     return possible:size() > 0 and possible:get(0) or nil
 end
 
---- What one craft of `recipe` takes, tools included, as T.give items: each input gets the first
---- of its possible items listed in `prefer`, else its first possible item other than a generic
---- Base.Moveable; a drainable input that counts uses gets one full item. Also returns the inputs
---- that had no possible item at all.
+--- What one craft of `recipe` takes, tools included, as T.give items: each input gets
+--- T.inputItem's choice; a drainable input that counts uses gets one full item. Also returns the
+--- inputs that had no possible item at all.
 function T.recipeInputs(recipe, prefer)
     local items, unmatched = {}, {}
     local inputs = recipe:getInputs()
     for i = 0, inputs:size() - 1 do
         local input = inputs:get(i)
-        local item = pickInputItem(input:getPossibleInputItems(), prefer)
+        local item = T.inputItem(input, prefer)
         if item then
             local count = input:getIntAmount()
             if item:isItemType(ItemType.DRAINABLE) and not input:isItemCount() then

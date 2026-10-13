@@ -24,12 +24,38 @@ game's own Java has none); `PZ_APP` names another game `Contents` folder.
 
 Console lines, in `<cache>/console.txt`: `<TAG> START <n>`, `TEST: <name>`, `<TAG> PASS <name>`,
 `<TAG> FAIL <name>: <reasons>`, `<TAG> SKIP <name>: <why>` for each test that opted out of this
-mode, `<TAG> TIME <s> s, <n> frames`, `<TAG> DONE passed=<n> failed=<n> skipped=<n>`; with
+mode, each of those three ending with the test's wall time, `(<s> s)`; then `<TAG> SLOWEST` lines,
+`<TAG> TIME <s> s, <n> frames`, `<TAG> DONE passed=<n> failed=<n> skipped=<n>`; with
 `--stay` also `<TAG> RUN <id>` and `<TAG> IDLE ...`. With `--mp` the server's log
 (`<server cache>/server-console.txt`) gets `<TAG> SERVER FAIL <test>: <error>` for a handler or
 undo that failed, and `<TAG> RUN <id>` for a rerun. The script prints every line with the run's
 mark and both logs' paths, and exits 0 only if the run finished, at least one test passed, nothing
 failed and no Lua error was logged on either side.
+
+## Where the time goes
+
+The `<TAG> SLOWEST <s> s <name>` lines name the slowest tests, slowest first, and in multiplayer
+how long each had a server answer outstanding (`(server <s> s)`). The last `SLOWEST` line splits
+the run into the time in tests and the time between them: the runner waiting for the character's
+square to load again after a test that went far, and in multiplayer for the server's resets and
+undos. In multiplayer it adds how much of both had a server answer outstanding.
+
+On exit, `run-client.sh` and `validate-server.sh` print a `timing: <phase> <s> s (<what>)` line
+per phase, each from the end of the one before, then `timing: total`. The clock starts once the
+script holds the game lock, so a wait for another script's game doesn't count. The phases are
+`setup` (to the game's launch; in a kept game, to the rerun request), `boot` (to the harness's
+Lua), `world` (to the world loaded around the character), `start` (to the first test), `run` (to
+the last result), `quit` (to the game's exit, and with `--mp` to the server's after it saves), and
+with a fresh `--mp` server `server` (its launch to ready, beside the client's boot). A run a Lua
+error stopped has `stopped` (to the poll that saw the error) in place of `run` and no `quit`.
+`validate-server.sh` has `setup`, `boot` and `quit` for its server. A phase the run never reached
+is left out. The script reads the milestones off the console as it polls it, so they are good to
+about half a second.
+
+Each run also appends one line to `dev/.runs.log` in the mod's repository, which the mod should
+gitignore: the date, `mode=` (`test`, `test-mp`, a mode's name, `validate`; `-rerun` for a run in
+a kept game), `selection=` (`TESTS`, the mode's selection, or `all`), the counts of the `DONE`
+line, `exit=` (the script's exit status), each phase as `<phase>=<s>`, and `total=`.
 
 ## Why it is fast, and what that costs
 
@@ -57,7 +83,7 @@ failed and no Lua error was logged on either side.
   server handlers reload safely; a change to anything else in the dev mod, to the harness mod, or
   to the published mod restarts the game. What earlier runs left in the kept world stays there, so
   finish with a plain `--test`. The kept game shows and logs `<TAG> IDLE`, draws 24 frames a second
-  while it waits, and quits after 10 minutes without a run or when another run needs the game.
+  while it waits, and quits after 30 minutes without a run or when another run needs the game.
 - Early stop. In debug mode a Lua error stops the game in its error handler, so it never quits on
   its own. A Lua stack trace through any of the three mods, or any Lua failure once the harness
   has started, ends the run at once and prints the trace. An exception the game logs and goes on

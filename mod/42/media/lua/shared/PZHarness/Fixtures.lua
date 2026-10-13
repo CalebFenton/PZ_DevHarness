@@ -161,16 +161,42 @@ function Fixtures.vehicleById(id, near)
         return nil
     end
     local vehicle = getVehicleById(id)
+    if vehicle or not near then
+        return vehicle
+    end
     for dx = -VEHICLE_SEARCH, VEHICLE_SEARCH do
         for dy = -VEHICLE_SEARCH, VEHICLE_SEARCH do
-            local square = not vehicle and near and getSquare(near.x + dx, near.y + dy, near.z)
+            local square = getSquare(near.x + dx, near.y + dy, near.z)
             local found = square and square:getVehicleContainer()
             if found and found:getId() == id then
-                vehicle = found
+                return found
             end
         end
     end
-    return vehicle
+    return nil
+end
+
+--- Iterates over every square at Chebyshev distance exactly `r` from (x, y), each once, as
+--- `for sx, sy in Fixtures.ring(x, y, r) do`; (x, y) itself when `r` is 0. Rings of growing `r`
+--- make a nearest-first search that skips the squares smaller rings already tried.
+function Fixtures.ring(x, y, r)
+    -- Column by column from the west, each north to south: the edge columns whole, the ones
+    -- between only their two ends.
+    local dx, dy = -r, -r - 1
+    return function()
+        if math.abs(dx) == r and dy < r then
+            dy = dy + 1
+        elseif dy < r then
+            dy = r
+        else
+            dx = dx + 1
+            if dx > r then
+                return nil
+            end
+            dy = -r
+        end
+        return x + dx, y + dy
+    end
 end
 
 --- Turns `car` and `trailer` square to `facing` ("N", "E", "S" or "W") and moves the trailer so its

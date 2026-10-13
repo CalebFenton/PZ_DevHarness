@@ -10,7 +10,7 @@ How a mod takes the harness on, what it tells the harness about itself, and the 
 | `bin/validate-server.sh` | Boots a throwaway dedicated server with the mod and fails on anything the mod logs. |
 | `lib/harness.sh` | Paths, JVM arguments, the game lock, `install_mod`, `compile_java`, and the dedicated server both scripts start (`prepare_server`, `start_server`, `stop_server`, `server_problems`). A mod's own dev scripts may source it. |
 | `java/ClickToStart.java` | Starts the client, presses "Click to start" on the loading screen and gives the asset loader more threads. |
-| `mod/42/` | The harness mod (`cf_test_harness`): `client/PZHarness/Runner.lua`, `TestLib.lua` and `ServerCalls.lua`; `server/PZHarness/ServerHandlers.lua`, the server's half of the tests' server channel, and `ServerFixtures.lua`, the server's half of the two-sided fixtures; `shared/PZHarness/Fixtures.lua`, what both halves do. |
+| `mod/42/` | The harness mod (`cf_test_harness`): `client/PZHarness/Runner.lua`, `TestLib.lua` and `ServerCalls.lua`; `server/PZHarness/ServerHandlers.lua`, the server's half of the tests' server channel, and `ServerFixtures.lua`, the server's half of the two-sided fixtures; `shared/PZHarness/Fixtures.lua`, what both halves do, and `Checks.lua`, expectations for server handlers. |
 
 ## Adopting it
 
@@ -130,18 +130,34 @@ PZHarness.serverHandler("placeThing", function(player, args, defer)
 end)
 ```
 
+A handler that checks many things on the server collects what it found wrong with
+`PZHarness.Checks.new()`, from `PZHarness/Checks.lua`, and answers with the list for the test to
+report. It returns `expect, expectNear, failures`: `expect` and `expectNear` work as the test
+library's do, and fill `failures`:
+
+```lua
+require "PZHarness/Checks"
+
+PZHarness.serverHandler("thingsStocked", function()
+    local expect, expectNear, failures = PZHarness.Checks.new()
+    expect(MyMod.stock ~= nil, "no stock table")
+    expectNear("the stock's weight", MyMod.stockWeight(), 2.5)
+    return { failures = failures }
+end)
+```
+
 ## The test library
 
 `PZHarness.Test`, from `PZHarness/TestLib.lua`:
 
-- Registering: `test(name, spec)`, `craftTest(name, spec)`. `spec.spOnly` or `spec.mpOnly`, a reason string, keeps a test out of the other mode. A test still busy after 30 seconds of real time fails with what it was waiting on (the queued action's type, or which server answer or wait; `waitUntil(condition, maxFrames, what)` names a wait), its queue is cleared, its undos run and the next test starts; `spec.timeoutSeconds` raises the limit for a test that is slow on purpose.
+- Registering: `test(name, spec)`, `craftTest(name, spec)`. `spec.spOnly` or `spec.mpOnly`, a reason string, keeps a test out of the other mode. A test still busy after 30 seconds of real time fails with what it was waiting on (the queued action's type, or which server answer or wait; `waitUntil(condition, maxFrames, what)` names a wait), its queue is cleared, its undos run and the next test starts; `spec.timeoutSeconds` raises the limit for a test that is slow on purpose. A test whose starting square still hasn't loaded, some seconds after the test before it took the character far away, fails without running, and the next one waits for the square again.
 - Expectations: `expect`, `expectNear`, `need`. Once a test misses something, its later queued steps and waits don't run.
 - Restore stack, two-sided (see [two-sided fixtures](multiplayer.md#two-sided-fixtures)): `defer`, `onTick`, `setTime`, `setPerk`, `setSandbox`, `setMultiplier`, `setGrid`, `makeDark`, `changeItem`; `spec.instant` and the `perks` setting too.
 - Queue: `wait`, `waitUntil`, `step`. What a step queues runs right after it, in order (vanilla's adding-actions mode), and a clear of the queue inside it (`luautils.walkAdj`) drops only that.
 - The server: `server(self, name, args)` calls the dev mod's handler `name` and leaves its answer in `self.server[name]`; `serverUntil(self, name, args, done, maxMs)` calls it until `done(reply)`; `give(self, name, items)`; `count(self, name, types, opts)`.
 - Squares and fixtures: `squares`, `track`; placed by the server: `placeTile`, `placeBench`, `placeVehicle`; placed and picked up by the character, as a player does with the moveables cursor: `placeAsPlayer(self, square, itemType, sprite, modData)` (a handle `{ x, y, z, square }`, `object` once this client has it, removed when the test ends) and `pickUpAsPlayer(self, handleOrSquare, sprite)`; this game only: `tile`, `placeMoveable`, `bench`, `vehicle`; `lineUpTrailer`.
-- Crafting: `recipeNames`, `learnRecipes`, `forgetRecipes`, `recipeInputs`, `addRecipeInputs` (this game only), `placeWorkTable`, `craftRefusal`, `startCraft`. Any test that starts a craft with `startCraft` and fails also reports why the game refused it, so a mod's own craft tests get that without `craftTest`.
-- Lookups: `player`, `objectWithSprite`, `countPairs`; `PZHarness.Fixtures` has these and `vehicleById` for server handlers too, and `teleportToMiddle(player, x, y, z)`: `teleportTo` alone leaves the character on the square's north-west corner, from where vanilla's `walkAdj` takes a square two to the north or west as in reach, walks nowhere, and an action that needs the square adjacent stops.
+- Crafting: `recipeNames`, `learnRecipes`, `forgetRecipes`, `recipeInputs`, `addRecipeInputs` (this game only), `inputItem(input, prefer)`, `placeWorkTable`, `craftRefusal`, `startCraft`. `inputItem` is the script item `recipeInputs` picks for one of a recipe's inputs: the first of its possible items named in `prefer`, else the first that isn't a generic `Base.Moveable`. Any test that starts a craft with `startCraft` and fails also reports why the game refused it, so a mod's own craft tests get that without `craftTest`.
+- Lookups: `player`, `objectWithSprite`, `countPairs`; `PZHarness.Fixtures` has these and `vehicleById` for server handlers too, `ring(x, y, r)`, which iterates (`for sx, sy in ...`) over the squares at exactly `r` squares from x, y, each once, for a search that widens ring by ring from the nearest, and `teleportToMiddle(player, x, y, z)`: `teleportTo` alone leaves the character on the square's north-west corner, from where vanilla's `walkAdj` takes a square two to the north or west as in reach, walks nowhere, and an action that needs the square adjacent stops.
 
 ## Capture settings
 

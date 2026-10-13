@@ -15,6 +15,9 @@ local ANSWER_MS = 15000
 -- Unanswered requests by id: { onAnswer, sentMs }.
 local pending = {}
 local lastId = 0
+-- Real milliseconds with at least one request unanswered, up to the last time none was, and since
+-- when one has been unanswered now; overlapping requests count once.
+local waitedMs, waitingSinceMs = 0, nil
 
 -- Failures that arrive after their test's verdict, such as a server undo that failed; the runner
 -- counts them.
@@ -31,6 +34,9 @@ function ServerCalls.send(kind, request, onAnswer)
         onAnswer(PZHarness.ServerHandlers.handle(player, kind, request))
         return
     end
+    if not ServerCalls.busy() then
+        waitingSinceMs = getTimestampMs()
+    end
     pending[lastId] = { onAnswer = onAnswer, sentMs = getTimestampMs() }
     sendClientCommand(player, MODULE, kind, request)
 end
@@ -41,6 +47,12 @@ function ServerCalls.busy()
         return true
     end
     return false
+end
+
+--- Real milliseconds so far that some request was waiting for its answer, for the runner's summary
+--- of where a run's time went. Always 0 in single player, which answers at once.
+function ServerCalls.waitedMs()
+    return waitedMs + (waitingSinceMs and getTimestampMs() - waitingSinceMs or 0)
 end
 
 --- Calls the server handler `name` for something outside any one test, such as the runner's reset
@@ -61,6 +73,10 @@ end
 local function answered(id, answer)
     local entry = pending[id]
     pending[id] = nil
+    if entry and not ServerCalls.busy() then
+        waitedMs = waitedMs + getTimestampMs() - waitingSinceMs
+        waitingSinceMs = nil
+    end
     if entry then
         entry.onAnswer(answer)
     end
@@ -72,7 +88,12 @@ Events.OnServerCommand.Add(function(module, command, args)
     end
 end)
 
+-- Runs every frame of the whole game, nearly always with nothing pending, so it returns before
+-- allocating anything then.
 Events.OnTick.Add(function()
+    if not ServerCalls.busy() then
+        return
+    end
     local now, lost = getTimestampMs(), {}
     for id, entry in pairs(pending) do
         if now - entry.sentMs > ANSWER_MS then
