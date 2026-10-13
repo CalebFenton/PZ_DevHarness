@@ -2,10 +2,6 @@
 
 In-game tests for Project Zomboid Build 42 mods, unattended, in single player and multiplayer, and fast enough that you'll run them after every change instead of promising yourself you'll run them before release.
 
-**Status**: Active
-**Owner**: Caleb Fenton
-**Issues**: [GitHub issues](https://github.com/CalebFenton/PZ_DevHarness/issues)
-
 [PZ_HearingAid](https://github.com/CalebFenton/PZ_HearingAid) and PZ_RenewableEnergy use it as a git submodule at `dev/harness`.
 
 ## Quick start
@@ -65,9 +61,9 @@ The vanilla debug-menu runner is fine for watching one test. The following table
 
 The results on real suites: Hearing Aid's 28 tests took 105 seconds with the vanilla runner's pauses and full-length actions, and take under 4 seconds on the harness. Renewable Energy runs 161 tests in 36 seconds in single player and 91 seconds in multiplayer, where a cold start adds about 44 seconds for the server to boot, the client to join and the server to save and exit.
 
-## Why you can trust a green run
+## What keeps runs repeatable
 
-Speed is only useful if a pass means the mod works. Several harness behaviors exist to keep runs repeatable:
+A fast run is only worth having if the same tests give the same result every time. Several harness behaviors take run-to-run noise out of the game, so a failure comes from the mod or the test:
 
 - Every cold run starts a new world with no zombies, since the server's sandbox sets `Zombies = 6`, the "None" setting. The survivor gets teleported, stripped, healed and re-skilled 161 times in 36 seconds without one undead interruption.
 - Tests wait on the condition they need with `waitUntil`, never for a fixed number of frames, so an uncapped frame rate changes how long a run takes, not what it checks.

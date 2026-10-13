@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Starts the game client in debug mode (no Steam) with its own cache dir, the mod, its dev mod and
-# the harness mod enabled. A mod's dev/run-debug-client.sh runs this; README.md describes the
-# modes, the environment variables and dev/harness.conf.
+# the harness mod enabled. A mod's dev/run-debug-client.sh runs this; docs/running.md describes the
+# modes and the environment variables, and docs/adopting.md dev/harness.conf.
 #
 #   (no flag)        play by hand: the main menu, with the mod's debug scenario under Scenarios
 #                    and its tests in the debug menu's timed action tests

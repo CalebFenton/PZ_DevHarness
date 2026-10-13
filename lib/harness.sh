@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Sourced by the harness scripts and by a mod's own dev scripts. The harness sits in the mod's
-# repository at dev/harness, and the mod describes itself in dev/harness.conf (see README.md).
+# repository at dev/harness, and the mod describes itself in dev/harness.conf (see docs/adopting.md).
 # PZ_APP overrides the game's Contents folder, and CACHE the cache dir that the calling script
 # defaults to.
 

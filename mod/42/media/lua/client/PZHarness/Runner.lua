@@ -3,7 +3,7 @@
 -- selection (TESTS prefixes, or the mod's own for its modes), whether to stay, whether the client
 -- joins a dedicated server (--mp), the console mark of the mode and the tests' console tag.
 --
--- The dev mod calls PZHarness.register (see README.md). In a mode, the mod's debug scenario then
+-- The dev mod calls PZHarness.register (see docs/adopting.md). In a mode, the mod's debug scenario then
 -- starts from the main menu (with -debug and DebugScenario.ForceLaunch=true in debug-options.ini);
 -- once the world around the character has loaded, the runner runs the mod's tests ("test") or the
 -- mod's handler for the mode, prints "<mark> DONE" and quits. With --test --stay the game stays
