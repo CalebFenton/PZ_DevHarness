@@ -95,6 +95,15 @@ function Fixtures.setInstant(player, on)
     return function() player:setTimedActionInstantCheat(saved) end
 end
 
+--- Vanilla's mechanics cheat on or off: installing and uninstalling a vehicle part then takes one
+--- tick and never stops as invalid (ISInstallVehiclePart, ISUninstallVehiclePart). Nothing else
+--- of vanilla's but removing a burnt vehicle reads it.
+function Fixtures.setMechanicsCheat(player, on)
+    local saved = player:isMechanicsCheat()
+    player:setMechanicsCheat(on)
+    return function() player:setMechanicsCheat(saved) end
+end
+
 --- Every perk's level, by perk id, for Fixtures.setPerkLevels.
 function Fixtures.perkLevels(player)
     local levels = {}

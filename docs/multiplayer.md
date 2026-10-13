@@ -63,11 +63,11 @@ The runner skips it in the other mode and prints `<TAG> SKIP <name>: single play
 The library's fixtures act on both copies, so a test written once runs in both modes and single
 player behaves as before:
 
-- Setters (`setSandbox`, `setTime`, `setMultiplier`, `setGrid`, `setPerk`, `changeItem`, the
-  test's `instant` and `perks`) change this game's copy at once; on a multiplayer client they also
-  send the change to the server (handlers named `PZHarness.*` in `ServerFixtures.lua`) at once and
-  queue a wait for its answer, so actions queued after them start once the server has it. The
-  server undoes it when the test ends. A dev mod's server Lua sets
+- Setters (`setSandbox`, `setTime`, `setMultiplier`, `setGrid`, `setPerk`, `setMechanicsCheat`,
+  `changeItem`, the test's `instant` and `perks`) change this game's copy at once; on a multiplayer
+  client they also send the change to the server (handlers named `PZHarness.*` in
+  `ServerFixtures.lua`) at once and queue a wait for its answer, so actions queued after them start
+  once the server has it. The server undoes it when the test ends. A dev mod's server Lua sets
   `PZHarness.serverSettings.sandboxChanged` for what the client's `tests.sandboxChanged` does.
   A client lights its squares with the daylight the server sends it, which the server does only
   every ten game minutes, so the server's `setTime` (and its undo) makes its next climate tick

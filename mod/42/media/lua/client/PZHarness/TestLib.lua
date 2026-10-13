@@ -531,6 +531,17 @@ function T.setMultiplier(self, multiplier)
     alsoOnServer(self, "PZHarness.setMultiplier", { multiplier = multiplier })
 end
 
+--- Vanilla's mechanics cheat on or off for the character, on both sides (Fixtures.setMechanicsCheat).
+--- A multiplayer server times a vehicle part's install and uninstall in real time, and the instant
+--- cheat can't shorten them there: an instant action on a client checks isValid again once the
+--- server has moved the part, fails, and empties the action queue. The mechanics cheat skips that
+--- check, so a test turns it on around the action, after reading canInstallPart and
+--- canUninstallPart itself.
+function T.setMechanicsCheat(self, on)
+    T.defer(self, PZHarness.Fixtures.setMechanicsCheat(T.player(), on))
+    alsoOnServer(self, "PZHarness.setMechanicsCheat", { on = on })
+end
+
 -- In multiplayer a generator taken away while this client's copy of its square holds a different
 -- list of objects (a test's own objects come and go fast) keeps its squares powered here: the
 -- switch-off names it by its place on the square and misses, and the chunks drop a generator's
@@ -923,15 +934,25 @@ local function waitOnClient(condition)
     end, math.huge)
 end
 
+--- Puts the character in the middle of the free square next to `square` that vanilla's walkAdj
+--- would walk it to (AdjacentFreeTileFinder.Find), or of its own square if there is none, so the
+--- walk that a menu option or an action queues before its job has no way to go. Walking takes
+--- real time, which neither the instant cheat nor the frame rate shortens.
+function T.standNextTo(square)
+    local p = T.player()
+    local adjacent = AdjacentFreeTileFinder.Find(luautils.getCorrectSquareForWall(p, square), p)
+    local at = adjacent or p:getCurrentSquare()
+    PZHarness.Fixtures.teleportToMiddle(p, at:getX(), at:getY(), at:getZ())
+end
+
 -- Queues the moveables action `mode` ("place" or "pickup") of `sprite` on `square` the way the
 -- moveables cursor does (ISMoveableCursor.create): the character walks next to the square and the
 -- action does the job, in multiplayer in its complete() on the server. The character first stands
--- in the middle of its square (Fixtures.teleportToMiddle), as vanilla's walkAdj misjudges the reach
--- from a square's edge. Returns false if the character can't get there.
+-- next to the square (T.standNextTo), in the middle of a square, as vanilla's walkAdj misjudges the
+-- reach from a square's edge. Returns false if the character can't get there.
 local function moveablesAction(square, mode, sprite, item, object)
     local p = T.player()
-    local here = p:getCurrentSquare()
-    PZHarness.Fixtures.teleportToMiddle(p, here:getX(), here:getY(), here:getZ())
+    T.standNextTo(square)
     local props = object and ISMoveableSpriteProps.fromObject(object) or ISMoveableSpriteProps.new(sprite)
     if not props:walkToAndEquip(p, square, mode, sprite) then
         return false

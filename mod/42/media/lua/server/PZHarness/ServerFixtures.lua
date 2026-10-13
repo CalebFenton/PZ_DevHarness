@@ -218,6 +218,11 @@ handler("PZHarness.setInstant", function(player, args, defer)
     return {}
 end)
 
+handler("PZHarness.setMechanicsCheat", function(player, args, defer)
+    defer(Fixtures.setMechanicsCheat(player, args.on))
+    return {}
+end)
+
 -- The levels the client had, without undo: the runner's restore of the `perks` setting, and the
 -- scenario's setup reaching the server.
 handler("PZHarness.setPerkLevels", function(player, args)
