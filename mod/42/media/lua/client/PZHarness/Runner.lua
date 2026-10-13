@@ -26,6 +26,8 @@ local REQUEST_POLL_TICKS = 15
 local STAY_IDLE_MS = 10 * 60 * 1000
 -- While --stay waits, the game draws only this many frames a second, so it doesn't keep a core busy.
 local IDLE_FPS = 24
+-- The highest uiRenderFPS the option takes (Core.optionUiRenderFps).
+local FAST_UI_FPS = 120
 
 -- The run run-client.sh asked for. Without the file, as in a game the script didn't start, there
 -- is no mode and the tests print under a generic tag.
@@ -261,10 +263,39 @@ local function quit()
     getCore():quitToDesktop()
 end
 
+-- The player's uiRenderFPS while fastUI holds. done() puts it back before the game quits, which
+-- saves the options, so options.ini never keeps the mode's rate.
+local savedUIFps
+
 -- What a mode handler calls when it is done.
 local function done()
+    if savedUIFps then
+        getCore():setOptionUIRenderFPS(savedUIFps)
+        savedUIFps = nil
+    end
     print(run.mark .. " DONE")
     quit()
+end
+
+-- A clear, still day at once: no cloud, fog or rain however the weather turns during the run.
+-- Stopping the weather alone leaves its fog to fade out over seconds; the admin values hold until
+-- switched off.
+local function clearWeather()
+    local climate = getClimateManager()
+    climate:stopWeatherAndThunder()
+    for _, id in ipairs({ ClimateManager.FLOAT_CLOUD_INTENSITY, ClimateManager.FLOAT_FOG_INTENSITY,
+        ClimateManager.FLOAT_PRECIPITATION_INTENSITY }) do
+        local float = climate:getClimateFloat(id)
+        float:setEnableAdmin(true)
+        float:setAdminValue(0)
+    end
+end
+
+-- The UI draws at its own rate (Core.StartFrameUI) and the frames in between show its last
+-- drawing, so a mode that waits for the UI to draw waits less at the highest rate.
+local function fastUI()
+    savedUIFps = getCore():getOptionUIRenderFPS()
+    getCore():setOptionUIRenderFPS(FAST_UI_FPS)
 end
 
 local function worldLoaded()
@@ -309,15 +340,23 @@ local function startMode()
         quit()
         return
     end
+    if mode.clearWeather then
+        clearWeather()
+    end
+    if mode.fastUI then
+        fastUI()
+    end
     mode.run(run.selection, done)
 end
 
 --- Called once by the dev mod, at load. `config`:
 --- - `scenario`: the key of the mod's scenario in `debugScenarios`, which every mode starts.
 --- - `prefix`: the name prefix of the mod's tests in TimedActionTests; --test runs those.
---- - `modes`: the mod's other modes by name, each `{ run = function(selection, done), uncapped }`.
----   `run` is called once the world has loaded, with the selection run-client.sh passed, and
----   calls `done()` when it has finished. `uncapped` draws as many frames as the machine can.
+--- - `modes`: the mod's other modes by name, each `{ run = function(selection, done), uncapped,
+---   clearWeather, fastUI }`. `run` is called once the world has loaded, with the selection
+---   run-client.sh passed, and calls `done()` when it has finished. `uncapped` draws as many
+---   frames as the machine can; `clearWeather` clears the sky at once and keeps it clear; `fastUI`
+---   draws the UI at its highest rate until `done()`, which puts the option back.
 --- - `onStart(mode)`: optional, called after the scenario's own onStart in every mode.
 --- - `tests`: settings of the test library, see PZHarness/TestLib.lua.
 function PZHarness.register(config)

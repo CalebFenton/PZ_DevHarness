@@ -87,9 +87,10 @@ PZHarness.register({
     prefix = "mymod_",            -- --test runs the TimedActionTests whose names start with it
     modes = {
         -- run(selection, done) starts once the world around the character has loaded and
-        -- calls done() when finished; done prints "<mark> DONE" and quits. uncapped draws as
-        -- many frames as the machine can.
-        shots = { uncapped = true, run = function(selection, done) Shots.capture(selection, done) end },
+        -- calls done() when finished; done prints "<mark> DONE" and quits. The flags are optional;
+        -- see "Capture settings".
+        shots = { uncapped = true, clearWeather = true, fastUI = true,
+            run = function(selection, done) Shots.capture(selection, done) end },
     },
     onStart = function(mode) end, -- optional, after the scenario's own onStart in every mode
     tests = {                     -- the test library's settings, all optional
@@ -130,6 +131,24 @@ the restore stack and the rules that keep each test independent of the ones befo
 - Crafting: `recipeNames`, `learnRecipes`, `forgetRecipes`, `addRecipeInputs`, `placeWorkTable`, `craftRefusal`, `startCraft`. Any test that starts a craft with `startCraft` and fails also reports why the game refused it, so a mod's own craft tests get that without `craftTest`.
 - Lookups: `player`, `objectWithSprite`, `countPairs`.
 
+## Capture settings
+
+Flags of a registered mode, for modes that take screenshots. They take effect just before `run`;
+`done()` puts the UI rate back before the game quits and saves its options, so `options.ini`
+never keeps it.
+
+| Flag | What it does |
+| --- | --- |
+| `uncapped` | Draws as many frames as the machine can, as `--test` does; see below. |
+| `clearWeather` | No cloud, fog or rain, at once and however the weather turns during the run: it stops the weather and sets the admin values of the climate's cloud, fog and precipitation floats to 0. Stopping the weather alone leaves fog to fade out over seconds. |
+| `fastUI` | Draws the UI 120 times a second, the `uiRenderFPS` option's highest. The UI draws at its own rate and the frames in between show its last drawing, so a step that waits for the UI to draw (`Events.OnPostUIDraw`) waits less. |
+
+The lighting rate stays the player's (`lightFPS`, 15 by default). `setLightingFPS` takes up to
+120. At 60, with its lighting waits counted in passes, a screenshot run that waits on the lighting
+at seven spots took 13 seconds instead of 19, but its shots changed: a clock change had less time
+to darken the scene before the shot. At 120 the thread fell behind, and a sweep held for passes of
+that rate left squares dark.
+
 ## Running
 
 `dev/run-debug-client.sh`:
@@ -168,6 +187,8 @@ run's mark and exits 0 only if the run finished, nothing failed and no Lua error
   up to 12 (the cores less 4), which cuts that wait to about 2 seconds.
 - Settling by loaded chunks. A run starts once one square in every chunk 40 squares around the
   character has loaded, not after a fixed delay.
+- Fast UI in captures. A mode registered `fastUI` draws the UI at its highest rate, so its steps
+  that wait for the UI to draw wait less.
 - `--test --stay`. Starting and quitting the game costs about 21 seconds. A kept game reruns the
   tests in a second or two plus their own time: the runner unregisters the mod's tests, runs
   `RELOAD_FILES` again with `reloadLuaFile` and reruns. `reloadLuaFile` ignores a file's
