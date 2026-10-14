@@ -334,7 +334,7 @@ end
 -- Between two tests, and after the last: the runner's reset of the character, then the leak check
 -- (PZHarness/Leaks.lua), which compares the world with how it was before the test that just ended,
 -- then that test's verdict. Returns true once all of it is done. A check whose square never loaded
--- is skipped.
+-- finds nothing and starts the baselines over.
 local function checkBetweenTests(state)
     if state.checkedFor == state.index then
         return true
@@ -343,7 +343,7 @@ local function checkBetweenTests(state)
         -- Before the snapshot, so what the reset takes away doesn't count as left behind.
         PZHarness.Fixtures.resetCharacter(state.player)
         refreshInventoryWindows()
-        if state.leaks == "off" or not state.player:getCurrentSquare() then
+        if state.leaks == "off" then
             settleVerdict(state, nil)
             state.checkedFor = state.index
             return true
@@ -357,6 +357,9 @@ local function checkBetweenTests(state)
     end
     state.check = nil
     state.leakMs = state.leakMs + getTimestampMs() - state.checkStartMs
+    if found.waitedFull then
+        state.leakWaitedFull = state.leakWaitedFull + 1
+    end
     settleVerdict(state, found)
     state.checkedFor = state.index
     return true
@@ -411,8 +414,8 @@ local function printSlowest(state)
     local summary = string.format("%s SLOWEST %.1f s in tests, %.1f s between them (%.1f s of it checking for leaks)",
         run.tag, inTests, state.gapMs / 1000, state.leakMs / 1000)
     if isClient() then
-        summary = summary .. string.format(", %.1f s of it all waiting on the server",
-            (PZHarness.ServerCalls.waitedMs() - state.serverStartMs) / 1000)
+        summary = summary .. string.format(", %.1f s of it all waiting on the server; %d leak checks waited the full time for this client to catch up",
+            (PZHarness.ServerCalls.waitedMs() - state.serverStartMs) / 1000, state.leakWaitedFull)
     end
     print(summary)
 end
@@ -520,9 +523,10 @@ local function runTests(onDone)
         passed = 0, failed = #unmatched, index = 0, ticks = 0, startedMs = startedMs, doneMs = startedMs,
         lateFailures = PZHarness.ServerCalls.lateFailures,
         -- For the summary: each test's { name, seconds, serverSeconds }, the time between tests and
-        -- the part of it the leak checks took, the server waits so far, which a kept game's
+        -- the part of it the leak checks took, the checks that waited the full time for this
+        -- client to catch up with the server, the server waits so far, which a kept game's
         -- earlier runs add to, and each test's passes and failures over the rounds.
-        times = {}, gapMs = 0, leakMs = 0, serverStartMs = PZHarness.ServerCalls.waitedMs(), tally = {},
+        times = {}, gapMs = 0, leakMs = 0, leakWaitedFull = 0, serverStartMs = PZHarness.ServerCalls.waitedMs(), tally = {},
         current = nil, name = nil, player = nil, start = nil, wasCheat = nil, resetFor = nil,
         testStartMs = nil, testServerMs = nil,
         -- The verdict waiting for the leak check, the check under way, and the test index it ran
@@ -892,8 +896,32 @@ if run.mp then
     Events.OnGameStart.Add(startMultiplayer)
 end
 
+-- Every world started from the mod's scenario, by hand too, records the three mods, which
+-- DebugScenarios doesn't do for the new save (see MainScreen.resetLuaIfNeeded), and has no
+-- zombies, so nothing attacks the character. A --test world is quiet too: the options
+-- run-client.sh lists in `quiet` (QUIET_WORLD in lib/harness.sh). All of it goes in before the
+-- new world is made, and the scenario's own setSandbox after it, so the mod's settings win.
+local function wrapSetSandbox(scenario, quiet)
+    local originalSetSandbox = scenario.setSandbox
+    scenario.setSandbox = function()
+        ActiveMods.getById("currentGame"):copyFrom(ActiveMods.getById("default"))
+        SandboxVars.Zombies = 6 -- none
+        for key, value in string.gmatch(quiet, "([%w_]+)=([^,]+)") do
+            if value == "true" or value == "false" then
+                SandboxVars[key] = value == "true"
+            else
+                SandboxVars[key] = tonumber(value) or value
+            end
+        end
+        if originalSetSandbox then
+            originalSetSandbox()
+        end
+    end
+end
+
 --- Called once by the dev mod, at load. `config`:
---- - `scenario`: the key of the mod's scenario in `debugScenarios`, which every mode starts.
+--- - `scenario`: the key of the mod's scenario in `debugScenarios`, which every mode starts. Its
+---   world gets the active mods and no zombies from the harness.
 --- - `prefix`: the name prefix of the mod's tests in TimedActionTests; --test runs those.
 --- - `modes`: the mod's other modes by name, each `{ run = function(selection, done), uncapped,
 ---   clearWeather, fastUI }`. `run` is called once the world has loaded, with the selection
@@ -912,7 +940,9 @@ function PZHarness.register(config)
         onStart = config.onStart,
         tests = config.tests or {},
     }
+    local scenario = debugScenarios[config.scenario]
     if run.mode == "" then
+        wrapSetSandbox(scenario, "")
         return
     end
     -- run-client.sh times the game's boot up to the first of these; --mp prints one again after
@@ -937,28 +967,8 @@ function PZHarness.register(config)
         return
     end
 
-    local scenario = debugScenarios[config.scenario]
     scenario.forceLaunch = true
-
-    -- A --test world is quiet: the options run-client.sh lists (QUIET_WORLD in lib/harness.sh)
-    -- go in before the new world is made, and the scenario's own setSandbox after them, so the
-    -- mod's settings win.
-    local quiet = run.mode == "test" and run.quiet or ""
-    if quiet ~= "" then
-        local originalSetSandbox = scenario.setSandbox
-        scenario.setSandbox = function()
-            for key, value in string.gmatch(quiet, "([%w_]+)=([^,]+)") do
-                if value == "true" or value == "false" then
-                    SandboxVars[key] = value == "true"
-                else
-                    SandboxVars[key] = tonumber(value) or value
-                end
-            end
-            if originalSetSandbox then
-                originalSetSandbox()
-            end
-        end
-    end
+    wrapSetSandbox(scenario, run.mode == "test" and run.quiet or "")
 
     local originalOnStart = scenario.onStart
     scenario.onStart = function()

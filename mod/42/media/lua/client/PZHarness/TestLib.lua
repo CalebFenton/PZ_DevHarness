@@ -1027,7 +1027,8 @@ end
 -- The server hands a new vehicle the id it freed last (VehicleIDMap keeps freed ids on a stack),
 -- often the one the previous test's undo just removed, and a client that hasn't taken that
 -- removal yet still finds the old copy under the id, which then never updates. A copy found for
--- one handle is never taken for another.
+-- one handle is never taken for another. Kahlua has no weak tables, so T.placeVehicle drops the
+-- copies this client has removed, which nothing can find again.
 local foundVehicles = {}
 -- How long a multiplayer client waits after its copy of a new vehicle arrives, for the server's
 -- second full update of it (see T.placeVehicle): three of the server's 100 ms send cycles.
@@ -1042,6 +1043,15 @@ local VEHICLE_SETTLE_MS = 300
 --- and after a queued wait handle.vehicle is this client's copy.
 function T.placeVehicle(self, script, opts)
     opts = opts or {}
+    local removed = {}
+    for vehicle in pairs(foundVehicles) do
+        if vehicle:isRemovedFromWorld() then
+            table.insert(removed, vehicle)
+        end
+    end
+    for _, vehicle in ipairs(removed) do
+        foundVehicles[vehicle] = nil
+    end
     local squares = {}
     for _, square in ipairs(vehicleSquares(self, opts)) do
         table.insert(squares, { x = square:getX(), y = square:getY(), z = square:getZ() })
@@ -1171,10 +1181,17 @@ end
 --- to the character, with no wall in between, unless one is there already
 --- (PZHarness.Fixtures.placeWorkTable). Not undone: scenarios call it too, and a table left
 --- standing harms no later test. In multiplayer the server places it, since one placed here would
---- exist on this client only, and a queued wait lasts until this client has it.
+--- exist on this client only, and a queued wait lasts until this client has it. Without a free
+--- square it prints a FAIL line of its own, as a failed server call outside a test does.
 function T.placeWorkTable(player)
+    if PZHarness.Fixtures.workTableNear(player) then
+        return
+    end
     if not isClient() then
-        assert(PZHarness.Fixtures.placeWorkTable(player), "PZHarness: no free square next to the character for a table")
+        if not PZHarness.Fixtures.placeWorkTable(player) then
+            print(PZHarness.run.tag .. " FAIL PZHarness.workTable: no free square next to the character for a work table")
+            PZHarness.ServerCalls.lateFailures = PZHarness.ServerCalls.lateFailures + 1
+        end
         return
     end
     alsoOnServerOutsideTest("PZHarness.workTable", {}, function(at)
@@ -1270,7 +1287,14 @@ function T.craftTest(name, spec)
             local p = T.player()
             local recipe = T.need(self, getScriptManager():getCraftRecipe(spec.recipe), "the recipe " .. spec.recipe)
             if not recipe then return end
-            T.learnRecipes(p)
+            -- Once the first craft test has taught them all, learning them again would only cost
+            -- a multiplayer client a server round trip.
+            for _, name in ipairs(T.recipeNames()) do
+                if not p:isRecipeActuallyKnown(name) then
+                    T.learnRecipes(p)
+                    break
+                end
+            end
             T.placeWorkTable(p)
             local bench = spec.bench and T.placeBench(self, spec.bench[1], spec.bench[2])
             if spec.bench and not bench then return end

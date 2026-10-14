@@ -246,14 +246,14 @@ else
     TIMEOUT=${TIMEOUT:-1200}
 fi
 
-# What a --test run's verdict depends on: the kind of run, the selection and settings, and the
-# contents of the files the game loads from the three mods, the harness and the conf. RUNS_LOG
-# keeps it with each run.
+# What a --test run's verdict depends on: the kind of run, the selection and settings, the game
+# install and its code, which a Steam update changes, and the contents of the files the game loads
+# from the three mods, the harness and the conf. RUNS_LOG keeps it with each run.
 run_fingerprint() {
     {
-        printf '%s\n' "$MP" "$STAY" "$SELECTION" "$LEAKS" "$ORDER" "$ROUNDS"
-        find "$MOD_DIR" "$DEV_MOD_DIR" "$HARNESS_MOD_DIR" "$HARNESS/bin" "$HARNESS/lib" "$HARNESS/java" \
-            "$REPO/dev/harness.conf" -type f -print0 | sort -z | xargs -0 md5 -r
+        printf '%s\n' "$MP" "$STAY" "$SELECTION" "$LEAKS" "$ORDER" "$ROUNDS" "$PZ"
+        find "$PZ/Java/projectzomboid.jar" "$MOD_DIR" "$DEV_MOD_DIR" "$HARNESS_MOD_DIR" "$HARNESS/bin" \
+            "$HARNESS/lib" "$HARNESS/java" "$REPO/dev/harness.conf" -type f -print0 | sort -z | xargs -0 md5 -r
     } | md5 -q
 }
 
@@ -471,20 +471,24 @@ else
         cd "$PZ/Java"
         exec "${GAME[@]}" -cp "$GAME_CLASSPATH" zombie.gameStates.MainScreenState "${GAME_ARGS[@]}"
     fi
+    LAUNCHER="$CACHE/launcher"
+    compile_java "$HARNESS/java/ClickToStart.java" "$LAUNCHER"
+
+    # Whatever fails from here on, the games started so far stop with the script; only a --stay run
+    # that launched its client hands them on instead, below.
+    stop_games_on_exit
     if [ -n "$MP" ]; then
         prepare_mp_server
         SERVER_RUN_LOG=$SERVER_LOG
     fi
-
-    LAUNCHER="$CACHE/launcher"
-    compile_java "$HARNESS/java/ClickToStart.java" "$LAUNCHER"
 
     # GLFW finds no monitor while the display sleeps, and the game can't open its window.
     # caffeinate -u wakes the display, and -d -i keep it and the computer awake until this script
     # exits.
     caffeinate -d -i -u -w $$ &
     for _ in $(seq 10); do
-        system_profiler SPDisplaysDataType | grep -q "Display Asleep: Yes" || break
+        displays=$(system_profiler SPDisplaysDataType)
+        [[ $displays == *"Display Asleep: Yes"* ]] || break
         sleep 1
     done
 
@@ -507,8 +511,6 @@ else
         # Keeps the display awake for the kept game, after this script exits.
         caffeinate -d -i -w "$GAME_PID" < /dev/null > /dev/null 2>&1 &
         keep_games_on_exit
-    else
-        stop_games_on_exit
     fi
 fi
 
@@ -733,6 +735,10 @@ if [ "$MODE" != test ]; then
         echo "PASS"
     fi
     exit 0
+fi
+if logged "$TAG DONE passed=0 failed=0 skipped=[0-9]+$"; then
+    echo "FAIL: no test ran in this mode ($(sed -n "s/.*> $TAG DONE passed=0 failed=0 skipped=\([0-9]*\)\$/\1/p" "$RUN_LOG" | tail -1) skipped)"
+    exit 1
 fi
 if ! logged "$TAG DONE passed=[1-9][0-9]* failed=0 skipped=[0-9]+$"; then
     echo "FAIL: not every test passed"

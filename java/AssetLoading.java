@@ -1,6 +1,8 @@
 import java.lang.reflect.Field;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /**
  * FileSystemImpl loads textures, meshes, animations and depth maps on a pool of at most 4 threads,
@@ -27,7 +29,15 @@ final class AssetLoading {
             });
             Field executor = fileSystem.getClass().getDeclaredField("executor");
             executor.setAccessible(true);
+            Object old = executor.get(fileSystem);
             executor.set(fileSystem, pool);
+            // The old pool's threads would idle for the rest of the game. They end once idle instead
+            // of the pool shutting down, since the game's thread may have read the old pool just
+            // before the swap and still hand it a task, which a shut down pool would refuse.
+            if (old instanceof ThreadPoolExecutor) {
+                ((ThreadPoolExecutor) old).setKeepAliveTime(1, TimeUnit.SECONDS);
+                ((ThreadPoolExecutor) old).allowCoreThreadTimeOut(true);
+            }
             System.out.println("PZHarness: asset loading on " + threads + " threads");
         } catch (Exception e) {
             // Only slower: the game keeps its own pool.

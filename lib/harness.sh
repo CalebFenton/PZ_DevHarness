@@ -117,22 +117,20 @@ link_dev_mods() {
 # with the argument "reuse" it leaves the game running and sets SESSION_PID, SESSION_CACHE and
 # SESSION_GAMES, and otherwise it stops the game.
 GAME_LOCK="${TMPDIR:-/tmp}/PZ_DevHarness-game.lock"
+# Taking over someone else's lock, a dead owner's or a kept game's, is a check then an act, and
+# several waiters can check at once. This second lock lets one waiter at a time check and act, so
+# a later one finds what the earlier one did and doesn't undo it.
+GAME_LOCK_TAKEOVER="$GAME_LOCK.takeover"
 
 acquire_game_lock() {
     local owner said=
     SESSION_PID= SESSION_CACHE= SESSION_GAMES=
     until mkdir "$GAME_LOCK" 2>/dev/null; do
         owner=$(cat "$GAME_LOCK/pid" 2>/dev/null || true)
-        if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
-            # Moving the lock aside first means two waiters can't both remove it, and the second
-            # remove the lock the first then took.
-            mv "$GAME_LOCK" "$GAME_LOCK.stale.$$" 2>/dev/null && rm -rf "$GAME_LOCK.stale.$$"
-            continue
-        fi
-        # No pid yet: the owner is between mkdir and writing it, or died there.
-        if [ -z "$owner" ] && [ -d "$GAME_LOCK" ] \
-            && [ $(( $(date +%s) - $(stat -f %m "$GAME_LOCK" 2>/dev/null || date +%s) )) -gt 30 ]; then
-            mv "$GAME_LOCK" "$GAME_LOCK.stale.$$" 2>/dev/null && rm -rf "$GAME_LOCK.stale.$$"
+        # A dead owner, or no pid at all for a while: the owner died between mkdir and writing it.
+        if { [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; } \
+            || { [ -z "$owner" ] && [ -d "$GAME_LOCK" ] && [ "$(age_of "$GAME_LOCK")" -gt 30 ]; }; then
+            reap_game_lock "$owner" || sleep 1
             continue
         fi
         if claim_session; then
@@ -152,20 +150,53 @@ acquire_game_lock() {
     fi
 }
 
+# Seconds since file $1 last changed, 0 if it's gone.
+age_of() {
+    local changed
+    changed=$(stat -f %m "$1" 2>/dev/null) || { echo 0; return; }
+    echo $(( $(date +%s) - changed ))
+}
+
+# Holds GAME_LOCK_TAKEOVER, or fails if another waiter does. A waiter killed while holding it
+# leaves it behind, and a takeover lasts milliseconds, so an old one is removed.
+begin_takeover() {
+    mkdir "$GAME_LOCK_TAKEOVER" 2>/dev/null && return 0
+    if [ "$(age_of "$GAME_LOCK_TAKEOVER")" -gt 10 ]; then
+        rmdir "$GAME_LOCK_TAKEOVER" 2>/dev/null || true
+    fi
+    return 1
+}
+
+end_takeover() {
+    rmdir "$GAME_LOCK_TAKEOVER"
+}
+
+# Removes the lock of owner $1, who has died, or with $1 empty the lock that has held no pid for
+# a while, if it still does: another waiter may have removed it and taken a new one meanwhile.
+# Fails if another waiter is taking over right now.
+reap_game_lock() {
+    begin_takeover || return 1
+    if [ "$(cat "$GAME_LOCK/pid" 2>/dev/null || true)" = "$1" ] \
+        && { [ -n "$1" ] || [ "$(age_of "$GAME_LOCK")" -gt 30 ]; }; then
+        rm -rf "$GAME_LOCK"
+    fi
+    end_takeover
+}
+
 # Takes over the lock of a kept game nobody is using: its session file names it, and the lock's pid
-# is the owner's own. The claim directory lets only one of several waiters do so.
+# is the owner's own.
 claim_session() {
-    [ -f "$GAME_LOCK/session" ] && mkdir "$GAME_LOCK/claim" 2>/dev/null || return 1
-    local pid cache games
+    [ -f "$GAME_LOCK/session" ] && begin_takeover || return 1
+    local pid= cache games
     { read -r pid && read -r cache && read -r games; } < "$GAME_LOCK/session" 2>/dev/null || true
     if [ -z "$pid" ] || [ "$(cat "$GAME_LOCK/pid" 2>/dev/null)" != "$pid" ]; then
-        rmdir "$GAME_LOCK/claim"
+        end_takeover
         return 1
     fi
     SESSION_PID=$pid SESSION_CACHE=$cache SESSION_GAMES=${games:-$pid}
     echo $$ > "$GAME_LOCK/pid"
     rm -f "$GAME_LOCK/session"
-    rmdir "$GAME_LOCK/claim"
+    end_takeover
 }
 
 release_game_lock() {
@@ -175,12 +206,22 @@ release_game_lock() {
 }
 
 # Stops the game with PID $1 and waits until it has exited, whether or not this script started it.
+# A game can hang on its way out, as one stopped in the debug Lua error handler or a JVM whose
+# shutdown hook never returns can, and would hold the lock forever; after STOP_GRACE seconds it is
+# killed outright.
+STOP_GRACE=30
 stop_pid() {
+    local polls=0
     kill "$1" 2>/dev/null || true
-    wait "$1" 2>/dev/null || true
     while kill -0 "$1" 2>/dev/null; do
+        if [ "$polls" -eq $((STOP_GRACE * 2)) ]; then
+            echo "process $1 was still running ${STOP_GRACE}s after it was asked to stop, so it was killed"
+            kill -9 "$1" 2>/dev/null || true
+        fi
+        polls=$((polls + 1))
         sleep 0.5
     done
+    wait "$1" 2>/dev/null || true
 }
 
 # The client first, so it doesn't see its server go.

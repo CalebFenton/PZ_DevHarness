@@ -52,7 +52,8 @@ Hooks, bash functions the conf may define:
 | `harness_after_<mode>` | After a run of the mode that finished cleanly, instead of the plain `PASS`, such as to post-process screenshots in `$CACHE/Screenshots`. |
 | `harness_server_setup` | After a server's `$CACHE/Server/$SERVER_NAME.ini` is written: in `validate-server.sh`, and for the server of `--mp`, whose sandbox then gets `Zombies = 6` and the `QUIET_WORLD` options it doesn't set appended; add files such as `${SERVER_NAME}_SandboxVars.lua`. `$MP` is `1` for the `--mp` server. |
 
-Hooks can read `$REPO`, `$CACHE`, `$MOD_DIR`, `$DEV_MOD_DIR` (absolute by then), `$MODE` and `$MP`.
+Hooks can read `$REPO`, `$CACHE`, `$MOD_DIR`, `$DEV_MOD_DIR` (absolute by then), `$MODE` and `$MP`;
+in `validate-server.sh` both are empty.
 
 ### Entry points
 
@@ -107,6 +108,43 @@ PZHarness.register({
     },
 })
 ```
+
+The scenario's setup goes in a module of the dev mod that the scenario and the tests both require.
+It lives under the mod's own global table, so it can't collide with another mod's, and returns
+itself, so a file that needs it names it in its `require`:
+
+```lua
+-- <DEV_MOD_DIR>/42/media/lua/client/MyMod/Debug/MyModDebug.lua
+require "PZHarness/TestLib"
+
+MyMod = MyMod or {}
+local Debug = {}
+MyMod.Debug = Debug
+
+function Debug.setupPlayer(player)
+    PZHarness.Test.learnRecipes(player)
+    PZHarness.Test.placeWorkTable(player)
+end
+
+return Debug
+```
+
+```lua
+-- <DEV_MOD_DIR>/42/media/lua/client/MyMod/Debug/MyModDebugScenario.lua
+local Debug = require "MyMod/Debug/MyModDebug"
+
+debugScenarios = debugScenarios or {}
+debugScenarios.MyModScenario = {
+    name = "My Mod",
+    startLoc = { x = 10835, y = 10144, z = 0 }, -- DebugScenarios needs one
+    onStart = function()
+        Debug.setupPlayer(getPlayer())
+    end,
+}
+```
+
+The runner records the three mods for the scenario's new save and turns zombies off, so a
+scenario's own `setSandbox`, which runs after, only sets what the mod needs.
 
 The mod's test library inherits the shared one and adds its fixtures:
 

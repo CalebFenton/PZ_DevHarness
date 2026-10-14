@@ -13,8 +13,8 @@ set -euo pipefail
 
 CACHE="${CACHE:-$TMP_REAL/$CACHE_NAME-server}"
 TIMEOUT=${TIMEOUT:-900}
-# For the conf's hooks: this server serves no --mp run.
-MP=
+# For the conf's hooks: this server serves no --mp run and no mode.
+MP= MODE=
 
 # On exit (exit_report, lib/harness.sh): prints the run's phases and appends it to RUNS_LOG.
 report_timing() {
@@ -29,9 +29,9 @@ acquire_game_lock
 # The phases are timed from here, after any wait for another script's game.
 timing_mark start
 prepare_server "$MOD_ID"
+stop_games_on_exit
 timing_mark launch
 start_server
-stop_games_on_exit
 
 started=
 SECONDS=0

@@ -6,8 +6,9 @@
 -- server/PZHarness/ServerFixtures.lua) while this client takes its copy's, and reports what
 -- changed in its copy, which is the one that counts for objects and vehicles. This client then
 -- compares the two copies on every square either side saw change. What the server sent can still
--- be on its way, so only a difference, or a change of this client's own state, costs a second look
--- once that has had time to arrive, and only what is still there is reported.
+-- be on its way, so a difference, or a change of this client's own state, gets looked at again
+-- every few ticks until this client has caught up with what the server reported, up to a limit,
+-- and only what is still there then is reported.
 
 require "PZHarness/Snapshot"
 require "PZHarness/ServerCalls"
@@ -16,7 +17,9 @@ PZHarness = PZHarness or {}
 local Leaks = {}
 PZHarness.Leaks = Leaks
 
+-- The longest a check waits for the server's updates to arrive, and how often it looks meanwhile.
 local SETTLE_MS = 500
+local SETTLE_POLL_MS = 50
 
 -- This game's snapshot the next check compares with, and whether the server's baseline starts
 -- over with the next call.
@@ -39,9 +42,11 @@ local function differs(a, b)
 end
 
 -- The squares where the copies may differ: changed on this client and not on the server, or on
--- both but to different looks, or on the server and not here.
-local function suspectSquares(snapshot, clientChanged, serverChanged)
-    local serverSigs, suspects, seen = {}, {}, {}
+-- both but to different looks, or on the server and not here. Also returns, for each, the look
+-- this client should catch up to: the server's, or for a square the server saw no change on, the
+-- look from before.
+local function suspectSquares(before, snapshot, clientChanged, serverChanged)
+    local serverSigs, suspects, expected, seen = {}, {}, {}, {}
     for i = 1, #serverChanged - 1, 2 do
         serverSigs[serverChanged[i]] = serverChanged[i + 1]
     end
@@ -50,30 +55,36 @@ local function suspectSquares(snapshot, clientChanged, serverChanged)
         local server = serverSigs[key]
         if server == nil or differs(server, snapshot.squares[key]) then
             table.insert(suspects, key)
+            expected[key] = server or before.squares[key]
         end
     end
     for key, server in pairs(serverSigs) do
         local client = snapshot.squares[key]
         if not seen[key] and client and differs(server, client) then
             table.insert(suspects, key)
+            expected[key] = server
         end
     end
-    return suspects
+    return suspects, expected
 end
 
 --- Starts a check around `character`'s square, `radius` squares each way on each of `levels` (z
 --- levels; the character's own by default), leaving out the objects the patterns in `ignore`
 --- match. Returns a function to call every tick: nil until the check is done, then
---- { leaks = { lines }, desyncs = { lines } }, both empty the first time, when there is nothing
---- yet to compare with.
+--- { leaks = { lines }, desyncs = { lines }, waitedFull }, both lists empty the first time, when
+--- there is nothing yet to compare with, and when the character's square isn't loaded;
+--- `waitedFull` is true when this client never caught up with the server before the limit.
 function Leaks.start(character, radius, levels, ignore)
     local Snapshot = PZHarness.Snapshot
-    local result = { leaks = {}, desyncs = {} }
-    local phase, area, before, snapshot, answer, peek, settleUntil, ownChanges, suspects
+    local result = { leaks = {}, desyncs = {}, waitedFull = false }
+    local phase, area, before, snapshot, answer, peek, settleUntil, nextPollMs, ownChanges, suspects, expected
 
     local function look()
         local square = character:getCurrentSquare()
         if not square then
+            -- Unchecked, this test's leftovers would be blamed on the next test, so the next
+            -- check only takes new baselines, on both sides.
+            Leaks.reset()
             return result
         end
         local x, y, z = square:getX(), square:getY(), square:getZ()
@@ -110,15 +121,41 @@ function Leaks.start(character, radius, levels, ignore)
         end
         local report = Snapshot.diff(before, snapshot, { clock = false })
         ownChanges = #report.other > 0
-        suspects = suspectSquares(snapshot, report.changed, answer.reply.changed or {})
+        suspects, expected = suspectSquares(before, snapshot, report.changed, answer.reply.changed or {})
         if not ownChanges and #suspects == 0 then
             return result
         end
-        phase, settleUntil = "settle", getTimestampMs() + SETTLE_MS
+        local now = getTimestampMs()
+        phase, settleUntil, nextPollMs = "settle", now + SETTLE_MS, now
         return nil
     end
 
-    -- After the second look this client's own changes that remain are leaks, and the suspect
+    -- Whether this client has caught up: its own state is back to how it was before the test, and
+    -- each suspect square looks the way it should (suspectSquares). What has caught up leaves the
+    -- check, and the next check compares with how it looks now.
+    local function caughtUp()
+        if ownChanges then
+            snapshot = Snapshot.take(area, character)
+            baseline = snapshot
+            if #Snapshot.diff(before, snapshot, { clock = false }).other > 0 then
+                return false
+            end
+            ownChanges = false
+        end
+        local open = {}
+        for _, key in ipairs(suspects) do
+            local client = Snapshot.signatureAt(key, ignore)
+            if client and expected[key] and not differs(expected[key], client) then
+                baseline.squares[key] = client
+            else
+                table.insert(open, key)
+            end
+        end
+        suspects = open
+        return #suspects == 0
+    end
+
+    -- Once the limit has passed, this client's own changes that remain are leaks, and the suspect
     -- squares go to the server to compare with how they look here now.
     local function lookAgain()
         if ownChanges then
@@ -134,6 +171,19 @@ function Leaks.start(character, radius, levels, ignore)
         askServer({ peek = suspects, ignore = ignore }, function(reply) peek = reply end)
         phase = "peek"
         return nil
+    end
+
+    local function settle()
+        local now = getTimestampMs()
+        if now >= settleUntil then
+            result.waitedFull = true
+            return lookAgain()
+        end
+        if now < nextPollMs then
+            return nil
+        end
+        nextPollMs = now + SETTLE_POLL_MS
+        return caughtUp() and result or nil
     end
 
     local function compareSquares()
@@ -162,7 +212,7 @@ function Leaks.start(character, radius, levels, ignore)
         elseif phase == "answer" then
             return answer and compare() or nil
         elseif phase == "settle" then
-            return getTimestampMs() >= settleUntil and lookAgain() or nil
+            return settle()
         end
         return peek and compareSquares() or nil
     end

@@ -8,8 +8,9 @@ How `--test --mp` runs a mod's tests against a dedicated server, and what a test
    the mod and links to the harness mod and the dev mod.
 2. Writes the server's `harness.ini` (the three mods, ports 16361 and 16362, `Open`, `PauseEmpty`
    off) and runs the conf's `harness_server_setup`, then appends `Zombies = 6` to its sandbox, so
-   the world has no zombies, as the scenarios' do, and the `QUIET_WORLD` options the hook didn't
-   set ([a quiet world](running.md#a-quiet-world)). Every cold run starts a new world.
+   the world has no zombies, as the runner gives a single player scenario's world, and the
+   `QUIET_WORLD` options the hook didn't set ([a quiet world](running.md#a-quiet-world)). Every
+   cold run starts a new world.
 3. Starts the server with FastServer, through `start_server` in `lib/harness.sh` as
    `validate-server.sh` does, and the client with ClickToStart at the same time. The client waits
    at the main menu until the script writes `<client cache>/Lua/PZHarnessConnect.txt`, once the

@@ -63,6 +63,10 @@ sandbox file wherever the conf's `harness_server_setup` set nothing. A conf that
 `QUIET_WORLD` itself replaces the list. Other modes (`--promo`, `--art`, a mod's reports) and
 `validate-server.sh` keep the world's own population.
 
+In every mode, and when you start the scenario by hand, the runner also records the three mods
+for the new save, which the scenario panel doesn't, and turns zombies off, before the scenario's
+own `setSandbox`.
+
 ## Leaks and desyncs
 
 Between tests, and after the last, the runner resets the character and takes a snapshot of the
@@ -88,16 +92,19 @@ its own, and the server's differences are the ones reported for objects, vehicle
 and the clock, since the client only copies those from it. The client reports its own state (what
 it holds, the power it works out itself, the options) and compares its squares with the server's
 wherever either side saw one change. What the server sent can still be on its way, so a
-difference between the copies, or a change of the client's own state, costs a second look half a
-second later, and only what is still there is reported.
+difference between the copies, or a change of the client's own state, gets looked at again every
+few ticks until the client has caught up with what the server reported, for at most half a
+second, and only what is still there then is reported.
 
 Each difference prints a `LEAK` line (the server's start with "on the server"), and each square
 where the copies still differ a `DESYNC` line, at most a handful per test with a count of the
 rest, before the test's verdict. With `LEAKS=fail` they fail the test, as its reasons; with
 `LEAKS=warn` they only print; `LEAKS=off` skips the snapshots. A check that finds nothing costs one
 snapshot, taken on both sides at once in multiplayer, a few tens of milliseconds; the last
-`SLOWEST` line says how long the checks took in all. A kept `--stay` game prints what its last
-run left behind as `DIRTY` lines when the next run starts, since that run starts on top of it.
+`SLOWEST` line says how long the checks took in all. When the character's square isn't loaded
+the check is skipped, and the next one only takes new snapshots, so what the unchecked test left
+isn't blamed on the next. A kept `--stay` game prints what its last run left behind as `DIRTY`
+lines when the next run starts, since that run starts on top of it.
 
 ## Choosing tests
 
@@ -116,7 +123,8 @@ refuses to run while a `TEST_MAP` glob matches no file in the repository.
 ### Repeats
 
 A `--test` run's verdict depends on the kind of run (`--mp`, `--stay`), the selection, `LEAKS`,
-`ORDER` and `REPEAT`, and the files the game loads: the three mods, the harness's scripts and the
+`ORDER` and `REPEAT`, the game (where it is installed and its `projectzomboid.jar`, which a game
+update replaces) and the files the game loads: the three mods, the harness's scripts and the
 conf. `dev/.runs.log` keeps a fingerprint of those with each run, and a run whose fingerprint
 already has a verdict there doesn't start a game: the script prints that verdict and exits with
 that run's status. A run that never got its verdict, such as one a Lua error stopped, doesn't
@@ -134,7 +142,8 @@ how long each had a server answer outstanding (`(server <s> s)`). The last `SLOW
 the run into the time in tests and the time between them: the runner waiting for the character's
 square to load again after a test that went far, the leak checks, and in multiplayer the
 server's resets and undos. In multiplayer it adds how much of both had a server answer
-outstanding.
+outstanding, and how many leak checks waited the full half second for the client to catch up
+with the server.
 
 On exit, `run-client.sh` and `validate-server.sh` print a `timing: <phase> <s> s (<what>)` line
 per phase, each from the end of the one before, then `timing: total`. The clock starts once the
@@ -166,9 +175,10 @@ line, `exit=` (the script's exit status), each phase as `<phase>=<s>`, `total=`,
   `waitUntil` on the condition it needs, never for a fixed number of frames. Every mode loads
   uncapped, since the main menu and the loading screen step per frame; the others go back to 60
   when the scenario starts.
-- More asset loader threads. The game loads textures, meshes and animations on 4 threads, and the
-  loading screen waits about 8 seconds for them with all 4 busy. ClickToStart swaps in a pool of
-  up to 12 (the cores less 4), which cuts that wait to about 2 seconds. A dedicated server waits
+- More asset loader threads. The game loads textures, meshes and animations on 4 threads (2 on a
+  machine with 4 cores or fewer), and the loading screen waits about 8 seconds for them with all
+  of them busy. ClickToStart swaps in a pool of the cores less 4, between 4 and 16 (the game keeps
+  at most 16 loads in flight), which cuts that wait to about 2 seconds. A dedicated server waits
   for its models and animations the same way before it starts, and FastServer gives it the same
   pool, which halves that wait.
 - Settling by loaded chunks. A run starts once one square in every chunk 40 squares around the
@@ -197,7 +207,8 @@ line, `exit=` (the script's exit status), each phase as `<phase>=<s>`, `total=`,
   `$TMPDIR/PZ_DevHarness-game.lock` and waits while another holds it; a lock whose owner died
   is taken over. A kept `--stay` game (with `--mp` its client and server) holds the lock itself,
   and the next run that needs the game stops it, unless that run is a `--stay` run of the same
-  cache dir that can rerun in it.
+  cache dir that can rerun in it. A game that hasn't exited 30 seconds after it was asked to is
+  killed, so a hung game never holds the lock for good.
 - The published mod is copied into the cache's `mods` folder, not linked, and the cache dir is
   under the real path of `$TMPDIR`: the game reads tile depth maps by absolute path and refuses
   paths through a symlink (`ZomboidFileSystem.validatePrefix`). The dev mod and the harness mod

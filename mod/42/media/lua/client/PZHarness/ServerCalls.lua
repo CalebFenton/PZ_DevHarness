@@ -90,16 +90,20 @@ Events.OnServerCommand.Add(function(module, command, args)
 end)
 
 -- Runs every frame of the whole game, nearly always with nothing pending, so it returns before
--- allocating anything then.
+-- allocating anything then, and allocates only once an answer is lost.
 Events.OnTick.Add(function()
     if not ServerCalls.busy() then
         return
     end
-    local now, lost = getTimestampMs(), {}
+    local now, lost = getTimestampMs(), nil
     for id, entry in pairs(pending) do
         if now - entry.sentMs > ANSWER_MS then
+            lost = lost or {}
             table.insert(lost, id)
         end
+    end
+    if not lost then
+        return
     end
     for _, id in ipairs(lost) do
         answered(id, { id = id, error = "no answer from the server within " .. ANSWER_MS / 1000 .. " s" })
