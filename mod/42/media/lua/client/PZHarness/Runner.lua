@@ -276,11 +276,31 @@ local function settleVerdict(state, found)
     countVerdict(state, verdict.name, #failures == 0)
 end
 
+-- What the server does between two tests, and after the last, sent behind the undos of the test
+-- that just ended so that all of it comes back in one round trip, since the server takes a
+-- client's requests in the order they were sent: in multiplayer its reset of the character, which
+-- the leak check needs as much as the next test does, then the leak check's own request
+-- (Leaks.start) around `at`, the square the character starts the next test on. Answers come in
+-- that order too, so once the reset's has, this client's half of the leak check can start while
+-- the server takes its snapshot.
+local function askBetweenTests(state, at)
+    local nextIndex = state.index + 1
+    state.askedFor, state.resetAnswered = nextIndex, false
+    local checking = state.leaks ~= "off"
+    if isClient() and (state.names[nextIndex] or checking) then
+        PZHarness.ServerCalls.callOutsideTest("PZHarness.reset", {}, function() state.resetAnswered = true end)
+    end
+    if checking then
+        state.check = PZHarness.Leaks.start(state.player, at, state.leakRadius, state.leakLevels, state.leakIgnore)
+    end
+end
+
 -- The current test is done once its action queue is empty, or stopped once it overruns its limit
 -- (TEST_TIMEOUT_SECONDS or its spec's timeoutSeconds): its queue cleared, and validate() fails it
 -- with what it was waiting on. Then validate() runs, and its verdict waits for the leak check
 -- (settleVerdict); the test's wall time and its time waiting on the server go to the run's
--- summary, and the cheat and the character go back to where the test started.
+-- summary, the cheat and the character go back to where the test started, and what the server
+-- does between tests goes out.
 local function finishCurrentTest(state)
     local current, player = state.current, state.player
     local queue = ISTimedActionQueue.getTimedActionQueue(player).queue
@@ -308,27 +328,24 @@ local function finishCurrentTest(state)
     })
     ISBuildMenu.cheat = state.wasCheat
     PZHarness.Fixtures.teleportToMiddle(player, state.start.x, state.start.y, state.start.z)
+    askBetweenTests(state, state.start)
 end
 
 -- Whether the leak check may come, then the next test or the end of the run: the character's
--- square has loaded again after a test that went far, or SQUARE_WAIT_MS have passed; the server
--- has answered what the last test sent it, its undos above all, so a test never meets what the
--- one before built; and, in multiplayer, the server has reset its copy of the character, which the
--- first call asks for.
+-- square has loaded again after a test that went far, or SQUARE_WAIT_MS have passed; and the
+-- server has answered what the last test sent it, its undos above all, so a test never meets what
+-- the one before built, and the reset askBetweenTests sent after them, which the first test and
+-- one that never started send here. The leak check then waits for its own answer.
 local function readyForNextTest(state)
-    if not state.player:getCurrentSquare() and getTimestampMs() - state.doneMs < SQUARE_WAIT_MS then
+    local here = state.player:getCurrentSquare()
+    if not here and getTimestampMs() - state.doneMs < SQUARE_WAIT_MS then
         return false
     end
-    if PZHarness.ServerCalls.busy() then
-        return false
+    if state.askedFor ~= state.index + 1 then
+        askBetweenTests(state, here and { x = here:getX(), y = here:getY(), z = here:getZ() })
     end
-    local nextIndex = state.index + 1
-    if isClient() and state.resetFor ~= nextIndex and (state.names[nextIndex] or state.leaks ~= "off") then
-        state.resetFor = nextIndex
-        PZHarness.ServerCalls.callOutsideTest("PZHarness.reset", {})
-        return false
-    end
-    return true
+    -- A reset that failed never answers; its FAIL line counts in the run's verdict.
+    return state.resetAnswered or not PZHarness.ServerCalls.busy()
 end
 
 -- Between two tests, and after the last: the runner's reset of the character, then the leak check
@@ -339,17 +356,17 @@ local function checkBetweenTests(state)
     if state.checkedFor == state.index then
         return true
     end
-    if not state.check then
+    if state.resetFor ~= state.index then
+        state.resetFor = state.index
         -- Before the snapshot, so what the reset takes away doesn't count as left behind.
         PZHarness.Fixtures.resetCharacter(state.player)
         refreshInventoryWindows()
-        if state.leaks == "off" then
+        if not state.check then
             settleVerdict(state, nil)
             state.checkedFor = state.index
             return true
         end
         state.checkStartMs = getTimestampMs()
-        state.check = PZHarness.Leaks.start(state.player, state.leakRadius, state.leakLevels, state.leakIgnore)
     end
     local found = state.check()
     if not found then
@@ -527,11 +544,12 @@ local function runTests(onDone)
         -- client to catch up with the server, the server waits so far, which a kept game's
         -- earlier runs add to, and each test's passes and failures over the rounds.
         times = {}, gapMs = 0, leakMs = 0, leakWaitedFull = 0, serverStartMs = PZHarness.ServerCalls.waitedMs(), tally = {},
-        current = nil, name = nil, player = nil, start = nil, wasCheat = nil, resetFor = nil,
+        current = nil, name = nil, player = nil, start = nil, wasCheat = nil,
         testStartMs = nil, testServerMs = nil,
-        -- The verdict waiting for the leak check, the check under way, and the test index it ran
-        -- after.
-        verdict = nil, check = nil, checkStartMs = nil, checkedFor = nil,
+        -- The test index what the server does between tests was asked for (askBetweenTests) and
+        -- whether its reset has answered, the one this client last reset the character after, the
+        -- verdict waiting for the leak check, the check under way, and the test index it ran after.
+        askedFor = nil, resetAnswered = false, resetFor = nil, verdict = nil, check = nil, checkStartMs = nil, checkedFor = nil,
     }
     local function onTick()
         state.ticks = state.ticks + 1

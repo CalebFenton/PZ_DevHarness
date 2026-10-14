@@ -50,10 +50,24 @@ early when `isClient()`) is empty, so what only the authority can do goes throug
   queued after it.
 - Single player calls the handler in the same Lua state, at once. Multiplayer sends a client
   command (module `PZHarness`) and the server answers with a server command a tick or more later;
-  an answer lost for 15 seconds fails the call. The runner starts the next test only once every
-  request of the last one, its undos above all, has its answer, so no test meets what the one
-  before built. An undo the server reports failed after the verdict prints its own `FAIL` line and
-  counts in `DONE`.
+  an answer lost for 15 seconds fails the call. Both kinds of command travel reliably but in no
+  set order (`PacketTypes.ClientCommand`), and two sent in the same tick do arrive swapped, so each
+  request carries the session of the client's Lua and its id: the server serves a client's
+  requests in the order they were sent, holding one that comes early, and the client hands out the
+  answers in that order too, so the undos stay in the order the calls were made.
+- A round trip takes about 25 ms, so a call need not wait for the answer before it when nothing
+  in between happens on this client: one whose `args` is a table goes out as soon as only waits
+  for answers that change nothing on the server are queued before it (the setters', and `T.give`'s
+  and `T.count`'s unless the items go on or in hand), and its answer still lands in its turn.
+  `T.batch(fn)` sends every such call that `fn` queues together, when the first one's turn comes,
+  and its steps and waits read each answer in its turn; it is for calls a test makes back to back,
+  since the server has run them all before anything `fn` queued between them happens here.
+  `TestLib.lua` says what a batch must not hold.
+- The runner starts the next test only once every request of the last one, its undos above all,
+  has its answer, so no test meets what the one before built. The undos, the runner's reset of
+  the server's character and the server's half of the leak check go out together, one round trip
+  between tests. An undo the server reports failed after the verdict prints its own `FAIL` line
+  and counts in `DONE`.
 
 A test that can't run in one mode says why: `spOnly = "<why>"` or `mpOnly = "<why>"` in its spec.
 The runner skips it in the other mode and prints `<TAG> SKIP <name>: single player only: <why>`
@@ -68,7 +82,9 @@ player behaves as before:
   `changeItem`, the test's `instant` and `perks`) change this game's copy at once; on a multiplayer
   client they also send the change to the server (handlers named `PZHarness.*` in
   `ServerFixtures.lua`) at once and queue a wait for its answer, so actions queued after them start
-  once the server has it. The server undoes it when the test ends. Each side calls the dev mod's
+  once the server has it (server calls may go out before that, as above). The server undoes it
+  when the test ends; for `perks` each side puts back the levels it had, since the server's perk
+  sync can leave this client's a level behind for up to a second. Each side calls the dev mod's
   `sandboxChanged` setting after its own copy of an option changes.
   A client lights its squares with the daylight the server sends it, which the server does only
   every ten game minutes, so the server's `setTime` (and its undo) makes its next climate tick

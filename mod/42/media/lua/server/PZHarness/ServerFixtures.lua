@@ -183,10 +183,24 @@ handler("PZHarness.setMechanicsCheat", function(player, args, defer)
     return {}
 end)
 
--- The levels the client had, without undo: the runner's restore of the `perks` setting, and the
--- scenario's setup reaching the server.
+-- The levels the client had, without undo: the scenario's setup reaching the server.
 handler("PZHarness.setPerkLevels", function(player, args)
     Fixtures.setPerkLevels(player, args.levels)
+    return {}
+end)
+
+-- The runner's restore of the `perks` setting (`args.perks`, perk ids): the levels the server's
+-- copy has now, whatever the client's copy shows, which the server's perk sync (PlayerXpPacket)
+-- can leave a level behind for up to a second.
+handler("PZHarness.keepPerkLevels", function(player, args, defer)
+    local levels = {}
+    for _, id in ipairs(args.perks) do
+        local perk = Perks.FromString(id)
+        if perk and perk ~= Perks.MAX then
+            levels[id] = player:getPerkLevel(perk)
+        end
+    end
+    defer(function() Fixtures.setPerkLevels(player, levels) end)
     return {}
 end)
 

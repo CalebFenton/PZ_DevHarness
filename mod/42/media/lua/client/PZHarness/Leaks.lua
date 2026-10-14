@@ -70,14 +70,27 @@ end
 
 --- Starts a check around `character`'s square, `radius` squares each way on each of `levels` (z
 --- levels; the character's own by default), leaving out the objects the patterns in `ignore`
---- match. Returns a function to call every tick: nil until the check is done, then
+--- match. In multiplayer the server's half is asked for at once around `at` ({ x, y, z }, the
+--- square the character will stand on), so the request goes out with whatever else the server
+--- has to do first; without `at`, once the check first looks. Returns a function to call every
+--- tick from when this client's copy is ready to be looked at: nil until the check is done, then
 --- { leaks = { lines }, desyncs = { lines }, waitedFull }, both lists empty the first time, when
 --- there is nothing yet to compare with, and when the character's square isn't loaded;
 --- `waitedFull` is true when this client never caught up with the server before the limit.
-function Leaks.start(character, radius, levels, ignore)
+function Leaks.start(character, at, radius, levels, ignore)
     local Snapshot = PZHarness.Snapshot
     local result = { leaks = {}, desyncs = {}, waitedFull = false }
     local phase, area, before, snapshot, answer, peek, settleUntil, nextPollMs, ownChanges, suspects, expected
+    local asked = false
+
+    local function ask(x, y, z)
+        asked = true
+        askServer({ x = x, y = y, z = z, radius = radius, levels = levels or { z }, ignore = ignore, fresh = fresh },
+            function(reply) answer = reply end)
+    end
+    if isClient() and at then
+        ask(at.x, at.y, at.z)
+    end
 
     local function look()
         local square = character:getCurrentSquare()
@@ -97,8 +110,9 @@ function Leaks.start(character, radius, levels, ignore)
             baseline = snapshot
             return result
         end
-        askServer({ x = x, y = y, z = z, radius = radius, levels = area.levels, ignore = ignore, fresh = fresh },
-            function(reply) answer = reply end)
+        if not asked then
+            ask(x, y, z)
+        end
         before, snapshot = baseline, Snapshot.take(area, character)
         baseline = snapshot
         phase = "answer"

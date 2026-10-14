@@ -88,6 +88,8 @@ end
 
 -- The test being run, from its run to its verdict.
 local active
+-- Whether T.batch is running its fn, so what it queues may be crossed (see sendAhead).
+local batching = false
 
 -- Queue ----------------------------------------------------------------------------------------
 
@@ -98,6 +100,24 @@ local active
 -- misses a fixture (T.need), every wait ends at once without calling anything, since what comes
 -- after would work on the missing fixture.
 local Wait = ISBaseTimedAction:derive("PZHarnessWait")
+
+-- In multiplayer, sends the server calls queued behind the current action ahead of their turn,
+-- each as soon as everything queued before it is `crossable`: a call that is out and whose answer
+-- changes nothing on the server when it comes (the setters', T.give's unless it dresses the
+-- character, T.count's), or what T.batch queued. The server takes requests in the order they were
+-- sent, so it sees the same calls in the same order, only without a round trip between them; each
+-- answer still reaches the test in its turn (see call). A call whose args are a function goes out
+-- only in its turn, and so does everything queued after it.
+local function sendAhead(queue)
+    for i, action in ipairs(queue) do
+        if i > 1 and action.ahead then
+            action.ahead(i)
+        end
+        if not action.crossable then
+            return
+        end
+    end
+end
 
 function Wait:isValid()
     return true
@@ -114,6 +134,9 @@ function Wait:update()
         self.onTick(self.ticks)
         self:endAddingActions()
     end
+    if isClient() and active and self.test == active then
+        sendAhead(ISTimedActionQueue.getTimedActionQueue(self.character).queue)
+    end
     if self.ticks >= self.total or (self.done and self.done()) then
         self:forceComplete()
     end
@@ -125,7 +148,16 @@ function Wait:new(character, total, onTick, done)
     o.stopOnWalk, o.stopOnRun, o.stopOnAim = false, false, false
     o.maxTime = -1
     o.test = active
+    o.crossable = false
     return o
+end
+
+-- Queues a Wait and returns it.
+local function queueWait(total, onTick, done, what)
+    local wait = Wait:new(T.player(), total, onTick, done)
+    wait.what = what
+    ISTimedActionQueue.add(wait)
+    return wait
 end
 
 -- A test's own wait that goes without finishing means a timed action emptied the queue: one that
@@ -157,18 +189,19 @@ function Wait:stop()
     ISBaseTimedAction.stop(self)
 end
 
+-- What T.batch's fn queues with these three may be crossed (see sendAhead); the library's own
+-- waits never are.
+
 --- Queues `ticks` ticks of waiting, calling `onTick(n)` every tick.
 function T.wait(ticks, onTick)
-    ISTimedActionQueue.add(Wait:new(T.player(), ticks, onTick))
+    queueWait(ticks, onTick).crossable = batching
 end
 
 --- Queues a wait that ends as soon as `condition()` holds, or after `maxFrames` ticks; the
 --- following validate checks what it waited for. `what`, if given, says what it waits for when
 --- the runner's per-test limit stops it (T.describeAction).
 function T.waitUntil(condition, maxFrames, what)
-    local wait = Wait:new(T.player(), maxFrames, nil, condition)
-    wait.what = what
-    ISTimedActionQueue.add(wait)
+    queueWait(maxFrames, nil, condition, what).crossable = batching
 end
 
 --- What a queued action is, for the runner's message when a test overruns its limit: a harness
@@ -191,7 +224,7 @@ end
 --- Runs `fn` once the actions queued before it are done. What fn queues (actions, T.server,
 --- T.step...) runs right after it, in order, before what was queued after the step.
 function T.step(fn)
-    ISTimedActionQueue.add(Wait:new(T.player(), 1, function() fn() end))
+    queueWait(1, function() fn() end).crossable = batching
 end
 
 local function lit()
@@ -202,10 +235,10 @@ end
 -- pass.
 local function waitForLight(wantLit)
     local sinceMs
-    T.waitUntil(function()
+    queueWait(math.huge, nil, function()
         sinceMs = sinceMs or getTimestampMs()
         return lit() == wantLit or getTimestampMs() - sinceMs > LIGHT_MS
-    end, math.huge)
+    end)
 end
 
 -- Server ---------------------------------------------------------------------------------------
@@ -294,31 +327,47 @@ local function dressedAsGiven(items, given)
     return true
 end
 
--- Sends the call of the server handler `name` at once and handles its answer: the server's undo,
--- a failure (as T.need does, dropping the steps queued after it), `onReply(reply)` with the reply
--- exactly as the handler returned it (false, 0 and nil too), and the items a table reply lists as
--- `given` (PZHarness.giveItem): once the client has them, worn and held as they should be (the
--- server dresses the character only then, "PZHarness.dress"), their client copies land in
--- self.items[itemsKey]. Returns the condition a queued wait polls until all of it is done.
-local function call(self, name, args, itemsKey, onReply)
-    local phase, given, sinceMs = "asking", nil, nil
+-- Whether a call queued after the action at `index` (the current one unless given) has gone out
+-- ahead of its turn (sendAhead), so a request sent now would reach the server after it.
+local function overtaken(index)
+    local queue = ISTimedActionQueue.getTimedActionQueue(T.player()).queue
+    for i = (index or 1) + 1, #queue do
+        if queue[i].sentAhead then
+            return true
+        end
+    end
+    return false
+end
+
+-- Sends the call of the server handler `name` at once and handles its answer: the server's undo
+-- as soon as it comes, so the undos stay in the order the calls went out; then, once the returned
+-- condition is polled, a failure (as T.need does, dropping the steps queued after it),
+-- `onReply(reply)` with the reply exactly as the handler returned it (false, 0 and nil too), and
+-- the items a table reply lists as `given` (PZHarness.giveItem): once the client has them, worn
+-- and held as they should be (the server dresses the character only then, "PZHarness.dress"),
+-- their client copies land in self.items[itemsKey]. A call sent ahead of its turn takes its
+-- answer only in its turn. `index` is where in the action queue the call is queued, if not the
+-- current action. Returns the condition a queued wait polls until all of it is done.
+local function call(self, name, args, itemsKey, onReply, index)
+    local phase, given, sinceMs, asked, answer, onAnswer = "asking", nil, nil, nil, nil, nil
     local function fail(what)
         T.need(self, nil, what)
         dropQueuedSteps()
         phase = "done"
     end
-    local function ask(handler, handlerArgs, onAnswer)
-        PZHarness.ServerCalls.send("call", { name = handler, test = self.name, args = handlerArgs }, function(answer)
-            if answer.undo then
-                local function undo() unwindOnServer(self, handler, answer.id) end
+    local function ask(handler, handlerArgs, onAnswered, at)
+        if overtaken(at) then
+            fail("the server's " .. handler .. " in its turn: T.batch had sent the calls queued after it already")
+            return
+        end
+        phase, asked, answer, onAnswer = "asking", handler, nil, onAnswered
+        PZHarness.ServerCalls.send("call", { name = handler, test = self.name, args = handlerArgs }, function(reply)
+            if reply.undo then
+                local function undo() unwindOnServer(self, handler, reply.id) end
                 -- An answer can come after the verdict once a missing fixture ended the test's waits.
                 if self.unwound then undo() else T.defer(self, undo) end
             end
-            if answer.error or answer.missing then
-                fail(answer.missing or "the server's " .. handler .. ", which failed: " .. answer.error)
-                return
-            end
-            onAnswer(answer.reply)
+            answer = reply
         end)
     end
     ask(name, args or {}, function(reply)
@@ -327,12 +376,21 @@ local function call(self, name, args, itemsKey, onReply)
         end
         given, sinceMs = type(reply) == "table" and reply.given or nil, getTimestampMs()
         phase = given and "receiving" or "done"
-    end)
+    end, index)
     return function()
+        if phase == "asking" then
+            if not answer then
+                return false
+            end
+            if answer.error or answer.missing then
+                fail(answer.missing or "the server's " .. asked .. ", which failed: " .. answer.error)
+            else
+                onAnswer(answer.reply)
+            end
+        end
         if phase == "receiving" or phase == "dressing" then
             local items = clientCopies(given)
             if items and phase == "receiving" and needsDressing(given) then
-                phase = "asking"
                 ask("PZHarness.dress", { given = given }, function()
                     phase, sinceMs = "dressing", getTimestampMs()
                 end)
@@ -347,16 +405,31 @@ local function call(self, name, args, itemsKey, onReply)
     end
 end
 
--- Queues a call that goes out once the actions queued before it are done, and a wait for all of
--- it. `args` may be a function of `self`.
-local function queueCall(self, name, args, itemsKey, onReply)
+-- Queues one wait that sends a call in its turn, once the actions queued before it are done, or
+-- before that when `args` is a table (sendAhead), and takes its answer in its turn: a call whose
+-- answer is in already costs a single tick. `args` may be a function of `self`. Calls queued
+-- after it may go out before its answer when `crossable`, or in T.batch.
+local function queueCall(self, name, args, itemsKey, onReply, crossable)
     local poll
-    T.step(function()
-        poll = call(self, name, type(args) == "function" and args(self) or args or {}, itemsKey, onReply)
-    end)
-    -- The answer, or the error ServerCalls gives a lost one, always comes, so no frame cap. A step
-    -- skipped after a missing fixture leaves no poll.
-    T.waitUntil(function() return not poll or poll() end, math.huge, "the server's answer to " .. name)
+    local function send(index)
+        poll = call(self, name, type(args) == "function" and args(self) or args or {}, itemsKey, onReply, index)
+    end
+    -- The answer, or the error ServerCalls gives a lost one, always comes, so no frame cap. A wait
+    -- that a missing fixture ends sends nothing.
+    local wait = queueWait(math.huge, function()
+        if not poll then
+            send()
+        end
+    end, function() return poll() end, "the server's answer to " .. name)
+    if type(args) ~= "function" then
+        wait.crossable = crossable or batching
+        wait.ahead = function(index)
+            if not poll then
+                wait.sentAhead = true
+                send(index)
+            end
+        end
+    end
 end
 
 --- Queues a call of the server handler `name` (see server/PZHarness/ServerHandlers.lua) and a
@@ -364,14 +437,35 @@ end
 --- a handler's false, 0 or nil reaches the test as that. `args` is a table of plain values
 --- (strings, numbers, booleans and tables of them), or a function of `self` returning one, called
 --- when the call goes out, so it can use an earlier answer. In single player the handler runs in
---- this game and answers at once; in multiplayer it runs on the server. What it deferred is undone
---- on its side when the test ends, in order with the test's own undos. A handler that fails, or
---- answers that something is missing, fails the test as T.need does and drops the steps queued
---- after the call. A handler that gave the character items lists them in its reply as `given`
---- (PZHarness.giveItem); the wait then lasts until this client has them, worn and held as asked,
---- and puts this client's copies in `self.items[name]`.
+--- this game and answers at once; in multiplayer it runs on the server. A call with a table goes
+--- out early when nothing but waits for the server's answers to the setters, T.give or T.count is
+--- queued before it, or in T.batch; its answer still lands in its turn. What it deferred is
+--- undone on its side when the test ends, in order with the test's own undos. A handler that
+--- fails, or answers that something is missing, fails the test as T.need does and drops the steps
+--- queued after the call. A handler that gave the character items lists them in its reply as
+--- `given` (PZHarness.giveItem); the wait then lasts until this client has them, worn and held as
+--- asked, and puts this client's copies in `self.items[name]`.
 function T.server(self, name, args)
     queueCall(self, name, args, name, function(reply) self.server[name] = reply end)
+end
+
+--- Queues what `fn` queues, and in multiplayer sends each server call in it (T.server, T.give,
+--- T.count and the fixtures built on them) whose args are a table as soon as the actions queued
+--- before the batch are done, all in one round trip, where each would otherwise wait for the
+--- answer to the one before. The server still runs them in their order, each with its undos, and
+--- each answer lands in its turn, so a T.step between two calls reads the first one's answer. Only
+--- for calls the test makes back to back: the server runs every call in the batch before anything
+--- fn queued between them happens on this client, so a wait in it for this client's copy may see
+--- what the later calls did too, and a call whose args are a function goes out in its turn,
+--- holding back the calls after it. A T.step in it must not reach the server (a call it queues, a
+--- setter, an action), and only the batch's last call may give items to put on or hold, since
+--- they go on in its turn: either would reach the server after the calls queued behind it, which
+--- fails the test.
+function T.batch(fn)
+    local outer = batching
+    batching = true
+    fn()
+    batching = outer
 end
 
 --- Queues calls of the server handler `name`, one at a time, until `done(reply)` holds or `maxMs`
@@ -381,7 +475,7 @@ end
 --- for. `args` as for T.server; a failed call fails the test as T.server's does.
 function T.serverUntil(self, name, args, done, maxMs)
     local poll, sinceMs
-    T.waitUntil(function()
+    queueWait(math.huge, nil, function()
         sinceMs = sinceMs or getTimestampMs()
         if poll then
             if not poll() then
@@ -395,7 +489,7 @@ function T.serverUntil(self, name, args, done, maxMs)
             self.server[name] = reply
         end)
         return false
-    end, math.huge, "the server's answers to " .. name)
+    end, "the server's answers to " .. name)
 end
 
 --- Gives the character `items` the way the server does: each a table { type = full type, count,
@@ -405,7 +499,11 @@ end
 --- sends them here and then puts them on and in hand, so actions that run on the server find them.
 --- The runner empties the inventory before the next test.
 function T.give(self, name, items)
-    queueCall(self, "PZHarness.give", { items = items }, name)
+    local dresses = false
+    for _, item in ipairs(items) do
+        dresses = dresses or item.worn or item.equip ~= nil
+    end
+    queueCall(self, "PZHarness.give", { items = items }, name, nil, not dresses)
 end
 
 --- Queues a count of each of `types` in the inventory of the server's copy of the character, bags
@@ -414,16 +512,17 @@ end
 function T.count(self, name, types, opts)
     queueCall(self, "PZHarness.count", { types = types, dropped = opts and opts.dropped or nil }, nil, function(reply)
         self.counts[name] = reply.counts
-    end)
+    end, true)
 end
 
 -- The server's half of a two-sided fixture (server/PZHarness/ServerFixtures.lua), on a
 -- multiplayer client only: sent at once, so it reaches the server before any later T.server call,
 -- with a wait for its answer queued, so the actions queued after the fixture start only once the
--- server has made the change. Single player has made it already, in its one copy.
+-- server has made the change. Server calls queued after it may go out before that (sendAhead).
+-- Single player has made it already, in its one copy.
 local function alsoOnServer(self, name, args, onReply)
     if isClient() then
-        T.waitUntil(call(self, name, args, nil, onReply), math.huge, "the server's answer to " .. name)
+        queueWait(math.huge, nil, call(self, name, args, nil, onReply), "the server's answer to " .. name).crossable = true
     end
 end
 
@@ -437,7 +536,7 @@ local function alsoOnServerOutsideTest(name, args, ready)
     PZHarness.ServerCalls.callOutsideTest(name, args, function(answer)
         answered, reply, sinceMs = true, answer, getTimestampMs()
     end)
-    T.waitUntil(function()
+    queueWait(math.huge, nil, function()
         if not answered then
             return not PZHarness.ServerCalls.busy()
         end
@@ -450,7 +549,7 @@ local function alsoOnServerOutsideTest(name, args, ready)
             return true
         end
         return false
-    end, math.huge, "the server's answer to " .. name)
+    end, "the server's answer to " .. name)
 end
 
 -- Restore stack --------------------------------------------------------------------------------
@@ -623,18 +722,17 @@ local function runEntry(entry, name, spec, problem)
         return
     end
     local p = T.player()
-    local perks = {}
+    local perks, ids = {}, {}
     for _, perk in pairs(settings().perks or {}) do
         perks[perk:getId()] = p:getPerkLevel(perk)
+        table.insert(ids, perk:getId())
     end
-    -- Actions and crafts that give experience level up the server's copy as well, so it gets back
-    -- these levels too.
-    T.defer(self, function()
-        PZHarness.Fixtures.setPerkLevels(p, perks)
-        if isClient() then
-            PZHarness.ServerCalls.callOutsideTest("PZHarness.setPerkLevels", { levels = perks })
-        end
-    end)
+    -- Actions and crafts that give experience level up both copies of the character, so each gets
+    -- back the levels it had: this client's can be a perk sync behind the server's.
+    T.defer(self, function() PZHarness.Fixtures.setPerkLevels(p, perks) end)
+    if #ids > 0 then
+        alsoOnServer(self, "PZHarness.keepPerkLevels", { perks = ids })
+    end
     -- Read now, not when the test registers: the dev mod may register its settings after its test
     -- files have loaded.
     local hour = spec.hour or settings().hour
@@ -843,7 +941,7 @@ local function placeOnServer(self, handle, name, args, find, what, key, onReply)
     if poll() then
         ready()
     end
-    T.waitUntil(function()
+    queueWait(math.huge, nil, function()
         if not poll() then
             return false
         end
@@ -856,7 +954,7 @@ local function placeOnServer(self, handle, name, args, find, what, key, onReply)
             return true
         end
         return false
-    end, math.huge, "this client's copy of " .. what)
+    end, "this client's copy of " .. what)
     return handle
 end
 
@@ -892,10 +990,10 @@ end
 -- Queues a wait until `condition()` holds on this client, at most RECEIVE_MS.
 local function waitOnClient(condition)
     local sinceMs
-    T.waitUntil(function()
+    queueWait(math.huge, nil, function()
         sinceMs = sinceMs or getTimestampMs()
         return condition() or getTimestampMs() - sinceMs > RECEIVE_MS
-    end, math.huge)
+    end)
 end
 
 --- Puts the character in the middle of the free square next to `square` that vanilla's walkAdj
@@ -936,13 +1034,13 @@ function T.placeAsPlayer(self, square, itemType, sprite, modData)
     local key = "PZHarness.placeAsPlayer" .. self.placedAsPlayer
     local handle = { x = square:getX(), y = square:getY(), z = square:getZ(), square = square }
     T.give(self, key, { { type = itemType, modData = modData } })
-    T.step(function()
+    queueWait(1, function()
         if not T.need(self, moveablesAction(square, "place", sprite, self.items[key][1], nil), "a way to place a " .. itemType) then
             return
         end
         waitOnClient(function() return T.objectWithSprite(square, sprite) ~= nil end)
         T.server(self, "PZHarness.trackPlaced", { x = handle.x, y = handle.y, z = handle.z, sprite = sprite })
-        T.step(function()
+        queueWait(1, function()
             handle.object = T.need(self, T.objectWithSprite(square, sprite), "this client's copy of a placed " .. itemType)
         end)
     end)
@@ -954,7 +1052,7 @@ end
 --- it.
 function T.pickUpAsPlayer(self, at, sprite)
     local square = type(at) == "table" and at.square or at
-    T.step(function()
+    queueWait(1, function()
         local object = T.objectWithSprite(square, sprite)
         if not T.need(self, object and moveablesAction(square, "pickup", sprite, nil, object), "a way to pick up the " .. sprite) then
             return
@@ -1040,10 +1138,10 @@ function T.placeVehicle(self, script, opts)
     -- one arrives is lost here until that part changes again. The server sends every 100 ms.
     if isClient() then
         local sinceMs
-        T.waitUntil(function()
+        queueWait(math.huge, nil, function()
             sinceMs = sinceMs or getTimestampMs()
             return getTimestampMs() - sinceMs >= VEHICLE_SETTLE_MS
-        end, math.huge, "the second full update of a " .. script)
+        end, "the second full update of a " .. script)
     end
     return handle
 end

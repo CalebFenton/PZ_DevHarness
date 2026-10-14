@@ -141,10 +141,10 @@ The conf's `PRECHECK` ([adopting.md](adopting.md#devharnessconf)) runs before ev
 The `<TAG> SLOWEST <s> s <name>` lines name the slowest tests, slowest first, and in multiplayer
 how long each had a server answer outstanding (`(server <s> s)`). The last `SLOWEST` line splits
 the run into the time in tests and the time between them: the runner waiting for the character's
-square to load again after a test that went far, the leak checks, and in multiplayer the
-server's resets and undos. In multiplayer it adds how much of both had a server answer
-outstanding, and how many leak checks waited the full half second for the client to catch up
-with the server.
+square to load again after a test that went far, the leak checks, and in multiplayer the round
+trip that takes the server the test's undos, its reset and its half of the leak check. In
+multiplayer it adds how much of both had a server answer outstanding, and how many leak checks
+waited the full half second for the client to catch up with the server.
 
 On exit, `run-client.sh` and `validate-server.sh` print a `timing: <phase> <s> s (<what>)` line
 per phase, each from the end of the one before, then `timing: total`. The clock starts once the

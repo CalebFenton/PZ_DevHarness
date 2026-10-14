@@ -3,6 +3,12 @@
 -- it through PZHarness.Test.server, the runner for --stay reruns. In single player the server's
 -- half runs in this Lua state and answers at once, in the same tick; in multiplayer a request
 -- travels as a client command and its answer as a server command, a tick or more later.
+--
+-- Both travel reliably but unordered (PacketTypes.ClientCommand), and two sent in the same tick
+-- do arrive swapped. So the requests of a run of this Lua state carry its `session` and their
+-- ids, in the order they were sent, which the server serves them in (ServerHandlers.lua), and
+-- their answers reach their callers in that order too: requests can go out without waiting for
+-- the answers before them, and the undos a test's calls leave stay in the order they were made.
 
 PZHarness = PZHarness or {}
 local ServerCalls = {}
@@ -11,8 +17,10 @@ PZHarness.ServerCalls = ServerCalls
 local MODULE = "PZHarness"
 -- An answer that takes longer is lost: the server logged why, or stopped.
 local ANSWER_MS = 15000
+local SESSION = getTimestampMs()
 
--- Unanswered requests by id: { onAnswer, sentMs }.
+-- Unanswered requests by id: { onAnswer, sentMs, answer }, `answer` once it has come while an
+-- earlier request still waits for its own.
 local pending = {}
 local lastId = 0
 -- Real milliseconds with at least one request unanswered, up to the last time none was, and since
@@ -24,7 +32,8 @@ local waitedMs, waitingSinceMs = 0, nil
 ServerCalls.lateFailures = 0
 
 --- Sends a request of `kind` ("call", "unwind" or "reload") and calls `onAnswer(answer)` with the
---- server's answer, or with `{ error = ... }` if none comes.
+--- server's answer, or with `{ error = ... }` if none comes, after the answers to the requests
+--- sent before it.
 function ServerCalls.send(kind, request, onAnswer)
     lastId = lastId + 1
     request.id = lastId
@@ -34,6 +43,7 @@ function ServerCalls.send(kind, request, onAnswer)
         onAnswer(PZHarness.ServerHandlers.handle(player, kind, request))
         return
     end
+    request.session = SESSION
     if not ServerCalls.busy() then
         waitingSinceMs = getTimestampMs()
     end
@@ -71,15 +81,34 @@ function ServerCalls.callOutsideTest(name, args, onReply)
     end)
 end
 
+-- Hands out the answers that have come, oldest request first, up to the first still unanswered.
+-- An answer's caller may send more requests meanwhile, which come after.
+local function deliver()
+    while true do
+        local first
+        for id in pairs(pending) do
+            if not first or id < first then
+                first = id
+            end
+        end
+        local entry = first and pending[first]
+        if not (entry and entry.answer) then
+            return
+        end
+        pending[first] = nil
+        if not ServerCalls.busy() then
+            waitedMs = waitedMs + getTimestampMs() - waitingSinceMs
+            waitingSinceMs = nil
+        end
+        entry.onAnswer(entry.answer)
+    end
+end
+
 local function answered(id, answer)
     local entry = pending[id]
-    pending[id] = nil
-    if entry and not ServerCalls.busy() then
-        waitedMs = waitedMs + getTimestampMs() - waitingSinceMs
-        waitingSinceMs = nil
-    end
     if entry then
-        entry.onAnswer(answer)
+        entry.answer = answer
+        deliver()
     end
 end
 
@@ -97,7 +126,7 @@ Events.OnTick.Add(function()
     end
     local now, lost = getTimestampMs(), nil
     for id, entry in pairs(pending) do
-        if now - entry.sentMs > ANSWER_MS then
+        if not entry.answer and now - entry.sentMs > ANSWER_MS then
             lost = lost or {}
             table.insert(lost, id)
         end

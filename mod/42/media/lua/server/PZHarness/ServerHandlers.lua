@@ -108,10 +108,29 @@ function Handlers.handle(player, kind, request)
     return answer
 end
 
+-- Client commands arrive reliably but in any order (PacketTypes.ClientCommand), so each client's
+-- requests are served in the order of their ids within its session (client/PZHarness/
+-- ServerCalls.lua), and one that comes early waits here for those before it: the next id and the
+-- waiting requests of each player's session.
+local queues = {}
+
 if isServer() then
     Events.OnClientCommand.Add(function(module, command, player, args)
-        if module == MODULE and kinds[command] then
-            sendServerCommand(player, MODULE, "reply", Handlers.handle(player, command, args or {}))
+        if module ~= MODULE or not kinds[command] or not args then
+            return
+        end
+        local owner = player:getUsername()
+        local queue = queues[owner]
+        if not queue or queue.session ~= args.session then
+            queue = { session = args.session, next = 1, early = {} }
+            queues[owner] = queue
+        end
+        queue.early[args.id] = { command = command, args = args }
+        while queue.early[queue.next] do
+            local request = queue.early[queue.next]
+            queue.early[queue.next] = nil
+            queue.next = queue.next + 1
+            sendServerCommand(player, MODULE, "reply", Handlers.handle(player, request.command, request.args))
         end
     end)
 end
