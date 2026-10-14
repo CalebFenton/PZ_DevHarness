@@ -136,5 +136,5 @@ You need macOS, Project Zomboid Build 42 installed through Steam, and a Java JDK
 - [Running tests and modes](docs/running.md): every flag and environment variable, the console lines a run prints, the leak check, and what each speedup costs.
 - [Debugging with the harness](docs/debugging.md): which run to reach for when, and how to read a failure.
 - [Multiplayer](docs/multiplayer.md): how `--mp` works, the server channel, two-sided fixtures, and what a multiplayer client can't do.
-- [Writing a mod's Workshop page](docs/workshop-page.md): what players look for, the page's sections in order, and turning the README into `workshop.txt`.
+- [Writing a mod's Workshop page](docs/workshop-page.md): what players look for, the voice, the description's sections in order, the gallery, and the scripts that turn the README into `workshop.txt` and upload the gallery.
 - [`TestLib.lua`](mod/42/media/lua/client/PZHarness/TestLib.lua): the test spec, the restore stack, and the rules that keep each test independent of the ones before it.

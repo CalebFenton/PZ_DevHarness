@@ -53,6 +53,7 @@ Sourced bash. Paths are relative to the repository. The mod's id and name come f
 | `WORKSHOP_REPO` | Optional: the GitHub repository, as `owner/name`, whose `README.md` [`dev/workshop-txt.sh`](workshop-page.md) turns into `workshop.txt`'s description; its relative images and links point there. With it set, the static check fails while `workshop.txt` is out of date or over Steam's limit. |
 | `WORKSHOP_BRANCH` | Optional: the branch those images and links point to; `master` by default. |
 | `WORKSHOP_SKIP` | Optional: a bash array of the README's `##` headings to leave off the Workshop page, such as `(Install Development)`. |
+| `WORKSHOP_GALLERY` | Optional: the folder of gallery images [`dev/workshop-gallery.sh --upload`](workshop-page.md#the-gallery) puts on the Workshop item; `art/promo/gallery` by default. |
 
 Hooks, bash functions the conf may define:
 
@@ -91,6 +92,12 @@ Thin scripts that source the harness, so `$0` and the usage line name the mod's 
 #!/usr/bin/env bash
 # dev/workshop-txt.sh, with WORKSHOP_REPO set
 . "$(dirname "$0")/harness/bin/workshop-txt.sh"
+```
+
+```sh
+#!/usr/bin/env bash
+# dev/workshop-gallery.sh
+. "$(dirname "$0")/harness/bin/workshop-gallery.sh"
 ```
 
 ### The dev mod
