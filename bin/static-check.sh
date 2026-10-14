@@ -49,4 +49,7 @@ status=0
     || status=1
 PYTHONDONTWRITEBYTECODE=1 python3 "$HARNESS/check/check.py" --game "$PZ/Java" --api "$API" --cache "$BUILD" \
     "${options[@]}" "${mod_parts[@]/#/$MOD_DIR/}" "$DEV_MOD_DIR/42" "$HARNESS_MOD_DIR/42" || status=1
+if [ -n "${WORKSHOP_REPO:-}" ]; then
+    "$HARNESS/bin/workshop-txt.sh" --check || status=1
+fi
 exit $status

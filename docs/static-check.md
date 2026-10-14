@@ -31,6 +31,7 @@ second.
 | `PRECHECK` | `PRECHECK=(dev/static-check.sh)` runs it before every game of the harness, so a typo costs seconds rather than a game start ([running.md](running.md#checks-before-a-run)). |
 | `CHECK_PLUGINS` | Optional: a bash array of Python files, relative to the repository, with the mod's own checks ([Plugins](#plugins)). |
 | `CHECK_ALL_LANGUAGES` | Optional: when set, every language the game offers (but `STREW`, its placeholder) must have every translation file and key English has (`translation-missing`); otherwise a language the mod has that lacks keys is only a note. |
+| `WORKSHOP_REPO` | Optional: when set, the check also fails while `workshop.txt` isn't what `dev/workshop-txt.sh` makes of the README, or the description is over Steam's limit ([workshop-page.md](workshop-page.md)). |
 
 It checks `MOD_DIR`'s `42` and `common`, the dev mod's `42` and the harness mod. Translations are
 read from their `media/lua/shared/Translate`.

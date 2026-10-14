@@ -50,6 +50,9 @@ Sourced bash. Paths are relative to the repository. The mod's id and name come f
 | `QUIET_WORLD` | Optional: a bash array of `Key=value` sandbox options that make a `--test` world quiet, replacing the harness's list ([running.md](running.md#a-quiet-world)); `QUIET_WORLD=()` keeps the world's own population. |
 | `SERVER_PROBLEMS` | Optional: an extended regex of server log lines that count as the mod's problems, besides stack traces through it. |
 | `SERVER_IGNORE` | Optional: an extended regex of matching lines that don't count. |
+| `WORKSHOP_REPO` | Optional: the GitHub repository, as `owner/name`, whose `README.md` [`dev/workshop-txt.sh`](workshop-page.md) turns into `workshop.txt`'s description; its relative images and links point there. With it set, the static check fails while `workshop.txt` is out of date or over Steam's limit. |
+| `WORKSHOP_BRANCH` | Optional: the branch those images and links point to; `master` by default. |
+| `WORKSHOP_SKIP` | Optional: a bash array of the README's `##` headings to leave off the Workshop page, such as `(Install Development)`. |
 
 Hooks, bash functions the conf may define:
 
@@ -82,6 +85,12 @@ Thin scripts that source the harness, so `$0` and the usage line name the mod's 
 #!/usr/bin/env bash
 # dev/static-check.sh
 . "$(dirname "$0")/harness/bin/static-check.sh"
+```
+
+```sh
+#!/usr/bin/env bash
+# dev/workshop-txt.sh, with WORKSHOP_REPO set
+. "$(dirname "$0")/harness/bin/workshop-txt.sh"
 ```
 
 ### The dev mod
