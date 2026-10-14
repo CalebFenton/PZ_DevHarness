@@ -208,7 +208,7 @@ end
 -- draws: until then they keep a bag the reset just took away, such as the key ring a multiplayer
 -- character starts with, whose container the client can't name to the server
 -- ("Unable to resolve container location"), so the action never reaches it.
-local function refreshInventoryWindows()
+function PZHarness.refreshInventoryWindows()
     for _, page in ipairs({ getPlayerInventory(0), getPlayerLoot(0) }) do
         if page then
             page.inventoryPane.inventoryPage:refreshBackpacks()
@@ -360,7 +360,7 @@ local function checkBetweenTests(state)
         state.resetFor = state.index
         -- Before the snapshot, so what the reset takes away doesn't count as left behind.
         PZHarness.Fixtures.resetCharacter(state.player)
-        refreshInventoryWindows()
+        PZHarness.refreshInventoryWindows()
         if not state.check then
             settleVerdict(state, nil)
             state.checkedFor = state.index

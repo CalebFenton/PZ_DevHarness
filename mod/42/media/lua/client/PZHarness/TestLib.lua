@@ -1275,6 +1275,10 @@ local function craftLogic(recipe, from, bench)
         logic = HandcraftLogic.new(p, nil, nil)
         logic:setIsoObject(logic:findCraftSurface(p, 2))
     end
+    -- A player's right-click comes after the UI has drawn, by when the inventory windows list the
+    -- containers around where the character is now and faces; at the uncapped frame rate a test
+    -- can get here first.
+    PZHarness.refreshInventoryWindows()
     logic:setContainers(ISInventoryPaneContextMenu.getContainers(p))
     logic:setRecipeFromContextClick(recipe, from)
     return logic
@@ -1307,19 +1311,84 @@ function T.craftRefusal(recipe, from, bench)
     return "missing " .. table.concat(missing, "; ")
 end
 
+local function addRefusal(self, recipe, reason)
+    self.refusal = (self.refusal and self.refusal .. "; " or "") .. recipe:getName() .. ": " .. reason
+end
+
+-- What stops a craft at perform, where the game checks the recipe again and gives up without a
+-- word (HandcraftLogic.performCurrentRecipe, CraftRecipeData.perform): the start's check doesn't
+-- look at the reach of the containers, and the rest can change while the craft is queued.
+local function performProblems(action, recipe)
+    local p, problems = action.character, {}
+    if not p:isRecipeActuallyKnown(recipe) then
+        table.insert(problems, "recipe not known")
+    end
+    if not recipe:characterHasRequiredSkills(p) then
+        table.insert(problems, "skills too low")
+    end
+    if not recipe:canBeDoneInDark() and p:tooDarkToRead() then
+        table.insert(problems, "too dark")
+    end
+    local containers = action.logic and action.containers
+    for i = 0, (containers and containers:size() or 0) - 1 do
+        local container = containers:get(i)
+        local one = ArrayList.new()
+        one:add(container)
+        if not action.logic:isContainersAccessible(one) then
+            local outer = container:getOutermostContainer()
+            local part, square = outer:getVehiclePart(), outer:getSquare()
+            table.insert(problems, "the " .. tostring(container:getType()) .. " container out of reach"
+                .. (part and " (vehicle part " .. part:getId() .. ")" or "")
+                .. (square and string.format(" at %d,%d", square:getX(), square:getY()) or ""))
+        end
+    end
+    return problems
+end
+
+-- Watches the crafts `start()` queues, so that one the game queued and then dropped says whether
+-- it never performed or what was wrong when it did.
+local function watchCrafts(self, recipe, start)
+    local queue = ISTimedActionQueue.getTimedActionQueue(T.player()).queue
+    local queued = {}
+    for _, action in ipairs(queue) do
+        queued[action] = true
+    end
+    start()
+    for _, action in ipairs(queue) do
+        if not queued[action] and action.Type == "ISHandcraftAction" then
+            local perform = action.perform
+            function action.perform(a)
+                a.harnessPerformed = true
+                local problems = performProblems(a, recipe)
+                if #problems > 0 then
+                    addRefusal(self, recipe, "at perform, " .. table.concat(problems, ", "))
+                end
+                return perform(a)
+            end
+            T.step(function()
+                if not action.harnessPerformed then
+                    addRefusal(self, recipe, "queued but never performed")
+                end
+            end)
+        end
+    end
+end
+
 --- Starts crafting `recipe` from the item `from` the way the right-click menu does or, with
 --- `bench` (from T.bench), the way the bench's crafting window does. Adds why the game refused
 --- to `self.refusal`, which the test's failures then end with.
 function T.startCraft(self, recipe, from, bench)
     local refusal = T.craftRefusal(recipe, from, bench)
     if refusal then
-        self.refusal = (self.refusal and self.refusal .. "; " or "") .. recipe:getName() .. ": " .. refusal
+        addRefusal(self, recipe, refusal)
     end
-    if bench then
-        ISEntityUI.HandcraftStart(T.player(), craftLogic(recipe, from, bench), false, true)
-    else
-        ISInventoryPaneContextMenu.OnNewCraft(from, recipe, T.player():getPlayerNum(), false)
-    end
+    watchCrafts(self, recipe, function()
+        if bench then
+            ISEntityUI.HandcraftStart(T.player(), craftLogic(recipe, from, bench), false, true)
+        else
+            ISInventoryPaneContextMenu.OnNewCraft(from, recipe, T.player():getPlayerNum(), false)
+        end
+    end)
 end
 
 --- Registers a test that crafts `spec.recipe` from the first `spec.from` item the way the
