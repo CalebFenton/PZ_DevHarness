@@ -9,6 +9,11 @@ leaves the title, description, tags and files alone. The game's own uploader can
 (SteamWorkshop.SubmitWorkshopItem never adds previews), so this talks to Steam through the game's
 copy of the Steamworks library, as the game does: Steam must be running, logged in to the
 account that owns the item.
+
+Steam stages each new preview in the uploader's Steam Cloud for the game, as
+<item>_preview_<file>, and Project Zomboid's cloud quota is a megabyte, which a whole gallery
+outgrows (EResult 25, limit exceeded). So the images go up in as many updates as the quota
+needs, and the staged copies are deleted around each, a failed update's included.
 """
 import argparse
 import ctypes as C
@@ -20,11 +25,12 @@ import time
 APP_ID = 108600
 # ISteamUGC::AddItemPreviewFile takes images under 1 MB.
 IMAGE_BYTES = 1_000_000
+# EResult
+RESULT_OK, RESULT_LIMIT_EXCEEDED = 1, 25
 # EItemPreviewType
 IMAGE, YOUTUBE = 0, 1
 # k_iSteamUGCCallbacks + 1 and + 4 (isteamugc.h).
 QUERY_COMPLETED, SUBMIT_RESULT = 3401, 3404
-RESULT_OK = 1
 WAIT_SECONDS = 600
 
 
@@ -52,13 +58,9 @@ class Steam:
         error = C.create_string_buffer(1024)
         if api.SteamAPI_InitFlat(error) != 0:
             sys.exit(f"gallery: Steam didn't start the API ({error.value.decode()}); is Steam running?")
-        # The interface's version is the library's, so take whichever it has.
-        ugc = next(getattr(api, name) for name in (f"SteamAPI_SteamUGC_v{n:03d}" for n in range(40, 9, -1))
-                   if hasattr(api, name))
-        ugc.restype = C.c_void_p
-        api.SteamAPI_SteamUtils_v010.restype = C.c_void_p
-        self.ugc = C.c_void_p(ugc())
-        self.utils = C.c_void_p(api.SteamAPI_SteamUtils_v010())
+        self.ugc = self.interface("SteamUGC")
+        self.utils = self.interface("SteamUtils")
+        self.storage = self.interface("SteamRemoteStorage")
         for name, restype, argtypes in [
             ("ISteamUGC_CreateQueryUGCDetailsRequest", C.c_uint64, [C.POINTER(C.c_uint64), C.c_uint32]),
             ("ISteamUGC_SetReturnAdditionalPreviews", C.c_bool, [C.c_uint64, C.c_bool]),
@@ -81,6 +83,37 @@ class Steam:
         api.SteamAPI_ISteamUtils_GetAPICallResult.restype = C.c_bool
         api.SteamAPI_ISteamUtils_GetAPICallResult.argtypes = [C.c_void_p, C.c_uint64, C.c_void_p, C.c_int,
                                                               C.c_int, C.POINTER(C.c_bool)]
+        for name, restype, argtypes in [
+            ("GetQuota", C.c_bool, [C.POINTER(C.c_uint64), C.POINTER(C.c_uint64)]),
+            ("GetFileCount", C.c_int32, []),
+            ("GetFileNameAndSize", C.c_char_p, [C.c_int, C.POINTER(C.c_int32)]),
+            ("FileDelete", C.c_bool, [C.c_char_p]),
+        ]:
+            function = getattr(api, "SteamAPI_ISteamRemoteStorage_" + name)
+            function.restype = restype
+            function.argtypes = [C.c_void_p] + argtypes
+
+    def interface(self, name):
+        # An interface's version is the library's, so take whichever it has.
+        accessor = next(getattr(self.api, symbol) for symbol in
+                        (f"SteamAPI_{name}_v{n:03d}" for n in range(40, 0, -1)) if hasattr(self.api, symbol))
+        accessor.restype = C.c_void_p
+        return C.c_void_p(accessor())
+
+    def storage_call(self, name, *args):
+        return getattr(self.api, "SteamAPI_ISteamRemoteStorage_" + name)(self.storage, *args)
+
+    def cloud_room(self, item):
+        """Bytes free in the game's Steam Cloud, once this item's staged previews are deleted."""
+        prefix = f"{item}_preview_".encode()
+        staged = [self.storage_call("GetFileNameAndSize", index, C.byref(C.c_int32()))
+                  for index in range(self.storage_call("GetFileCount"))]
+        for name in staged:
+            if name.startswith(prefix):
+                self.storage_call("FileDelete", name)
+        total, free = C.c_uint64(), C.c_uint64()
+        self.storage_call("GetQuota", C.byref(total), C.byref(free))
+        return free.value
 
     def ugc_call(self, name, *args):
         return getattr(self.api, "SteamAPI_ISteamUGC_" + name)(self.ugc, *args)
@@ -114,20 +147,35 @@ class Steam:
         self.ugc_call("ReleaseQueryUGCRequest", query)
         return found
 
+    def submit(self, update):
+        done = self.wait(self.ugc_call("SubmitItemUpdate", update, None), SubmitResult(), SUBMIT_RESULT)
+        if done.needs_agreement:
+            print("gallery: accept the Workshop legal agreement on Steam before the item can show", file=sys.stderr)
+        if done.result == RESULT_LIMIT_EXCEEDED:
+            sys.exit("gallery: Steam refused the update: the game's Steam Cloud is full")
+        if done.result != RESULT_OK:
+            sys.exit(f"gallery: Steam refused the update (EResult {done.result})")
+
     def replace_images(self, item, current, files):
         update = self.ugc_call("StartItemUpdate", APP_ID, item)
         # Indices shift as previews go, so the last goes first.
         for index in reversed(range(len(current))):
             if current[index][0] != YOUTUBE and not self.ugc_call("RemoveItemPreview", update, index):
                 sys.exit(f"gallery: Steam refused to remove preview {index}")
+        room = self.cloud_room(item)
         for path in files:
+            size = os.path.getsize(path)
+            if size > room:
+                self.submit(update)
+                update = self.ugc_call("StartItemUpdate", APP_ID, item)
+                room = self.cloud_room(item)
+                if size > room:
+                    sys.exit(f"gallery: {path} is {size} bytes, more than the {room} the game's Steam Cloud has free")
             if not self.ugc_call("AddItemPreviewFile", update, path.encode(), IMAGE):
                 sys.exit(f"gallery: Steam refused {path}")
-        done = self.wait(self.ugc_call("SubmitItemUpdate", update, None), SubmitResult(), SUBMIT_RESULT)
-        if done.needs_agreement:
-            print("gallery: accept the Workshop legal agreement on Steam before the item can show", file=sys.stderr)
-        if done.result != RESULT_OK:
-            sys.exit(f"gallery: Steam refused the update (EResult {done.result})")
+            room -= size
+        self.submit(update)
+        self.cloud_room(item)
 
 
 def gallery_files(folder):
