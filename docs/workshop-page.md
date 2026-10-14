@@ -136,7 +136,7 @@ must earn its place.
 The images above the description, and what players look at before they read a word. Steam shows
 them 636 by 358, letterboxed in black, with a strip of thumbnails; a click opens one at full size.
 
-- 16:9, 1920 by 1080, JPEG under 1 MB (`ISteamUGC::AddItemPreviewFile`), named `NN-name.jpg` in the
+- 16:9, 1920 by 1080, JPEG at most 2 MB (the upload page's limit), named `NN-name.jpg` in the
   order they show. The art script writes the folder whole, so it holds exactly the gallery.
 - Each image shows one thing, with one short caption in the image, in the [voice](#voice) above.
 - First the hero shot: the mod's most recognisable thing in use, with its name. Then the
@@ -146,11 +146,15 @@ them 636 by 358, letterboxed in black, with a strip of thumbnails; a click opens
   A YouTube video goes first if there is one; add it on the item's page (**Owner Controls**,
   **Add/Edit Images & Videos**), and `--upload` leaves videos alone.
 
-`dev/workshop-gallery.sh` lists the item's gallery; `--upload` replaces its images with the
-folder's, leaving the title, description and files alone. The game's uploader can't add gallery
-images (`SteamWorkshop.SubmitWorkshopItem` sets only the title, description, tags, visibility and
-preview), so the script talks to Steam through the game's copy of the Steamworks library, as the
-game does: Steam must be running, logged in to the account that owns the item.
+`dev/workshop-gallery.sh` lists the item's gallery; `--upload` makes its images the folder's,
+sorted by name, leaving the title, description, files and videos alone, then checks that Steam
+serves every image. The game's uploader can't add gallery images
+(`SteamWorkshop.SubmitWorkshopItem` sets only the title, description, tags, visibility and
+preview), so the script works the item's **Add/Edit Images & Videos** page in Google Chrome. Its
+Chrome profile (`~/.cache/pz-devharness/steam-browser`) stays logged in to Steam: the first run
+opens a window to log in as the item's owner, later runs are headless. Not the Steamworks API:
+its gallery images live in the uploader's Steam Cloud space for the game, a megabyte shared by
+all of an account's Project Zomboid items.
 
 ## Images
 

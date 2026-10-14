@@ -1,181 +1,41 @@
-"""Shows a Workshop item's gallery, or replaces its images with a folder's (docs/workshop-page.md).
+"""Shows a Workshop item's gallery, or replaces its images with a folder's (docs/workshop-page.md#the-gallery).
 
-    python3 gallery.py --lib <libsteam_api.dylib> --item <published file id> [--upload <folder>]
+    gallery.py --item <published file id> [--upload <folder>]
 
-bin/workshop-gallery.sh runs it with what the mod's dev/harness.conf says. Without --upload it
-lists the gallery. With it, the gallery's images become the folder's .jpg and .png files in name
-order; its videos stay, before them. Only the gallery changes: an update that sets nothing else
-leaves the title, description, tags and files alone. The game's own uploader can't do this
-(SteamWorkshop.SubmitWorkshopItem never adds previews), so this talks to Steam through the game's
-copy of the Steamworks library, as the game does: Steam must be running, logged in to the
-account that owns the item.
+bin/workshop-gallery.sh runs it with uv and Playwright. It works the item's Add/Edit Images &
+Videos page as its owner would, in Google Chrome with a profile of its own that stays logged in
+to Steam: the first run opens a window to log in, later runs are headless. With --upload, the
+gallery's images become the folder's, sorted by name: an image whose name and content are already
+there stays, and the rest go and come up again, since Steam refuses an upload it already has
+(EResult 29). Videos are left alone. Only the gallery changes.
 
-Steam stages each new preview in the uploader's Steam Cloud for the game, as
-<item>_preview_<file>, and Project Zomboid's cloud quota is a megabyte, which a whole gallery
-outgrows (EResult 25, limit exceeded). So the images go up in as many updates as the quota
-needs, and the staged copies are deleted around each, a failed update's included.
+The page and not the Steamworks API: ISteamUGC::AddItemPreviewFile keeps each image in the
+uploader's Steam Cloud space for the game, a megabyte shared by all of an account's Project
+Zomboid items, and the images break when those copies are deleted. The page's uploads don't use
+that space.
 """
 import argparse
-import ctypes as C
+import hashlib
 import os
 import sys
-import tempfile
 import time
+import urllib.request
 
-APP_ID = 108600
-# ISteamUGC::AddItemPreviewFile takes images under 1 MB.
-IMAGE_BYTES = 1_000_000
-# EResult
-RESULT_OK, RESULT_LIMIT_EXCEEDED = 1, 25
-# EItemPreviewType
-IMAGE, YOUTUBE = 0, 1
-# k_iSteamUGCCallbacks + 1 and + 4 (isteamugc.h).
-QUERY_COMPLETED, SUBMIT_RESULT = 3401, 3404
-WAIT_SECONDS = 600
+from playwright.sync_api import sync_playwright
 
+PROFILE = os.path.expanduser("~/.cache/pz-devharness/steam-browser")
+MANAGE = "https://steamcommunity.com/sharedfiles/managepreviews/?id={}"
+LOGIN = "https://steamcommunity.com/login/home/?goto=sharedfiles%2Fmanagepreviews%2F%3Fid%3D{}"
+# The page's UploadPreviewFile refuses larger images, and it takes "up to 8 MB at once".
+IMAGE_BYTES = 2 * 1024 * 1024
+BATCH_BYTES = 8_000_000
+LOGIN_SECONDS = 600
+UPLOAD_MS = 300_000
 
-class QueryCompleted(C.Structure):
-    # Steam packs callback structs to 4 bytes on macOS and Linux (steamclientpublic.h).
-    _pack_ = 4
-    _layout_ = "ms"
-    _fields_ = [("handle", C.c_uint64), ("result", C.c_int), ("returned", C.c_uint32),
-                ("total", C.c_uint32), ("cached", C.c_bool), ("cursor", C.c_char * 256)]
-
-
-class SubmitResult(C.Structure):
-    _pack_ = 4
-    _layout_ = "ms"
-    _fields_ = [("result", C.c_int), ("needs_agreement", C.c_bool), ("item", C.c_uint64)]
-
-
-class Steam:
-    def __init__(self, lib):
-        # SteamAPI_InitFlat reads the app id from steam_appid.txt in the working directory.
-        os.chdir(tempfile.mkdtemp())
-        with open("steam_appid.txt", "w") as f:
-            f.write(str(APP_ID))
-        api = self.api = C.CDLL(lib)
-        error = C.create_string_buffer(1024)
-        if api.SteamAPI_InitFlat(error) != 0:
-            sys.exit(f"gallery: Steam didn't start the API ({error.value.decode()}); is Steam running?")
-        self.ugc = self.interface("SteamUGC")
-        self.utils = self.interface("SteamUtils")
-        self.storage = self.interface("SteamRemoteStorage")
-        for name, restype, argtypes in [
-            ("ISteamUGC_CreateQueryUGCDetailsRequest", C.c_uint64, [C.POINTER(C.c_uint64), C.c_uint32]),
-            ("ISteamUGC_SetReturnAdditionalPreviews", C.c_bool, [C.c_uint64, C.c_bool]),
-            ("ISteamUGC_SendQueryUGCRequest", C.c_uint64, [C.c_uint64]),
-            ("ISteamUGC_GetQueryUGCNumAdditionalPreviews", C.c_uint32, [C.c_uint64, C.c_uint32]),
-            ("ISteamUGC_GetQueryUGCAdditionalPreview", C.c_bool,
-             [C.c_uint64, C.c_uint32, C.c_uint32, C.c_char_p, C.c_uint32, C.c_char_p, C.c_uint32,
-              C.POINTER(C.c_int)]),
-            ("ISteamUGC_ReleaseQueryUGCRequest", C.c_bool, [C.c_uint64]),
-            ("ISteamUGC_StartItemUpdate", C.c_uint64, [C.c_uint32, C.c_uint64]),
-            ("ISteamUGC_AddItemPreviewFile", C.c_bool, [C.c_uint64, C.c_char_p, C.c_int]),
-            ("ISteamUGC_RemoveItemPreview", C.c_bool, [C.c_uint64, C.c_uint32]),
-            ("ISteamUGC_SubmitItemUpdate", C.c_uint64, [C.c_uint64, C.c_char_p]),
-        ]:
-            function = getattr(api, "SteamAPI_" + name)
-            function.restype = restype
-            function.argtypes = [C.c_void_p] + argtypes
-        api.SteamAPI_ISteamUtils_IsAPICallCompleted.restype = C.c_bool
-        api.SteamAPI_ISteamUtils_IsAPICallCompleted.argtypes = [C.c_void_p, C.c_uint64, C.POINTER(C.c_bool)]
-        api.SteamAPI_ISteamUtils_GetAPICallResult.restype = C.c_bool
-        api.SteamAPI_ISteamUtils_GetAPICallResult.argtypes = [C.c_void_p, C.c_uint64, C.c_void_p, C.c_int,
-                                                              C.c_int, C.POINTER(C.c_bool)]
-        for name, restype, argtypes in [
-            ("GetQuota", C.c_bool, [C.POINTER(C.c_uint64), C.POINTER(C.c_uint64)]),
-            ("GetFileCount", C.c_int32, []),
-            ("GetFileNameAndSize", C.c_char_p, [C.c_int, C.POINTER(C.c_int32)]),
-            ("FileDelete", C.c_bool, [C.c_char_p]),
-        ]:
-            function = getattr(api, "SteamAPI_ISteamRemoteStorage_" + name)
-            function.restype = restype
-            function.argtypes = [C.c_void_p] + argtypes
-
-    def interface(self, name):
-        # An interface's version is the library's, so take whichever it has.
-        accessor = next(getattr(self.api, symbol) for symbol in
-                        (f"SteamAPI_{name}_v{n:03d}" for n in range(40, 0, -1)) if hasattr(self.api, symbol))
-        accessor.restype = C.c_void_p
-        return C.c_void_p(accessor())
-
-    def storage_call(self, name, *args):
-        return getattr(self.api, "SteamAPI_ISteamRemoteStorage_" + name)(self.storage, *args)
-
-    def cloud_room(self, item):
-        """Bytes free in the game's Steam Cloud, once this item's staged previews are deleted."""
-        prefix = f"{item}_preview_".encode()
-        staged = [self.storage_call("GetFileNameAndSize", index, C.byref(C.c_int32()))
-                  for index in range(self.storage_call("GetFileCount"))]
-        for name in staged:
-            if name.startswith(prefix):
-                self.storage_call("FileDelete", name)
-        total, free = C.c_uint64(), C.c_uint64()
-        self.storage_call("GetQuota", C.byref(total), C.byref(free))
-        return free.value
-
-    def ugc_call(self, name, *args):
-        return getattr(self.api, "SteamAPI_ISteamUGC_" + name)(self.ugc, *args)
-
-    def wait(self, call, result, callback):
-        failed = C.c_bool()
-        deadline = time.time() + WAIT_SECONDS
-        while not self.api.SteamAPI_ISteamUtils_IsAPICallCompleted(self.utils, call, C.byref(failed)):
-            if time.time() > deadline:
-                sys.exit("gallery: Steam didn't answer")
-            self.api.SteamAPI_RunCallbacks()
-            time.sleep(0.1)
-        if not self.api.SteamAPI_ISteamUtils_GetAPICallResult(
-                self.utils, call, C.byref(result), C.sizeof(result), callback, C.byref(failed)) or failed.value:
-            sys.exit("gallery: Steam's answer was lost")
-        return result
-
-    def previews(self, item):
-        """The item's gallery, in order, as (type, file name or video id, URL)."""
-        ids = (C.c_uint64 * 1)(item)
-        query = self.ugc_call("CreateQueryUGCDetailsRequest", ids, 1)
-        self.ugc_call("SetReturnAdditionalPreviews", query, True)
-        done = self.wait(self.ugc_call("SendQueryUGCRequest", query), QueryCompleted(), QUERY_COMPLETED)
-        if done.result != RESULT_OK or done.returned != 1:
-            sys.exit(f"gallery: Steam has no item {item} (EResult {done.result})")
-        found = []
-        for index in range(self.ugc_call("GetQueryUGCNumAdditionalPreviews", query, 0)):
-            url, name, kind = C.create_string_buffer(2048), C.create_string_buffer(1024), C.c_int()
-            self.ugc_call("GetQueryUGCAdditionalPreview", query, 0, index, url, 2048, name, 1024, C.byref(kind))
-            found.append((kind.value, (name.value or url.value).decode(), url.value.decode()))
-        self.ugc_call("ReleaseQueryUGCRequest", query)
-        return found
-
-    def submit(self, update):
-        done = self.wait(self.ugc_call("SubmitItemUpdate", update, None), SubmitResult(), SUBMIT_RESULT)
-        if done.needs_agreement:
-            print("gallery: accept the Workshop legal agreement on Steam before the item can show", file=sys.stderr)
-        if done.result == RESULT_LIMIT_EXCEEDED:
-            sys.exit("gallery: Steam refused the update: the game's Steam Cloud is full")
-        if done.result != RESULT_OK:
-            sys.exit(f"gallery: Steam refused the update (EResult {done.result})")
-
-    def replace_images(self, item, current, files):
-        update = self.ugc_call("StartItemUpdate", APP_ID, item)
-        # Indices shift as previews go, so the last goes first.
-        for index in reversed(range(len(current))):
-            if current[index][0] != YOUTUBE and not self.ugc_call("RemoveItemPreview", update, index):
-                sys.exit(f"gallery: Steam refused to remove preview {index}")
-        room = self.cloud_room(item)
-        for path in files:
-            size = os.path.getsize(path)
-            if size > room:
-                self.submit(update)
-                update = self.ugc_call("StartItemUpdate", APP_ID, item)
-                room = self.cloud_room(item)
-                if size > room:
-                    sys.exit(f"gallery: {path} is {size} bytes, more than the {room} the game's Steam Cloud has free")
-            if not self.ugc_call("AddItemPreviewFile", update, path.encode(), IMAGE):
-                sys.exit(f"gallery: Steam refused {path}")
-            room -= size
-        self.submit(update)
-        self.cloud_room(item)
+PREVIEWS = "gPreviewImages.map(p => ({id: p.previewid, name: p.filename, url: p.url}))"
+REMOVE = """previewid => fetch('https://steamcommunity.com/sharedfiles/removepreview', {
+    method: 'POST', body: new URLSearchParams({id: publishedfileid, sessionid: g_sessionID, previewid, ajax: 'true'})
+}).then(response => response.json()).then(json => json.success)"""
 
 
 def gallery_files(folder):
@@ -184,35 +44,150 @@ def gallery_files(folder):
     if not files:
         sys.exit(f"gallery: no images in {folder}")
     for path in files:
-        if os.path.getsize(path) >= IMAGE_BYTES:
-            sys.exit(f"gallery: {path} is {os.path.getsize(path)} bytes; Steam takes under {IMAGE_BYTES}")
+        if os.path.getsize(path) > IMAGE_BYTES:
+            sys.exit(f"gallery: {path} is {os.path.getsize(path)} bytes; Steam takes at most {IMAGE_BYTES}")
     return files
 
 
+def batches(files):
+    batch, size = [], 0
+    for path in files:
+        if batch and size + os.path.getsize(path) > BATCH_BYTES:
+            yield batch
+            batch, size = [], 0
+        batch.append(path)
+        size += os.path.getsize(path)
+    if batch:
+        yield batch
+
+
+def unchanged(preview, path):
+    # An image's URL ends in the SHA-1 of its file.
+    with open(path, "rb") as f:
+        return preview["url"].rstrip("/").rsplit("/", 1)[-1].lower() == hashlib.sha1(f.read()).hexdigest()
+
+
+class Gallery:
+    def __init__(self, playwright, item):
+        self.playwright, self.item = playwright, item
+        self.context = self.launch(headless=True)
+        self.page = self.context.pages[0]
+        self.dialogs = []
+        self.page.on("dialog", lambda dialog: (self.dialogs.append(dialog.message), dialog.dismiss()))
+        self.page.goto(MANAGE.format(item))
+        if not self.on_manager():
+            self.log_in()
+
+    def launch(self, headless):
+        context = self.playwright.chromium.launch_persistent_context(
+            PROFILE, channel="chrome", headless=headless, viewport={"width": 1280, "height": 900})
+        if not context.pages:
+            context.new_page()
+        return context
+
+    def on_manager(self):
+        return self.page.url.startswith(MANAGE.format(self.item)) and \
+            self.page.evaluate("typeof gPreviewImages == 'object' && !!g_steamID")
+
+    def log_in(self):
+        self.context.close()
+        self.context = self.launch(headless=False)
+        self.page = self.context.pages[0]
+        self.page.on("dialog", lambda dialog: (self.dialogs.append(dialog.message), dialog.dismiss()))
+        self.page.goto(LOGIN.format(self.item))
+        print("gallery: log in to Steam in the Chrome window, as the item's owner; it stays logged in",
+              file=sys.stderr)
+        deadline = time.time() + LOGIN_SECONDS
+        while not self.on_manager():
+            if time.time() > deadline:
+                sys.exit(f"gallery: Steam didn't show item {self.item}'s gallery page; "
+                         "log in as the account that owns it")
+            self.page.wait_for_timeout(1000)
+
+    def previews(self):
+        return self.page.evaluate(PREVIEWS)
+
+    def reload(self):
+        self.page.goto(MANAGE.format(self.item))
+        if not self.on_manager():
+            sys.exit("gallery: Steam stopped showing the gallery page")
+
+    def remove(self, preview):
+        if self.page.evaluate(REMOVE, preview["id"]) != 1:
+            sys.exit(f"gallery: Steam refused to remove {preview['name']}")
+
+    def upload(self, batch):
+        self.dialogs.clear()
+        self.page.set_input_files("#files", batch)
+        self.page.evaluate("StartPreviewFileUpload()")
+        # DoneFileUpload hides the throbber when Steam answers, then alerts if it failed.
+        self.page.wait_for_function("$('PreviewFileUploadProgress').style.display == 'none'", timeout=UPLOAD_MS)
+        self.page.wait_for_timeout(500)
+        if self.dialogs:
+            sys.exit(f"gallery: Steam refused the upload: {self.dialogs[0]}")
+        missing = {os.path.basename(path) for path in batch} - {p["name"] for p in self.previews()}
+        if missing:
+            sys.exit(f"gallery: Steam didn't take {', '.join(sorted(missing))}")
+
+    def sort_by_name(self):
+        with self.page.expect_response(lambda response: "setpreviewsortorder" in response.url) as answer:
+            self.page.evaluate("SortPreviewImagesByFileName()")
+        if answer.value.json().get("success") != 1:
+            sys.exit("gallery: Steam refused the new order")
+
+    def replace(self, files):
+        wanted = {os.path.basename(path): path for path in files}
+        for preview in self.previews():
+            path = wanted.get(preview["name"])
+            if path and unchanged(preview, path):
+                del wanted[preview["name"]]
+            else:
+                self.remove(preview)
+        for batch in batches(sorted(wanted.values())):
+            self.upload(batch)
+        self.reload()
+        self.sort_by_name()
+        self.reload()
+
+
+def broken(previews):
+    """The images Steam lists but doesn't serve."""
+    found = []
+    for preview in previews:
+        try:
+            urllib.request.urlopen(preview["url"], timeout=30).close()
+        except OSError:
+            found.append(preview["name"])
+    return found
+
+
 def show(previews):
-    for kind, name, url in previews:
-        print(f"  {'video' if kind == YOUTUBE else 'image'} {name}" + (f"  {url}" if kind != YOUTUBE else ""))
+    for preview in previews:
+        print(f"  {preview['name']}  {preview['url']}")
     if not previews:
-        print("  (empty)")
+        print("  (no images)")
 
 
 def main(argv):
     parser = argparse.ArgumentParser(usage=__doc__.split("\n\n")[1])
-    parser.add_argument("--lib", required=True)
     parser.add_argument("--item", type=int, required=True)
     parser.add_argument("--upload")
     args = parser.parse_args(argv)
 
     files = gallery_files(os.path.abspath(args.upload)) if args.upload else []
-    steam = Steam(args.lib)
-    current = steam.previews(args.item)
-    print(f"Workshop item {args.item}'s gallery:")
-    show(current)
-    if files:
-        steam.replace_images(args.item, current, files)
-        print("now:")
-        show(steam.previews(args.item))
-    steam.api.SteamAPI_Shutdown()
+    with sync_playwright() as playwright:
+        gallery = Gallery(playwright, args.item)
+        print(f"Workshop item {args.item}'s gallery images:")
+        show(gallery.previews())
+        if files:
+            gallery.replace(files)
+            print("now:")
+            show(gallery.previews())
+        previews = gallery.previews()
+        gallery.context.close()
+    bad = broken(previews)
+    if bad:
+        sys.exit(f"gallery: Steam lists {', '.join(bad)} but doesn't serve it")
     return 0
 
 
