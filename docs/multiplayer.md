@@ -68,8 +68,8 @@ player behaves as before:
   `changeItem`, the test's `instant` and `perks`) change this game's copy at once; on a multiplayer
   client they also send the change to the server (handlers named `PZHarness.*` in
   `ServerFixtures.lua`) at once and queue a wait for its answer, so actions queued after them start
-  once the server has it. The server undoes it when the test ends. A dev mod's server Lua sets
-  `PZHarness.serverSettings.sandboxChanged` for what the client's `tests.sandboxChanged` does.
+  once the server has it. The server undoes it when the test ends. Each side calls the dev mod's
+  `sandboxChanged` setting after its own copy of an option changes.
   A client lights its squares with the daylight the server sends it, which the server does only
   every ten game minutes, so the server's `setTime` (and its undo) makes its next climate tick
   send it; `makeDark` then waits, up to 10 seconds, for this client's light to follow.
@@ -81,8 +81,9 @@ player behaves as before:
   reply; `T.server` then does the same. `T.count` counts the server's inventory.
 - World: `placeTile`, `placeBench` and `placeVehicle` place on the server and return a handle at
   once whose `.object` (`.vehicle`) is this client's copy after a queued wait; the server removes
-  them when the test ends, through `PZHarness.serverSettings.remove(object)` if set.
-  `PZHarness.serverSettings.spawnVehicle(script, square, facing, args)` may make the vehicles.
+  them when the test ends, through the dev mod's `remove` setting if it takes the object, and its
+  `spawnVehicle` setting may make the vehicles. Both sides read these from one registration in the
+  dev mod's shared Lua (`PZHarness.registerTests`, see [adopting.md](adopting.md#the-dev-mod)).
   The server gives a new vehicle the id it freed last, often the previous test's vehicle's, so
   `placeVehicle` never takes a copy it found for an earlier handle, which a client still holds
   until it takes the removal.

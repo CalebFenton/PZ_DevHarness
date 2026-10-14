@@ -2,11 +2,39 @@
 -- copy of the game: the client's or single player's (client/PZHarness/TestLib.lua) and, in
 -- multiplayer, the server's too (server/PZHarness/ServerFixtures.lua). Shared, so both sides make
 -- the same change, and so a dev mod's server handlers have the lookups too. Each setter returns
--- the function that undoes it.
+-- the function that undoes it. The dev mod's test settings are here too, for the same reason.
 
 PZHarness = PZHarness or {}
 local Fixtures = {}
 PZHarness.Fixtures = Fixtures
+
+-- What the dev mod passed to PZHarness.registerTests.
+PZHarness.testSettings = PZHarness.testSettings or {}
+
+--- Called once by the dev mod, at load, from its shared Lua: a multiplayer server loads no client
+--- Lua, and single player reads client and server fixtures alike from this one table, so a hook
+--- set here applies whichever side places or removes a fixture. Every setting is optional:
+--- - `hour`: the hour every test runs at unless its spec gives one. A test that runs at an hour
+---   first waits for the light, which lags the clock.
+--- - `perks`: perks restored after every test, however a test changed them.
+--- - `sandbox`: the mod's table in SandboxVars, which T.setSandbox tries before the game's options.
+--- - `sandboxChanged()`: called on each side after its copy of a sandbox option is set or
+---   restored, for state the mod derives from its options.
+--- - `setup(self, spec)`: called before every test's spec.run, after its hour and sandbox options;
+---   it can push undos with T.defer.
+--- - `recipePrefix`: the name prefix of the mod's craftRecipes, for the recipe helpers.
+--- - `isFreeSquare(square, indoors)`: where T.squares may put a fixture; by default a walkable
+---   square without a vehicle, indoors or outdoors as asked.
+--- - `remove(object)`: removes a placed object of the mod the way the mod does, returning true;
+---   anything it returns false for goes the vanilla way (Fixtures.removePlaced).
+--- - `spawnVehicle(script, square, facing, args)`: makes the vehicles T.placeVehicle asks for, with
+---   the test's `opts.args`, returning one, or nil to leave it to addVehicleDebug.
+--- - `leakRadius`, `leakLevels`, `leakIgnore`: the runner's leak check (docs/running.md).
+--- Hooks that call the dev mod's client or server modules look them up when they run, since those
+--- load after shared Lua, and each side loads only its own.
+function PZHarness.registerTests(settings)
+    PZHarness.testSettings = settings
+end
 
 -- The Shoddy Table players build, a crafting surface.
 Fixtures.WORK_TABLE_SPRITE = "carpentry_01_60"
@@ -227,6 +255,81 @@ function Fixtures.lineUpTrailer(car, trailer, facing)
     trailer:setWorldTransform(transform)
 end
 
+-- The squares next to a fixture's anchor, in the order every search tries them.
+local ADJACENT = { IsoDirections.N, IsoDirections.W, IsoDirections.S, IsoDirections.E }
+
+--- A free square next to `here`, with no wall in between, that isn't a key of `used` (if given),
+--- or nil.
+function Fixtures.freeAdjacentSquare(here, used)
+    for _, direction in ipairs(ADJACENT) do
+        local square = here and here:getAdjacentSquare(direction)
+        if square and not (used and used[square]) and square:isFree(false) and not here:isBlockedTo(square) then
+            return square
+        end
+    end
+    return nil
+end
+
+-- Adds `object` to its square and sends it to the clients when this is a server.
+local function addToSquare(square, object)
+    square:AddTileObject(object)
+    if isServer() then
+        object:transmitCompleteItemToClients()
+    end
+end
+
+--- A new tile object of `sprite` on `square`, with `modData`, sent to the clients when this is a
+--- server. Returns it.
+function Fixtures.newTile(square, sprite, modData)
+    local object = IsoObject.new(square, sprite, "PZHarness")
+    for key, value in pairs(modData or {}) do
+        object:getModData()[key] = value
+    end
+    addToSquare(square, object)
+    return object
+end
+
+--- A new workstation of the entity script `entity` (such as "Base.Kiln_Small"), drawn as
+--- `sprite`, on `square`, sent to the clients when this is a server, which `player` is using as
+--- its crafting window makes them. Returns it, or nil without the script; and what is missing when
+--- the script makes no craft bench, the bench then placed all the same so the caller removes it.
+function Fixtures.newBench(square, entity, sprite, player)
+    local script = getScriptManager():getGameEntityScript(entity)
+    if not script then
+        return nil, "the entity script " .. entity
+    end
+    local bench = IsoObject.new(square, sprite, entity)
+    GameEntityFactory.CreateIsoObjectEntity(bench, script, true)
+    addToSquare(square, bench)
+    if not bench:getComponent(ComponentType.CraftBench) then
+        return bench, "a craft bench in " .. entity
+    end
+    bench:setUsingPlayer(player)
+    return bench
+end
+
+--- Removes what a test placed (an IsoObject or a vehicle) the way the game does, so the mods'
+--- removal handlers run, and a server sends the removal to its clients: the dev mod's `remove`
+--- setting first, then vanilla's. Does nothing to an object already gone from its square.
+function Fixtures.removePlaced(thing)
+    if instanceof(thing, "BaseVehicle") then
+        thing:permanentlyRemove()
+        return
+    end
+    if thing:getObjectIndex() == -1 then
+        return
+    end
+    local remove = PZHarness.testSettings.remove
+    if remove and remove(thing) then
+        return
+    end
+    -- Squares stay powered by a running generator that leaves them.
+    if instanceof(thing, "IsoGenerator") and thing:isActivated() then
+        thing:setActivated(false)
+    end
+    thing:getSquare():transmitRemoveItemFromSquare(thing)
+end
+
 local function isWorkTable(object)
     local sprite = object:getSprite()
     return sprite ~= nil and sprite:getName() == Fixtures.WORK_TABLE_SPRITE
@@ -235,7 +338,7 @@ end
 --- The work table next to the character, or nil.
 function Fixtures.workTableNear(player)
     local here = player:getSquare()
-    for _, direction in ipairs({ IsoDirections.N, IsoDirections.W, IsoDirections.S, IsoDirections.E }) do
+    for _, direction in ipairs(ADJACENT) do
         local square = here and here:getAdjacentSquare(direction)
         local objects = square and square:getObjects()
         for i = 0, (objects and objects:size() or 0) - 1 do
@@ -256,19 +359,13 @@ function Fixtures.placeWorkTable(player)
     if existing then
         return existing
     end
-    local here = player:getSquare()
-    for _, direction in ipairs({ IsoDirections.N, IsoDirections.W, IsoDirections.S, IsoDirections.E }) do
-        local square = here and here:getAdjacentSquare(direction)
-        if square and square:isFree(false) and not here:isBlockedTo(square) then
-            local object = IsoObject.new(square, Fixtures.WORK_TABLE_SPRITE, "Table")
-            square:AddTileObject(object)
-            if isServer() then
-                object:transmitCompleteItemToClients()
-            end
-            return object
-        end
+    local square = Fixtures.freeAdjacentSquare(player:getSquare())
+    if not square then
+        return nil
     end
-    return nil
+    local object = IsoObject.new(square, Fixtures.WORK_TABLE_SPRITE, "Table")
+    addToSquare(square, object)
+    return object
 end
 
 --- The runner's reset before every test: full health, an empty inventory, nothing worn or held.

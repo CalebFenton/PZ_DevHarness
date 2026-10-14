@@ -15,7 +15,7 @@ What `dev/run-debug-client.sh` does with each flag, why a run is fast, and the r
 | `--test --mp --stay` | Both stay open; the next `--test --mp --stay` reruns the tests in them. |
 | `--test --failed` | Runs only the tests that failed in the last `--test` run of the same kind (with or without `--mp`), and the one a stopped run was in. |
 | `--test --changed` | Runs the tests the conf's `TEST_MAP` gives for the files changed since `HEAD`, staged, unstaged or untracked, and prints each file's share and why. A changed file under the mods that no glob covers runs every test; with nothing changed under the mods, nothing runs. |
-| `--<mode>` | Runs the mod's handler for the mode and quits. |
+| `--<mode>` | Runs the mod's handler for the mode and quits. A capture mode with `MODE_CAPTURES_<mode>` then crops its shots into the mod's captures ([adopting.md](adopting.md#capture-modes)); one with `MODE_GROUPS_<mode>` shoots only the groups its selection variable names, every group if it names none, and refuses an unknown name before the game starts. |
 
 `--failed` and `--changed` combine with `--mp` and `--stay`, not with each other or with `TESTS`.
 
@@ -133,7 +133,8 @@ count. `RERUN=1` runs it anyway, for when the game rather than a test failed.
 ### Checks before a run
 
 The conf's `PRECHECK` ([adopting.md](adopting.md#devharnessconf)) runs before every harness game,
-`validate-server.sh` too, and no game starts if it fails.
+`validate-server.sh` too, and no game starts if it fails. Normally it is the mod's
+`dev/static-check.sh` ([static-check.md](static-check.md)).
 
 ## Where the time goes
 

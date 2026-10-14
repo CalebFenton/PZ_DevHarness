@@ -8,54 +8,24 @@ require "PZHarness/Snapshot"
 -- player changes its one copy on the client side and calls only the handlers that make or track
 -- things ("PZHarness.give", "PZHarness.dress", "PZHarness.count", "PZHarness.tile",
 -- "PZHarness.bench", "PZHarness.trackPlaced"), which work the same in both. Names start with
--- "PZHarness." so they never meet a dev mod's.
---
--- A dev mod's server Lua may set, in `PZHarness.serverSettings`:
--- - `sandboxChanged()`: called after the server's copy of a sandbox option is set or restored,
---   as the `tests.sandboxChanged` setting is on the client.
--- - `remove(object)`: removes a placed object of the mod the way the mod does, returning true, as
---   the `tests.remove` setting does for T.track; for the objects T.placeTile and T.placeBench
---   place, in single player too.
--- - `spawnVehicle(script, square, facing, args)`: makes the vehicles T.placeVehicle asks for, with
---   the test's `opts.args`, returning one, or nil to leave it to addVehicleDebug.
+-- "PZHarness." so they never meet a dev mod's. The dev mod's hooks (`sandboxChanged`, `remove`,
+-- `spawnVehicle`) come from PZHarness.registerTests (shared/PZHarness/Fixtures.lua), as the
+-- client's do.
 
 PZHarness = PZHarness or {}
-PZHarness.serverSettings = PZHarness.serverSettings or {}
 
 local Fixtures = PZHarness.Fixtures
 local handler = PZHarness.serverHandler
 
 local function sandboxChanged()
-    if PZHarness.serverSettings.sandboxChanged then
-        PZHarness.serverSettings.sandboxChanged()
+    if PZHarness.testSettings.sandboxChanged then
+        PZHarness.testSettings.sandboxChanged()
     end
 end
 
--- Removes `object` when the calling test ends the way T.track does, which a server sends to its
--- clients.
+-- Removes `object` when the calling test ends, as T.track does.
 local function track(defer, object)
-    defer(function()
-        if object:getObjectIndex() == -1 then
-            return
-        end
-        local remove = PZHarness.serverSettings.remove
-        if remove and remove(object) then
-            return
-        end
-        -- Squares stay powered by a running generator that leaves them.
-        if instanceof(object, "IsoGenerator") and object:isActivated() then
-            object:setActivated(false)
-        end
-        object:getSquare():transmitRemoveItemFromSquare(object)
-    end)
-end
-
--- Adds `object` to its square and sends it to the clients when this is a server.
-local function addToSquare(square, object)
-    square:AddTileObject(object)
-    if isServer() then
-        object:transmitCompleteItemToClients()
-    end
+    defer(function() Fixtures.removePlaced(object) end)
 end
 
 -- T.placeTile: a tile object of `args.sprite` with `args.modData` on the square at x, y, z.
@@ -64,34 +34,24 @@ handler("PZHarness.tile", function(_, args, defer)
     if not square then
         return nil, "a loaded square for a " .. tostring(args.sprite)
     end
-    local object = IsoObject.new(square, args.sprite, "PZHarness")
-    for key, value in pairs(args.modData or {}) do
-        object:getModData()[key] = value
-    end
-    addToSquare(square, object)
-    track(defer, object)
+    track(defer, Fixtures.newTile(square, args.sprite, args.modData))
     return {}
 end)
 
 -- T.placeBench: a workstation of the entity script `args.entity`, drawn as `args.sprite`, on the
 -- square at x, y, z, which the character is using as its crafting window makes them.
 handler("PZHarness.bench", function(player, args, defer)
-    local script = getScriptManager():getGameEntityScript(args.entity)
-    if not script then
-        return nil, "the entity script " .. tostring(args.entity)
-    end
     local square = getSquare(args.x, args.y, args.z)
     if not square then
         return nil, "a loaded square for a " .. args.entity
     end
-    local bench = IsoObject.new(square, args.sprite, args.entity)
-    GameEntityFactory.CreateIsoObjectEntity(bench, script, true)
-    addToSquare(square, bench)
-    track(defer, bench)
-    if not bench:getComponent(ComponentType.CraftBench) then
-        return nil, "a craft bench in " .. args.entity
+    local bench, missing = Fixtures.newBench(square, args.entity, args.sprite, player)
+    if bench then
+        track(defer, bench)
     end
-    bench:setUsingPlayer(player)
+    if missing then
+        return nil, missing
+    end
     return {}
 end)
 
@@ -159,14 +119,14 @@ local function removeVehicleKey(vehicle, square)
 end
 
 -- T.placeVehicle: a vehicle of `args.script` facing `args.facing` ("N" unless given) on the first
--- of `args.squares` (each { x, y, z }) that takes it, made by the dev mod's
--- `PZHarness.serverSettings.spawnVehicle(script, square, facing, args.args)` if that returns one,
--- else by addVehicleDebug. addVehicleDebug returns a vehicle even where it leaves it out of the
--- world, as where it would hit another vehicle; only a vehicle in the world gets an id
--- (BaseVehicle.createPhysics). The server sends it to the clients nearby, by the same id.
+-- of `args.squares` (each { x, y, z }) that takes it, made by the dev mod's `spawnVehicle(script,
+-- square, facing, args.args)` setting if that returns one, else by addVehicleDebug.
+-- addVehicleDebug returns a vehicle even where it leaves it out of the world, as where it would
+-- hit another vehicle; only a vehicle in the world gets an id (BaseVehicle.createPhysics). The
+-- server sends it to the clients nearby, by the same id.
 handler("PZHarness.vehicle", function(_, args, defer)
     local facing = args.facing or "N"
-    local spawn = PZHarness.serverSettings.spawnVehicle
+    local spawn = PZHarness.testSettings.spawnVehicle
     for _, at in ipairs(args.squares or {}) do
         local square = getSquare(at.x, at.y, at.z)
         local vehicle = square and spawn and spawn(args.script, square, facing, args.args)
@@ -175,7 +135,7 @@ handler("PZHarness.vehicle", function(_, args, defer)
         end
         if vehicle and vehicle:getId() ~= -1 then
             defer(function()
-                vehicle:permanentlyRemove()
+                Fixtures.removePlaced(vehicle)
                 removeVehicleKey(vehicle, square)
             end)
             return { id = vehicle:getId(), x = at.x, y = at.y, z = at.z }

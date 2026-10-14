@@ -92,7 +92,7 @@ PZHarness.run = readRun()
 local run = PZHarness.run
 
 -- What the dev mod registered; see PZHarness.register.
-PZHarness.config = PZHarness.config or { prefix = "", modes = {}, tests = {} }
+PZHarness.config = PZHarness.config or { prefix = "", modes = {} }
 
 local function startsWith(text, prefix)
     return string.sub(text, 1, #prefix) == prefix
@@ -464,7 +464,7 @@ end
 -- patterns of the objects it leaves out: the built-in ones and the dev mod's `leakIgnore`.
 local function leakSettings()
     local mode = run.leaks ~= nil and run.leaks ~= "" and run.leaks or "fail"
-    local tests = PZHarness.config.tests
+    local tests = PZHarness.testSettings
     local ignore = {}
     for _, list in ipairs({ PZHarness.Snapshot.DEFAULT_IGNORE, tests.leakIgnore or {} }) do
         for _, pattern in ipairs(list) do
@@ -929,7 +929,7 @@ end
 ---   frames as the machine can; `clearWeather` clears the sky at once and keeps it clear; `fastUI`
 ---   draws the UI at its highest rate until `done()`, which puts the option back.
 --- - `onStart(mode)`: optional, called after the scenario's own onStart in every mode.
---- - `tests`: settings of the test library, see PZHarness/TestLib.lua.
+--- The test library's settings come from PZHarness.registerTests (shared/PZHarness/Fixtures.lua).
 --- With --mp no scenario starts: the client joins the server, the runner takes the character to
 --- the scenario's `startLoc` and calls its onStart and the mod's (see Multiplayer above).
 function PZHarness.register(config)
@@ -938,7 +938,6 @@ function PZHarness.register(config)
         prefix = config.prefix or "",
         modes = config.modes or {},
         onStart = config.onStart,
-        tests = config.tests or {},
     }
     local scenario = debugScenarios[config.scenario]
     if run.mode == "" then

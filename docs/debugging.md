@@ -7,8 +7,8 @@ describes every flag and line named here.
 
 ## What to run when
 
-1. After every edit, the mod's static check, if it has one (it takes seconds and needs no game).
-   The conf's `PRECHECK` runs it before every game run as well.
+1. After every edit, `dev/static-check.sh` ([static-check.md](static-check.md); it takes seconds
+   and needs no game). The conf's `PRECHECK` runs it before every game run as well.
 2. While you work on a change, a kept game and only the tests it touches:
 
     ```sh

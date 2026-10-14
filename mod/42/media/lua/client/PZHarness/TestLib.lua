@@ -15,20 +15,8 @@ require "PZHarness/Checks"
 -- back; perks, known recipes, modData, world objects, sandbox options and the clock carry over.
 -- Each result goes to console.txt as "<tag> PASS <name>" or "<tag> FAIL <name>: <reasons>".
 --
--- Settings, from the `tests` table the dev mod passes to PZHarness.register, all optional:
--- - `hour`: the hour every test runs at unless its spec gives one. A test that runs at an hour
---   first waits for the light, which lags the clock.
--- - `perks`: perks restored after every test, however a test changed them.
--- - `sandbox`: the mod's table in SandboxVars, which T.setSandbox tries before the game's options.
--- - `sandboxChanged()`: called after T.setSandbox sets or restores an option, for state the mod
---   derives from its options.
--- - `setup(self, spec)`: called before every test's spec.run, after its hour and sandbox options;
---   it can push undos with T.defer.
--- - `recipePrefix`: the name prefix of the mod's craftRecipes, for the recipe helpers.
--- - `isFreeSquare(square, indoors)`: where T.squares may put a fixture; by default a walkable
---   square without a vehicle, indoors or outdoors as asked.
--- - `remove(object)`: removes a placed object of the mod the way the mod does, returning true;
---   anything it returns false for T.track removes the vanilla way.
+-- Settings and hooks come from the dev mod's PZHarness.registerTests, in its shared Lua, which
+-- both sides read; shared/PZHarness/Fixtures.lua lists them.
 --
 -- Rules of the API, so that no test depends on what an earlier one left:
 -- - T.test gives every run a fresh `self`, sets the clock to the hour, runs timed actions
@@ -65,7 +53,7 @@ T.SEARCH_RADIUS = SEARCH_RADIUS
 local VEHICLE_TRIES = 8
 
 local function settings()
-    return PZHarness.config.tests
+    return PZHarness.testSettings
 end
 
 function T.player()
@@ -515,8 +503,8 @@ local function sandboxChanged()
 end
 
 --- Sets a sandbox option of the mod (SandboxVars[settings.sandbox]) or, failing that, of the
---- game. An option in neither is recorded as missing rather than created. The server calls its
---- own `PZHarness.serverSettings.sandboxChanged` (server/PZHarness/ServerFixtures.lua).
+--- game. An option in neither is recorded as missing rather than created. Each side calls the
+--- `sandboxChanged` setting after its copy changes.
 function T.setSandbox(self, key, value)
     local options = PZHarness.Fixtures.sandboxOptions(settings().sandbox, key)
     if not T.need(self, options, "the sandbox option " .. key) then return end
@@ -792,33 +780,15 @@ end
 -- Fixtures -------------------------------------------------------------------------------------
 
 --- Removes `thing` (an IsoObject or a vehicle) when the test ends, the way the game does, so the
---- mods' removal handlers run. Returns `thing`.
+--- mods' removal handlers run (PZHarness.Fixtures.removePlaced). Returns `thing`.
 function T.track(self, thing)
-    T.defer(self, function()
-        if instanceof(thing, "BaseVehicle") then
-            thing:permanentlyRemove()
-        elseif thing:getObjectIndex() ~= -1 then
-            if settings().remove and settings().remove(thing) then
-                return
-            end
-            -- Squares stay powered by a running generator that leaves them.
-            if instanceof(thing, "IsoGenerator") and thing:isActivated() then
-                thing:setActivated(false)
-            end
-            thing:getSquare():transmitRemoveItemFromSquare(thing)
-        end
-    end)
+    T.defer(self, function() PZHarness.Fixtures.removePlaced(thing) end)
     return thing
 end
 
 --- A tile object of `sprite` on `square`, with `modData`.
 function T.tile(self, square, sprite, modData)
-    local object = IsoObject.new(square, sprite, "PZHarness")
-    for key, value in pairs(modData or {}) do
-        object:getModData()[key] = value
-    end
-    square:AddTileObject(object)
-    return T.track(self, object)
+    return T.track(self, PZHarness.Fixtures.newTile(square, sprite, modData))
 end
 
 --- Places a new `itemType` on `square` the way the moveables cursor does, with `modData` on the
@@ -837,32 +807,26 @@ end
 -- A free square next to the character, with no wall in between, for a bench of `entity`; nil, and
 -- missing, without one.
 local function benchSquare(self, entity)
-    local here = T.player():getSquare()
-    for _, direction in ipairs({ IsoDirections.S, IsoDirections.E, IsoDirections.N, IsoDirections.W }) do
-        local next = here:getAdjacentSquare(direction)
-        if next and not self.used[next] and next:isFree(false) and not here:isBlockedTo(next) then
-            self.used[next] = true
-            return next
-        end
+    local square = PZHarness.Fixtures.freeAdjacentSquare(T.player():getSquare(), self.used)
+    if square then
+        self.used[square] = true
     end
-    return T.need(self, nil, "a free square next to the character for a " .. entity)
+    return T.need(self, square, "a free square next to the character for a " .. entity)
 end
 
 --- A workstation of the entity script `entity` (such as "Base.Kiln_Small"), drawn as `sprite`,
 --- on a free square next to the character, who is using it as its crafting window makes them.
 --- Returns the object. On a multiplayer client it exists here only: use T.placeBench.
 function T.bench(self, entity, sprite)
-    local script = T.need(self, getScriptManager():getGameEntityScript(entity), "the entity script " .. entity)
-    local square = script and benchSquare(self, entity)
+    local square = benchSquare(self, entity)
     if not square then
         return nil
     end
-    local bench = IsoObject.new(square, sprite, entity)
-    GameEntityFactory.CreateIsoObjectEntity(bench, script, true)
-    square:AddTileObject(bench)
-    T.track(self, bench)
-    bench:setUsingPlayer(T.player())
-    return T.need(self, bench:getComponent(ComponentType.CraftBench) and bench, "a craft bench in " .. entity)
+    local bench, missing = PZHarness.Fixtures.newBench(square, entity, sprite, T.player())
+    if bench then
+        T.track(self, bench)
+    end
+    return T.need(self, not missing and bench, missing)
 end
 
 -- Sends the call of handler `name`, which places something, and queues a wait until `find()`
@@ -897,10 +861,10 @@ local function placeOnServer(self, handle, name, args, find, what, key, onReply)
 end
 
 --- A tile object of `sprite` on `square`, with `modData`, placed the way the authority does: on
---- the server in multiplayer, which sends it to the clients. Removed when the test ends, by the
---- dev mod's `PZHarness.serverSettings.remove` if it takes it (server/PZHarness/ServerFixtures.lua),
---- else the vanilla way. Returns a handle { x, y, z, square } at once; handle.object is this
---- client's copy, there at once in single player and after a queued wait in multiplayer.
+--- the server in multiplayer, which sends it to the clients. Removed when the test ends as T.track
+--- removes, by the dev mod's `remove` setting if it takes it, else the vanilla way. Returns a
+--- handle { x, y, z, square } at once; handle.object is this client's copy, there at once in
+--- single player and after a queued wait in multiplayer.
 function T.placeTile(self, square, sprite, modData)
     local handle = { x = square:getX(), y = square:getY(), z = square:getZ(), square = square }
     local args = { x = handle.x, y = handle.y, z = handle.z, sprite = sprite, modData = modData }
@@ -1036,11 +1000,11 @@ local VEHICLE_SETTLE_MS = 300
 
 --- T.vehicle placed the way the authority does: on the server in multiplayer, which sends it to
 --- the clients nearby; removed when the test ends. `opts`: `square` or `near` as for T.vehicle,
---- `facing` ("N" unless given), `args` (plain values for the dev mod's
---- PZHarness.serverSettings.spawnVehicle, which makes the vehicle if it returns one). Returns a
---- handle at once. Once the server has answered, handle.id (shared by the server and its clients;
---- PZHarness.Fixtures.vehicleById finds it on either side), x, y, z and square say where it went,
---- and after a queued wait handle.vehicle is this client's copy.
+--- `facing` ("N" unless given), `args` (plain values for the dev mod's `spawnVehicle` setting,
+--- which makes the vehicle if it returns one). Returns a handle at once. Once the server has
+--- answered, handle.id (shared by the server and its clients; PZHarness.Fixtures.vehicleById
+--- finds it on either side), x, y, z and square say where it went, and after a queued wait
+--- handle.vehicle is this client's copy.
 function T.placeVehicle(self, script, opts)
     opts = opts or {}
     local removed = {}

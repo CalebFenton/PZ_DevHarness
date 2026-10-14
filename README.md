@@ -87,11 +87,15 @@ Then it checks. After each test the harness compares the world around the charac
 
 ### It's built for AI coding assistants too
 
-An assistant left alone with a test suite tends to rerun the same failing run hoping for a different answer. The harness won't let it: a run whose tests, settings and files haven't changed since its last verdict prints that verdict instead of starting the game, and after a test fails three runs in a row the script says to stop rerunning and change the approach. Your mod's own static checks can run before every game, so a typo costs seconds instead of a game start. Several assistants editing at once share the one game through the lock.
+An assistant left alone with a test suite tends to rerun the same failing run hoping for a different answer. The harness won't let it: a run whose tests, settings and files haven't changed since its last verdict prints that verdict instead of starting the game, and after a test fails three runs in a row the script says to stop rerunning and change the approach. The static check runs before every game, so a typo costs seconds instead of a game start. Several assistants editing at once share the one game through the lock.
+
+### It checks the mod before the game starts
+
+`dev/static-check.sh` compiles every Lua file with the game's own compiler and cross-checks the mod against the installed game in about a second: translation keys and files in every language, item, recipe and sandbox option scripts, textures, requires, and every global, method and event name the Lua uses against what the game's Java and Lua define. These are the mistakes the game shows only as a key on screen, an invisible item or a nil error when the line finally runs. A mod adds its own rules as Python plugins. [The static check](docs/static-check.md) lists every rule.
 
 ### It runs more than tests
 
-A mod can register its own modes, each a `--<mode>` flag that starts the scenario, runs the mod's code and quits. Renewable Energy uses them to take the screenshots for its Workshop page, with the weather held clear so the same shot looks the same tomorrow.
+A mod can register its own modes, each a `--<mode>` flag that starts the scenario, runs the mod's code and quits. Renewable Energy and Hearing Aid use them to take the screenshots for their Workshop pages, with the weather held clear so the same shot looks the same tomorrow. The harness's [capture library](docs/adopting.md#capture-modes) shoots UI on black and on white to recover its transparency, crops each shot into named images, and reshoots one group of them without touching the rest.
 
 ## Quick start
 
@@ -103,7 +107,7 @@ You need macOS, Project Zomboid Build 42 installed through Steam, and a Java JDK
     git submodule add https://github.com/CalebFenton/PZ_DevHarness.git dev/harness
     ```
 
-2. Give the harness a `dev/harness.conf`, two one-line entry scripts and a dev mod that holds your debug scenario and tests. [Adopting PZ_DevHarness](docs/adopting.md) shows each file.
+2. Give the harness a `dev/harness.conf`, three one-line entry scripts and a dev mod that holds your debug scenario and tests. [Adopting PZ_DevHarness](docs/adopting.md) shows each file.
 
 3. Run every test, then quit:
 
@@ -128,6 +132,7 @@ You need macOS, Project Zomboid Build 42 installed through Steam, and a Java JDK
 ## Documentation
 
 - [Adopting PZ_DevHarness](docs/adopting.md): the conf file, entry scripts, dev mod, and the test library's functions.
+- [The static check](docs/static-check.md): every rule, the conf keys, and how a mod adds its own rules.
 - [Running tests and modes](docs/running.md): every flag and environment variable, the console lines a run prints, the leak check, and what each speedup costs.
 - [Debugging with the harness](docs/debugging.md): which run to reach for when, and how to read a failure.
 - [Multiplayer](docs/multiplayer.md): how `--mp` works, the server channel, two-sided fixtures, and what a multiplayer client can't do.

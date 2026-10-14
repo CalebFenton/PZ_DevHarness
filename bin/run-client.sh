@@ -232,6 +232,26 @@ elif [ -n "$MODE" ]; then
     fi
     mark_var="MODE_MARK_$MODE"
     MARK=${!mark_var:-$TAG}
+    # A mode with groups refuses a name the conf doesn't list before the game starts, and gets
+    # every group when the selection names none, so its handler always has the groups to shoot,
+    # in the conf's order.
+    groups_var="MODE_GROUPS_$MODE"
+    if [ -n "${!groups_var:-}" ]; then
+        groups=${!groups_var} picked=
+        SELECTION=${SELECTION// /}
+        for group in ${SELECTION//,/ }; do
+            if [[ " $groups " != *" $group "* ]]; then
+                echo "unknown ${selection_name:-$MODE} group $group; the groups are ${groups// /, }" >&2
+                exit 2
+            fi
+        done
+        for group in $groups; do
+            if [ -z "$SELECTION" ] || [[ ",$SELECTION," == *",$group,"* ]]; then
+                picked="$picked,$group"
+            fi
+        done
+        SELECTION=${picked#,}
+    fi
 fi
 # A selection the mod refuses fails here rather than after the game has started.
 if [ -n "$MODE" ] && declare -F "harness_check_$MODE" > /dev/null; then
@@ -729,8 +749,14 @@ if [ "$MODE" != test ]; then
         echo "FAIL: the harness didn't finish"
         exit 1
     fi
+    captures_var="MODE_CAPTURES_$MODE"
     if declare -F "harness_after_$MODE" > /dev/null; then
         "harness_after_$MODE"
+    elif [ -n "${!captures_var:-}" ]; then
+        "$HARNESS/lib/capture.py" "$CACHE" "$MARK" "$REPO/${!captures_var}"
+        echo "PASS: captures are in $REPO/${!captures_var}"
+    elif compgen -G "$CACHE/Screenshots/${MODE}_*.png" > /dev/null; then
+        echo "PASS: screenshots are in $CACHE/Screenshots"
     else
         echo "PASS"
     fi

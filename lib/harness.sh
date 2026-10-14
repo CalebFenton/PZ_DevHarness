@@ -273,8 +273,8 @@ hand_lock_to_game() {
     fi
 }
 
-# Runs the conf's PRECHECK, the mod's own quick checks such as a Lua compile, from the repository,
-# and fails the script if they fail, before it spends a game on code they reject.
+# Runs the conf's PRECHECK, normally the mod's dev/static-check.sh, from the repository, and fails
+# the script if it fails, before it spends a game on code it rejects.
 run_precheck() {
     declare -p PRECHECK > /dev/null 2>&1 && [ ${#PRECHECK[@]} -gt 0 ] || return 0
     if ! (cd "$REPO" && "${PRECHECK[@]}"); then
