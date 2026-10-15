@@ -31,6 +31,8 @@ IMAGE_BYTES = 2 * 1024 * 1024
 BATCH_BYTES = 8_000_000
 LOGIN_SECONDS = 600
 UPLOAD_MS = 300_000
+# Steam can list a batch's last images some seconds after it answers the upload.
+LISTED_SECONDS = 60
 
 PREVIEWS = "gPreviewImages.map(p => ({id: p.previewid, name: p.filename, url: p.url}))"
 REMOVE = """previewid => fetch('https://steamcommunity.com/sharedfiles/removepreview', {
@@ -125,9 +127,13 @@ class Gallery:
         self.page.wait_for_timeout(500)
         if self.dialogs:
             sys.exit(f"gallery: Steam refused the upload: {self.dialogs[0]}")
-        missing = {os.path.basename(path) for path in batch} - {p["name"] for p in self.previews()}
-        if missing:
-            sys.exit(f"gallery: Steam didn't take {', '.join(sorted(missing))}")
+        names = {os.path.basename(path) for path in batch}
+        deadline = time.time() + LISTED_SECONDS
+        while missing := names - {p["name"] for p in self.previews()}:
+            if time.time() > deadline:
+                sys.exit(f"gallery: Steam didn't take {', '.join(sorted(missing))}")
+            self.page.wait_for_timeout(2000)
+            self.reload()
 
     def sort_by_name(self):
         with self.page.expect_response(lambda response: "setpreviewsortorder" in response.url) as answer:
