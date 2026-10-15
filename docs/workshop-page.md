@@ -69,8 +69,8 @@ Nothing else belongs on the pages:
   and commit messages hold those.
 - History and changes: Steam's Change Notes tab.
 - Every sandbox option: the game lists them with tooltips.
-- Requests to rate, rules for commenting, permission and license text, other mods' banners. A
-  license line in the credits is enough.
+- Requests to rate, rules for commenting, permission and license text, the author's name (Steam
+  shows it beside the page), other mods' banners.
 
 ## Voice
 
@@ -119,7 +119,7 @@ Each section answers one of the questions above. Leave out a section the mod has
 10. **Questions.** Only ones players ask, in their words, answered in a line or two: adding it to
     a save in progress and removing it, a known conflict, why something they expect isn't there.
     Check each answer in the code.
-11. **Credits.** Who made it, what inspired it, the license, a link to the source.
+11. **Credits.** Only the mods or people that inspired it, if any; otherwise leave the section out.
 
 README-only sections, such as Install from the repository and Development, go last; `WORKSHOP_SKIP`
 names them so the Workshop page leaves them out.
