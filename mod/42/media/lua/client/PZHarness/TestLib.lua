@@ -1007,12 +1007,17 @@ function T.standNextTo(square)
     PZHarness.Fixtures.teleportToMiddle(p, at:getX(), at:getY(), at:getZ())
 end
 
+-- How long, in real milliseconds, the server must have kept the character on the new square
+-- before T.goNextTo trusts it: position updates sent before the teleport, such as the runner's move
+-- to the test's start, can still arrive and move it back.
+local SETTLE_MS = 300
+
 --- Queues T.standNextTo(square), then a wait until a multiplayer server has the character there
---- too. The server learns the character moved only from the client's position updates, after any
---- still on their way, and an instant timed action queued at once can reach its complete() on the
---- server while it still stands at the old place.
+--- too, and has kept it there for SETTLE_MS. The server learns the character moved only from the
+--- client's position updates, after any still on their way, and an instant timed action queued at
+--- once can reach its complete() on the server while it still stands at the old place.
 function T.goNextTo(self, square)
-    local at = {}
+    local at, sinceMs = {}, nil
     T.step(function()
         T.standNextTo(square)
         -- The character's square catches up with a teleport only on its next update.
@@ -1020,7 +1025,12 @@ function T.goNextTo(self, square)
         at.x, at.y = math.floor(p:getX()), math.floor(p:getY())
     end)
     T.serverUntil(self, "PZHarness.position", {}, function(reply)
-        return math.floor(reply.x) == at.x and math.floor(reply.y) == at.y
+        if not (math.floor(reply.x) == at.x and math.floor(reply.y) == at.y) then
+            sinceMs = nil
+            return false
+        end
+        sinceMs = sinceMs or getTimestampMs()
+        return not isClient() or getTimestampMs() - sinceMs >= SETTLE_MS
     end)
 end
 
