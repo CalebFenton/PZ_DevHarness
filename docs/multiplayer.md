@@ -58,7 +58,9 @@ early when `isClient()`) is empty, so what only the authority can do goes throug
 - A round trip takes about 25 ms, so a call need not wait for the answer before it when nothing
   in between happens on this client: one whose `args` is a table goes out as soon as only waits
   for answers that change nothing on the server are queued before it (the setters', and `T.give`'s
-  and `T.count`'s unless the items go on or in hand), and its answer still lands in its turn.
+  and `T.count`'s unless the items go on or in hand), and its answer still lands in its turn. A
+  call that uses up items a `T.give` before it gave can so reach the server before they reach this
+  client, and the give's wait for its copies then never ends: queue a `T.step` between them.
   `T.batch(fn)` sends every such call that `fn` queues together, when the first one's turn comes,
   and its steps and waits read each answer in its turn; it is for calls a test makes back to back,
   since the server has run them all before anything `fn` queued between them happens here.
@@ -83,8 +85,9 @@ player behaves as before:
   client they also send the change to the server (handlers named `PZHarness.*` in
   `ServerFixtures.lua`) at once and queue a wait for its answer, so actions queued after them start
   once the server has it (server calls may go out before that, as above). The server undoes it
-  when the test ends; for `perks` each side puts back the levels it had, since the server's perk
-  sync can leave this client's a level behind for up to a second. Each side calls the dev mod's
+  when the test ends; for `perks` a multiplayer client takes back the server's levels, not its own:
+  the server's perk sync can leave this client's a level behind for up to a second, and a stale
+  level put back after every test would outlast the syncs. Each side calls the dev mod's
   `sandboxChanged` setting after its own copy of an option changes.
   A client lights its squares with the daylight the server sends it, which the server does only
   every ten game minutes, so the server's `setTime` (and its undo) makes its next climate tick
