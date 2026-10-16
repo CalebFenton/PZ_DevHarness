@@ -81,7 +81,7 @@ mistake, never report a correct name. Run over the game's own 1,400 Lua files, `
 | `item-tooltip` | A `Tooltip` key no translation answers. |
 | `item-model` | A `WorldStaticModel`/`StaticModel` naming no model script. |
 | `item-sprite` | A `WorldObjectSprite` past the tileset's tiles, without a packed sprite, or in no tileset (the mod's tilesets come from a plugin that fills `Mod.tilesets`). |
-| `learned-recipe` | `LearnedRecipes` or `ResearchableRecipes` naming no craftRecipe. |
+| `learned-recipe` | `LearnedRecipes` or `ResearchableRecipes` naming no craftRecipe, and no build-menu entity with a `CraftRecipe` component (whose recipe goes by the entity's name). |
 | `model-texture` | A model texture that is packed (a model samples its whole texture, so it would draw a slice of the page) or missing. |
 | `recipe-module` | A craftRecipe with `NeedToBeLearn = true` outside module Base: research and magazines look recipes up by bare name, which resolves only in Base. |
 | `recipe-name` | A craftRecipe without a `Recipes.json` entry. |
@@ -130,8 +130,8 @@ def widget_labels(mod, game, report):
   reads the mod's `.tiles` files fills `mod.tilesets` there, which `item-sprite` looks sprites up
   in.
 - `mod` (`rules.Mod`) holds what was read: `lua` (one `luasource` file each, with its tokens,
-  names, strings and tables), `scripts`, `items`, `recipes`, `models`, `translations` and
-  `translation_paths`, `sandbox`, `info` (the published mod's `mod.info` lines), `sprites`,
+  names, strings and tables), `scripts`, `items`, `recipes`, `entity_recipes`, `models`,
+  `translations` and `translation_paths`, `sandbox`, `info` (the published mod's `mod.info` lines), `sprites`,
   `tilesets`, and `media_file(path)`. `game` (`gamedata.Game`) holds the game's side, and
   `file(path)` finds a game file.
 - `report.fail(rule, path, line, message)` fails the run, `report.note(message)` only prints,

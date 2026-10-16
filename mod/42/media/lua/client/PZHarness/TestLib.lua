@@ -1007,6 +1007,23 @@ function T.standNextTo(square)
     PZHarness.Fixtures.teleportToMiddle(p, at:getX(), at:getY(), at:getZ())
 end
 
+--- Queues T.standNextTo(square), then a wait until a multiplayer server has the character there
+--- too. The server learns the character moved only from the client's position updates, after any
+--- still on their way, and an instant timed action queued at once can reach its complete() on the
+--- server while it still stands at the old place.
+function T.goNextTo(self, square)
+    local at = {}
+    T.step(function()
+        T.standNextTo(square)
+        -- The character's square catches up with a teleport only on its next update.
+        local p = T.player()
+        at.x, at.y = math.floor(p:getX()), math.floor(p:getY())
+    end)
+    T.serverUntil(self, "PZHarness.position", {}, function(reply)
+        return math.floor(reply.x) == at.x and math.floor(reply.y) == at.y
+    end)
+end
+
 -- Queues the moveables action `mode` ("place" or "pickup") of `sprite` on `square` the way the
 -- moveables cursor does (ISMoveableCursor.create): the character walks next to the square and the
 -- action does the job, in multiplayer in its complete() on the server. The character first stands

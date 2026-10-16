@@ -98,6 +98,9 @@ class Mod:
 
         self.scripts = []
         self.items, self.recipes, self.models = {}, {}, set()
+        # Build-menu entities with a CraftRecipe component: their recipe goes by the entity's name,
+        # and a magazine teaches it like any other (CraftRecipe in GameEntityScript).
+        self.entity_recipes = set()
         for path in self._files("media/scripts", ".txt"):
             root = scripts.parse(_read(path))
             self.scripts.append((path, root))
@@ -113,6 +116,8 @@ class Mod:
                         self.recipes[child.id] = Recipe(child, module, path)
                     elif child.type == "model":
                         self.models.add("%s.%s" % (module, child.id))
+                    elif child.type == "entity" and any(c.id == "CraftRecipe" for c in child.blocks("component")):
+                        self.entity_recipes.add(child.id)
 
         # Language -> translation file name -> {key: text}, and where each file is.
         self.translations, self.translation_paths = {}, {}
@@ -292,7 +297,7 @@ def item_exists(mod, game, name, module=None, imports=()):
 
 
 def recipe_exists(mod, game, name):
-    return name in mod.recipes or name in game.recipes
+    return name in mod.recipes or name in mod.entity_recipes or name in game.recipes
 
 
 def lua_defined(mod, game):

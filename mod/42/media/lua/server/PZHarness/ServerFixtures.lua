@@ -231,6 +231,11 @@ handler("PZHarness.reset", function(player)
     return {}
 end)
 
+-- Where the server's copy of the character is, for T.goNextTo.
+handler("PZHarness.position", function(player)
+    return { x = player:getX(), y = player:getY(), z = player:getZ() }
+end)
+
 handler("PZHarness.changeItem", function(player, args)
     local item = player:getInventory():getItemById(args.id)
     if not item then
