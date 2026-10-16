@@ -728,10 +728,12 @@ local function runEntry(entry, name, spec, problem)
         table.insert(ids, perk:getId())
     end
     -- Actions and crafts that give experience level up both copies of the character, so each gets
-    -- back the levels it had: this client's can be a perk sync behind the server's.
+    -- back the levels it had. A multiplayer client takes the server's: its own copy can be a perk
+    -- sync behind (PlayerXpPacket, once a second), and a stale level put back at every test's end
+    -- would outlast the syncs that land during the tests.
     T.defer(self, function() PZHarness.Fixtures.setPerkLevels(p, perks) end)
     if #ids > 0 then
-        alsoOnServer(self, "PZHarness.keepPerkLevels", { perks = ids })
+        alsoOnServer(self, "PZHarness.keepPerkLevels", { perks = ids }, function(reply) perks = reply.levels end)
     end
     -- Read now, not when the test registers: the dev mod may register its settings after its test
     -- files have loaded.
@@ -1456,11 +1458,12 @@ function T.craftTest(name, spec)
             T.placeWorkTable(p)
             local bench = spec.bench and T.placeBench(self, spec.bench[1], spec.bench[2])
             if spec.bench and not bench then return end
+            -- Set on both sides even when this client's copy has the level already: it may be a
+            -- perk sync ahead of the server's, which refuses the craft at perform without a word
+            -- (CraftRecipeManager.isValidRecipeForCharacter) while this client's action completes.
             for i = 0, recipe:getRequiredSkillCount() - 1 do
                 local skill = recipe:getRequiredSkill(i)
-                if p:getPerkLevel(skill:getPerk()) < skill:getLevel() then
-                    T.setPerk(self, skill:getPerk(), skill:getLevel())
-                end
+                T.setPerk(self, skill:getPerk(), math.max(p:getPerkLevel(skill:getPerk()), skill:getLevel()))
             end
             local inputs, unmatched = T.recipeInputs(recipe, spec.prefer)
             if not T.need(self, #unmatched == 0, "an item for " .. table.concat(unmatched, "; ")) then return end

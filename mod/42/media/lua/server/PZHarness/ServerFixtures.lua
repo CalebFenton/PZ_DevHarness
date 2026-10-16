@@ -191,7 +191,7 @@ end)
 
 -- The runner's restore of the `perks` setting (`args.perks`, perk ids): the levels the server's
 -- copy has now, whatever the client's copy shows, which the server's perk sync (PlayerXpPacket)
--- can leave a level behind for up to a second.
+-- can leave a level behind for up to a second. Answers them in `levels`, for the client's restore.
 handler("PZHarness.keepPerkLevels", function(player, args, defer)
     local levels = {}
     for _, id in ipairs(args.perks) do
@@ -201,7 +201,7 @@ handler("PZHarness.keepPerkLevels", function(player, args, defer)
         end
     end
     defer(function() Fixtures.setPerkLevels(player, levels) end)
-    return {}
+    return { levels = levels }
 end)
 
 -- Not undone, as on the client.
