@@ -740,9 +740,9 @@ local function runEntry(entry, name, spec, problem)
         table.insert(ids, perk:getId())
     end
     -- Actions and crafts that give experience level up both copies of the character, so each gets
-    -- back the levels it had. A multiplayer client takes the server's: its own copy can be a perk
-    -- sync behind (PlayerXpPacket, once a second), and a stale level put back at every test's end
-    -- would outlast the syncs that land during the tests.
+    -- back the levels it had, at the XP that starts them. A multiplayer client takes the server's:
+    -- its own copy can be a perk sync behind (PlayerXpPacket, once a second), and a stale level put
+    -- back at every test's end would outlast the syncs that land during the tests.
     T.defer(self, function() PZHarness.Fixtures.setPerkLevels(p, perks) end)
     if #ids > 0 then
         alsoOnServer(self, "PZHarness.keepPerkLevels", { perks = ids }, function(reply) perks = reply.levels end)

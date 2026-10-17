@@ -148,7 +148,7 @@ Every setting is optional:
 | Setting | Side | What it does |
 | --- | --- | --- |
 | `hour` | client | The hour every test runs at unless its spec gives one; a test first waits for the light to follow the clock. |
-| `perks` | client | Perks (`Perks.Electricity`) restored after every test, however it changed them; the server's copy too. |
+| `perks` | client | Perks (`Perks.Electricity`) restored after every test, however it changed them, at the XP that starts their level; the server's copy too. |
 | `sandbox` | both | The mod's table in `SandboxVars`, which `setSandbox` tries before the game's options. |
 | `sandboxChanged()` | both | Called on each side after its copy of a sandbox option is set or restored, for state the mod derives from its options. |
 | `setup(self, spec)` | client | Called before every `spec.run`, after its hour and sandbox options; may push undos with `defer`. |

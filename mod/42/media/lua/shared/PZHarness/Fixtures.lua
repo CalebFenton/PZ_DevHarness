@@ -105,12 +105,16 @@ function Fixtures.setPerk(player, perk, level)
     return function() player:setPerkLevelDebug(perk, saved) end
 end
 
---- Sets the levels in `levels`, perk ids (perk:getId()) to levels, as they are elsewhere.
+--- Sets the levels in `levels`, perk ids (perk:getId()) to levels, as they are elsewhere, each with
+--- the XP that starts its level. XP left over past the level would level the perk up in a later
+--- test, and vanilla's level-up auto-learns recipes (XpUpdate.levelPerk), which the leak check
+--- then blames on that test.
 function Fixtures.setPerkLevels(player, levels)
     for id, level in pairs(levels) do
         local perk = Perks.FromString(id)
         if perk and perk ~= Perks.MAX then
             player:setPerkLevelDebug(perk, level)
+            player:getXp():setXPToLevel(perk, level)
         end
     end
 end
