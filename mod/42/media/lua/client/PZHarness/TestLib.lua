@@ -629,6 +629,18 @@ function T.setMechanicsCheat(self, on)
     alsoOnServer(self, "PZHarness.setMechanicsCheat", { on = on })
 end
 
+--- Vanilla's ISInstallVehiclePart:new takes its time from its caller (ISVehiclePartMenu.onInstallPart)
+--- and never asks its own getDuration, so neither the instant cheat nor the mechanics cheat shortens
+--- it in single player, as they do ISUninstallVehiclePart's: a lid takes seconds. Gives each install
+--- queued and not yet started the time its getDuration gives. Call it in the step that queued it.
+function T.shortenQueuedInstalls()
+    for _, action in ipairs(ISTimedActionQueue.getTimedActionQueue(T.player()).queue) do
+        if action.Type == "ISInstallVehiclePart" and not action.action then
+            action.maxTime = action:getDuration()
+        end
+    end
+end
+
 -- In multiplayer a generator taken away while this client's copy of its square holds a different
 -- list of objects (a test's own objects come and go fast) keeps its squares powered here: the
 -- switch-off names it by its place on the square and misses, and the chunks drop a generator's
@@ -999,14 +1011,20 @@ local function waitOnClient(condition)
 end
 
 --- Puts the character in the middle of the free square next to `square` that vanilla's walkAdj
---- would walk it to (AdjacentFreeTileFinder.Find), or of its own square if there is none, so the
---- walk that a menu option or an action queues before its job has no way to go. Walking takes
---- real time, which neither the instant cheat nor the frame rate shortens.
+--- would walk it to (AdjacentFreeTileFinder.Find), or of its own square if there is none, facing
+--- `square`, so the walk that a menu option or an action queues before its job has no way to go
+--- and the turn its waitToStart waits for (faceThisObject, shouldBeTurning) is already done.
+--- Walking and turning take real time, which neither the instant cheat nor the frame rate
+--- shortens.
 function T.standNextTo(square)
     local p = T.player()
     local adjacent = AdjacentFreeTileFinder.Find(luautils.getCorrectSquareForWall(p, square), p)
     local at = adjacent or p:getCurrentSquare()
     PZHarness.Fixtures.teleportToMiddle(p, at:getX(), at:getY(), at:getZ())
+    local dx, dy = square:getX() - at:getX(), square:getY() - at:getY()
+    if dx ~= 0 or dy ~= 0 then
+        p:setTargetAndCurrentDirection(dx, dy)
+    end
 end
 
 -- How long, in real milliseconds, the server must have kept the character on the new square
