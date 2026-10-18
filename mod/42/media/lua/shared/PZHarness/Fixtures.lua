@@ -40,22 +40,30 @@ end
 Fixtures.WORK_TABLE_SPRITE = "carpentry_01_60"
 
 --- The table holding sandbox option `key`: SandboxVars[modTable] if it has the option, else
---- SandboxVars if the game has it, else nil.
+--- SandboxVars if the game has it, else nil; and the option's full name ("Table.Key" or "Key").
 function Fixtures.sandboxOptions(modTable, key)
     local mod = modTable and SandboxVars[modTable]
     if mod and mod[key] ~= nil then
-        return mod
+        return mod, modTable .. "." .. key
     end
-    return SandboxVars[key] ~= nil and SandboxVars or nil
+    if SandboxVars[key] ~= nil then
+        return SandboxVars, key
+    end
 end
 
---- Sets `options[key]` and calls `changed()`, if given, after the change and after the undo.
-function Fixtures.setSandbox(options, key, value, changed)
-    local saved = options[key]
+--- Sets option `key` in `options` and in the game's own copy of option `name` (SandboxOptions),
+--- which the game's Java reads instead of SandboxVars (IsoGenerator's GeneratorFuelConsumption,
+--- for one), and calls `changed()`, if given, after the change and after the undo.
+function Fixtures.setSandbox(options, name, key, value, changed)
+    local sandboxOption = getSandboxOptions():getOptionByName(name)
+    local option = sandboxOption and sandboxOption:asConfigOption()
+    local saved, savedOption = options[key], option and option:getValueAsObject()
     options[key] = value
+    if option then option:setValueFromObject(value) end
     if changed then changed() end
     return function()
         options[key] = saved
+        if option then option:setValueFromObject(savedOption) end
         if changed then changed() end
     end
 end

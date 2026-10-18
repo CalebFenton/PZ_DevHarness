@@ -602,12 +602,12 @@ local function sandboxChanged()
 end
 
 --- Sets a sandbox option of the mod (SandboxVars[settings.sandbox]) or, failing that, of the
---- game. An option in neither is recorded as missing rather than created. Each side calls the
---- `sandboxChanged` setting after its copy changes.
+--- game, in SandboxVars and in the game's own copy. An option in neither is recorded as missing
+--- rather than created. Each side calls the `sandboxChanged` setting after its copy changes.
 function T.setSandbox(self, key, value)
-    local options = PZHarness.Fixtures.sandboxOptions(settings().sandbox, key)
+    local options, name = PZHarness.Fixtures.sandboxOptions(settings().sandbox, key)
     if not T.need(self, options, "the sandbox option " .. key) then return end
-    T.defer(self, PZHarness.Fixtures.setSandbox(options, key, value, sandboxChanged))
+    T.defer(self, PZHarness.Fixtures.setSandbox(options, name, key, value, sandboxChanged))
     alsoOnServer(self, "PZHarness.setSandbox", { table = settings().sandbox, key = key, value = value })
 end
 

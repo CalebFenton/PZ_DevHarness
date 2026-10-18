@@ -145,11 +145,11 @@ handler("PZHarness.vehicle", function(_, args, defer)
 end)
 
 handler("PZHarness.setSandbox", function(_, args, defer)
-    local options = Fixtures.sandboxOptions(args.table, args.key)
+    local options, name = Fixtures.sandboxOptions(args.table, args.key)
     if not options then
         return nil, "the server's sandbox option " .. tostring(args.key)
     end
-    defer(Fixtures.setSandbox(options, args.key, args.value, sandboxChanged))
+    defer(Fixtures.setSandbox(options, name, args.key, args.value, sandboxChanged))
     return {}
 end)
 
