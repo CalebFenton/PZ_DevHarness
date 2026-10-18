@@ -416,8 +416,8 @@ quit_server() {
     fi
 }
 
-# Stops the server and waits until it has exited: quit_server, then a signal if it is still up a
-# minute later. A signal alone also saves and exits (GameServer's shutdownHook), for a server
+# Stops the server and waits until it has exited: quit_server, then a signal if it is still up
+# after a grace period. A signal alone also saves and exits (GameServer's shutdownHook), for a server
 # without a console, such as one kept by --stay.
 stop_server() {
     local waited=0

@@ -1,9 +1,7 @@
--- Development only, not published. What a mode that takes screenshots needs, such as a mod's
--- --promo or --art (docs/adopting.md, "Capture modes"): steps run one per tick with waits between
--- them, waits for the UI to draw and the zoom to settle, and shots of UI on a backdrop taken on
--- black and on white, so that the harness's lib/capture.py can recover how transparent each pixel
--- is. A run that names its shots' regions writes them to <cachedir>/Lua/<mark>.json for
--- lib/capture.py to crop.
+-- Development only, not published. Support for screenshot modes (docs/adopting.md, "Capture
+-- modes"): steps run one per tick with waits between them, and UI shots are taken on a black and
+-- a white backdrop so lib/capture.py can recover per-pixel transparency. Named regions go to
+-- <cachedir>/Lua/<mark>.json for lib/capture.py to crop.
 
 require "ISUI/ISPanel"
 
@@ -16,7 +14,7 @@ Capture.DRAW_FRAMES = 10
 -- How long a step's wait may poll before the run logs it and goes on; runSteps counts these.
 local WAIT_MAX_MS = 10000
 
--- JSON -------------------------------------------------------------------------------------------
+-- JSON
 
 -- A table is an array when its keys are exactly 1 to #value, so a sparse table or one with other
 -- keys too is an object; Kahlua has no next(), so the keys are counted with pairs(). An empty
@@ -85,7 +83,7 @@ function Capture.writeJson(fileName, value)
     writer:close()
 end
 
--- Steps ------------------------------------------------------------------------------------------
+-- Steps
 
 --- Runs each step on its own tick, then waits before the next: as many ticks as the step returns,
 --- or, if it returns a function, until that function returns true. A function polled for longer
@@ -169,7 +167,7 @@ function Capture.names(selection)
     return names
 end
 
--- Regions ----------------------------------------------------------------------------------------
+-- Regions
 
 --- A named part of a shot, in UI units, which lib/capture.py crops into captures/<name>.png.
 function Capture.region(name, x, y, w, h)
@@ -181,15 +179,14 @@ function Capture.elementRegion(name, element)
     return Capture.region(name, element:getAbsoluteX(), element:getAbsoluteY(), element:getWidth(), element:getHeight())
 end
 
--- A run ------------------------------------------------------------------------------------------
+-- A run
 
 local Run = {}
 Run.__index = Run
 
---- A run of steps that logs under `mark`: its `steps`, the shots it names, and the groups they
---- come in, for lib/capture.py to replace only the captures of the groups a run shot. Its shots'
---- files start with `prefix`, the mode's name and "_", since run-client.sh clears those before
---- a run of the mode.
+--- A run of steps that logs under `mark`, with the shots it names and their groups, so
+--- lib/capture.py replaces only the captures of groups this run shot. Shot files start with
+--- `prefix` (mode name and "_"), which run-client.sh clears before a run of the mode.
 function Capture.new(mark)
     return setmetatable({ mark = mark, prefix = PZHarness.run.mode .. "_", steps = {}, shots = {}, groups = {},
         tinted = {} }, Run)

@@ -1,14 +1,12 @@
--- Development only, not published. The client's half of the tests' server channel; the server's
--- half, and how a dev mod registers handlers, is in server/PZHarness/ServerHandlers.lua. Tests use
--- it through PZHarness.Test.server, the runner for --stay reruns. In single player the server's
--- half runs in this Lua state and answers at once, in the same tick; in multiplayer a request
--- travels as a client command and its answer as a server command, a tick or more later.
+-- Development only, not published. The client half of the tests' server channel; the server half
+-- and handler registration live in server/PZHarness/ServerHandlers.lua. In single player the
+-- server half runs in this Lua state and answers in the same tick; in multiplayer requests travel
+-- as client commands and answers as server commands.
 --
--- Both travel reliably but unordered (PacketTypes.ClientCommand), and two sent in the same tick
--- do arrive swapped. So the requests of a run of this Lua state carry its `session` and their
--- ids, in the order they were sent, which the server serves them in (ServerHandlers.lua), and
--- their answers reach their callers in that order too: requests can go out without waiting for
--- the answers before them, and the undos a test's calls leave stay in the order they were made.
+-- Client commands are reliable but unordered (PacketTypes.ClientCommand): two sent in one tick can
+-- arrive swapped. So requests carry this Lua state's `session` and a sequential id, the server
+-- serves them in id order, and answers reach callers in that order too. Requests can therefore be
+-- pipelined, and a test's undos stay in the order they were made.
 
 PZHarness = PZHarness or {}
 local ServerCalls = {}

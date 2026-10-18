@@ -18,10 +18,8 @@ import packs
 import scripts
 import tiledefs
 
-# Tables the engine puts into the Lua environment itself rather than through an exposed class:
-# LuaEventManager.register (Events), LuaHookManager.register (Hook), CoopMaster.register
-# (CoopServer), VoiceManager.LuaRegister (VoiceManager) and LuaManager.exposeLuaCalendar
-# (Calendar).
+# Tables the engine registers in the Lua environment itself rather than through an exposed class,
+# as LuaEventManager.register does Events.
 ENGINE_TABLES = {"Events", "Hook", "CoopServer", "VoiceManager", "Calendar"}
 
 LUA_FOLDERS = ("client", "server", "shared")

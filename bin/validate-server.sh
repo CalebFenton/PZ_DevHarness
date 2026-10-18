@@ -7,7 +7,7 @@
 # such as its sandbox options, in "$CACHE/Server/$SERVER_NAME"*.
 #
 # CACHE overrides the cache dir (default: $TMPDIR/<CACHE_NAME>-server), and TIMEOUT the seconds
-# the server may take to start (default 900).
+# the server may take to start.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../lib/harness.sh"
 

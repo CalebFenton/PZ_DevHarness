@@ -7,37 +7,28 @@ require "PZHarness/Fixtures"
 require "PZHarness/Checks"
 
 -- The generic half of a mod's test library. A mod's own library inherits from it
--- (setmetatable(ModTest, { __index = PZHarness.Test })) and adds the fixtures that know the mod's
--- objects; its test files register tests with the vanilla timed action test runner through
--- T.test. The runner (the debug menu's Dev > Unit Tests > Timed Actions, or PZHarness/Runner.lua)
--- calls run(), waits until the character's action queue is empty, then calls validate(). Before
--- each test it empties the inventory and the hands, clears worn items and teleports the character
--- back; perks, known recipes, modData, world objects, sandbox options and the clock carry over.
--- Each result goes to console.txt as "<tag> PASS <name>" or "<tag> FAIL <name>: <reasons>".
+-- (setmetatable(ModTest, { __index = PZHarness.Test })) and adds fixtures for the mod's objects;
+-- test files register with vanilla's timed action test runner through T.test. The runner (debug
+-- menu or PZHarness/Runner.lua) calls run(), waits for the action queue to empty, then calls
+-- validate(). It resets inventory, hands, worn items and position between tests; nothing else.
 --
--- Settings and hooks come from the dev mod's PZHarness.registerTests, in its shared Lua, which
--- both sides read; shared/PZHarness/Fixtures.lua lists them.
+-- Settings and hooks come from the dev mod's PZHarness.registerTests (see
+-- shared/PZHarness/Fixtures.lua).
 --
 -- Rules of the API, so that no test depends on what an earlier one left:
--- - T.test gives every run a fresh `self`, sets the clock to the hour, runs timed actions
---   instantly when `spec.instant` (otherwise at their real duration), and applies `spec.sandbox`.
--- - Each T.set* call, T.defer, T.onTick and every fixture (T.tile, T.bench, T.placeMoveable,
---   T.vehicle, T.track and the mod's) pushes its undo onto the test's restore stack. After
---   validate and `spec.cleanup`, the wrapper unwinds it newest first: it removes what the test
---   placed (running generators switched off first, vehicles permanently) and restores the clock,
---   perks, grid, sandbox options, game speed and the instant cheat.
+-- - T.test gives every run a fresh `self` and applies the spec's hour, `instant` and `sandbox`.
+-- - Every setter, T.defer, T.onTick and fixture pushes its undo onto the test's restore stack,
+--   which the wrapper unwinds newest first after validate and `spec.cleanup`.
 -- - A fixture that can't be built records what is missing (T.need); the wrapper then fails the
 --   test with it and skips spec.validate, so validate never indexes a missing fixture.
 -- - A Lua error stops the game in the debug-mode error handler, pcall or not, and the runner never
 --   finishes, so tests never throw.
 --
--- Single player and multiplayer (run-client.sh --mp) run the same tests. On a multiplayer client
--- the character, its inventory and the world are the client's copies: what only the authority can
--- do (place the mod's objects, run its systems, read its records) goes through T.server, which
--- calls a handler the dev mod registered in its server Lua (server/PZHarness/ServerHandlers.lua)
--- in this game in single player and on the server in multiplayer. A test that can't run in one of
--- the two says so with `spOnly = "<why>"` or `mpOnly = "<why>"`; the runner then skips it in the
--- other and prints "<tag> SKIP <name>: <why>".
+-- Single player and multiplayer run the same tests. On a multiplayer client the world is the
+-- client's copy, so authority-only work goes through T.server, which calls a handler the dev mod
+-- registered (server/PZHarness/ServerHandlers.lua) locally in single player or on the server in
+-- multiplayer. A test that can't run in one mode says so with `spOnly = "<why>"` or
+-- `mpOnly = "<why>"`, and the runner skips it there.
 PZHarness.Test = {}
 local T = PZHarness.Test
 
@@ -60,7 +51,7 @@ function T.player()
     return getSpecificPlayer(0)
 end
 
--- Expectations ---------------------------------------------------------------------------------
+-- Expectations
 
 -- Unmet expectations of the test being validated.
 local failures = {}
@@ -91,7 +82,7 @@ local active
 -- Whether T.batch is running its fn, so what it queues may be crossed (see sendAhead).
 local batching = false
 
--- Queue ----------------------------------------------------------------------------------------
+-- Queue
 
 -- Holds the action queue, so the runner validates only once the world has caught up: until
 -- `done()` holds or `total` ticks pass, calling `onTick(n)` every tick. What onTick queues goes
@@ -101,13 +92,11 @@ local batching = false
 -- after would work on the missing fixture.
 local Wait = ISBaseTimedAction:derive("PZHarnessWait")
 
--- In multiplayer, sends the server calls queued behind the current action ahead of their turn,
--- each as soon as everything queued before it is `crossable`: a call that is out and whose answer
--- changes nothing on the server when it comes (the setters', T.give's unless it dresses the
--- character, T.count's), or what T.batch queued. The server takes requests in the order they were
--- sent, so it sees the same calls in the same order, only without a round trip between them; each
--- answer still reaches the test in its turn (see call). A call whose args are a function goes out
--- only in its turn, and so does everything queued after it.
+-- In multiplayer, sends server calls queued behind the current action ahead of their turn, each
+-- once everything queued before it is `crossable`: an already-sent call whose answer changes
+-- nothing on the server, or anything T.batch queued. The server keeps request order, so this only
+-- removes round trips; each answer still reaches the test in its turn (see call). A call whose
+-- args are a function goes out only in its turn, holding back everything after it.
 local function sendAhead(queue)
     for i, action in ipairs(queue) do
         if i > 1 and action.ahead then
@@ -152,7 +141,6 @@ function Wait:new(character, total, onTick, done)
     return o
 end
 
--- Queues a Wait and returns it.
 local function queueWait(total, onTick, done, what)
     local wait = Wait:new(T.player(), total, onTick, done)
     wait.what = what
@@ -241,7 +229,7 @@ local function waitForLight(wantLit)
     end)
 end
 
--- Server ---------------------------------------------------------------------------------------
+-- Server
 
 -- How long the client may take, after the server's answer, to get the items a handler gave and to
 -- show them worn and held.
@@ -339,15 +327,11 @@ local function overtaken(index)
     return false
 end
 
--- Sends the call of the server handler `name` at once and handles its answer: the server's undo
--- as soon as it comes, so the undos stay in the order the calls went out; then, once the returned
--- condition is polled, a failure (as T.need does, dropping the steps queued after it),
--- `onReply(reply)` with the reply exactly as the handler returned it (false, 0 and nil too), and
--- the items a table reply lists as `given` (PZHarness.giveItem): once the client has them, worn
--- and held as they should be (the server dresses the character only then, "PZHarness.dress"),
--- their client copies land in self.items[itemsKey]. A call sent ahead of its turn takes its
--- answer only in its turn. `index` is where in the action queue the call is queued, if not the
--- current action. Returns the condition a queued wait polls until all of it is done.
+-- Sends the call of server handler `name` at once. Its undo is pushed as soon as the answer comes,
+-- keeping undos in send order; the rest is handled in turn, when the returned condition is polled:
+-- a failure (as T.need), `onReply(reply)` with the raw reply, and any `given` items, whose client
+-- copies land in self.items[itemsKey] once worn and held as asked. `index` is the call's position
+-- in the action queue if not the current action. Returns the condition a queued wait polls.
 local function call(self, name, args, itemsKey, onReply, index)
     local phase, given, sinceMs, asked, answer, onAnswer = "asking", nil, nil, nil, nil, nil
     local function fail(what)
@@ -432,35 +416,23 @@ local function queueCall(self, name, args, itemsKey, onReply, crossable)
     end
 end
 
---- Queues a call of the server handler `name` (see server/PZHarness/ServerHandlers.lua) and a
---- wait for its answer, which lands in `self.server[name]` exactly as the handler returned it, so
---- a handler's false, 0 or nil reaches the test as that. `args` is a table of plain values
---- (strings, numbers, booleans and tables of them), or a function of `self` returning one, called
---- when the call goes out, so it can use an earlier answer. In single player the handler runs in
---- this game and answers at once; in multiplayer it runs on the server. A call with a table goes
---- out early when nothing but waits for the server's answers to the setters, T.give or T.count is
---- queued before it, or in T.batch; its answer still lands in its turn. What it deferred is
---- undone on its side when the test ends, in order with the test's own undos. A handler that
---- fails, or answers that something is missing, fails the test as T.need does and drops the steps
---- queued after the call. A handler that gave the character items lists them in its reply as
---- `given` (PZHarness.giveItem); the wait then lasts until this client has them, worn and held as
---- asked, and puts this client's copies in `self.items[name]`.
+--- Queues a call of server handler `name` (see server/PZHarness/ServerHandlers.lua) and a wait
+--- for its answer, which lands in `self.server[name]` exactly as returned (false, 0 and nil too).
+--- `args` is a table of plain values, or a function of `self` returning one, called when the call
+--- goes out so it can use an earlier answer. Runs locally in single player, on the server in
+--- multiplayer. The handler's deferred undos run when the test ends, in order with the test's own.
+--- A handler that fails or reports something missing fails the test as T.need does. Items the
+--- handler lists as `given` (PZHarness.giveItem) are awaited on this client and land in
+--- `self.items[name]`.
 function T.server(self, name, args)
     queueCall(self, name, args, name, function(reply) self.server[name] = reply end)
 end
 
---- Queues what `fn` queues, and in multiplayer sends each server call in it (T.server, T.give,
---- T.count and the fixtures built on them) whose args are a table as soon as the actions queued
---- before the batch are done, all in one round trip, where each would otherwise wait for the
---- answer to the one before. The server still runs them in their order, each with its undos, and
---- each answer lands in its turn, so a T.step between two calls reads the first one's answer. Only
---- for calls the test makes back to back: the server runs every call in the batch before anything
---- fn queued between them happens on this client, so a wait in it for this client's copy may see
---- what the later calls did too, and a call whose args are a function goes out in its turn,
---- holding back the calls after it. A T.step in it must not reach the server (a call it queues, a
---- setter, an action), and only the batch's last call may give items to put on or hold, since
---- they go on in its turn: either would reach the server after the calls queued behind it, which
---- fails the test.
+--- Queues what `fn` queues, and in multiplayer sends every table-args server call in it at once,
+--- in one round trip instead of one per call. The server still runs them in order and each answer
+--- lands in its turn. Use only for back-to-back calls: the server runs the whole batch before
+--- anything queued between the calls happens on this client. A T.step inside must not reach the
+--- server, and only the last call may give items to wear or hold; otherwise the test fails.
 function T.batch(fn)
     local outer = batching
     batching = true
@@ -469,7 +441,7 @@ function T.batch(fn)
 end
 
 --- Queues calls of the server handler `name`, one at a time, until `done(reply)` holds or `maxMs`
---- of real time (15 seconds unless given) pass, for server state that changes later, such as what
+--- of real time pass, for server state that changes later, such as what
 --- an action's complete() does after the client's perform(). The last reply lands in
 --- `self.server[name]`; running out of time just ends the wait, so validate checks what it waited
 --- for. `args` as for T.server; a failed call fails the test as T.server's does.
@@ -552,7 +524,7 @@ local function alsoOnServerOutsideTest(name, args, ready)
     end, "the server's answer to " .. name)
 end
 
--- Restore stack --------------------------------------------------------------------------------
+-- Restore stack
 
 --- Runs `undo` when the test ends, before the undos pushed earlier.
 function T.defer(self, undo)
@@ -576,12 +548,9 @@ function T.setTime(self, hour)
     end)
 end
 
---- Sets the character's level of `perk` for the test. On a multiplayer client the server replaces
---- this client's perk list with its own copy's every second (PlayerXpPacket), and one it sent
---- before it had the level can land after its answer, so the client's checks (the craft menu, an
---- action's isValid) would see the old level: until the test ends, this client puts its level
---- back whenever such a sync changes it. Waiting for a sync after the answer would cost up to a
---- second per call.
+--- Sets the character's level of `perk` for the test. On a multiplayer client a periodic server
+--- perk sync (PlayerXpPacket) sent before the change can land after the answer and revert the
+--- level, so until the test ends the client reapplies it whenever a sync changes it.
 function T.setPerk(self, perk, level)
     local p = T.player()
     T.defer(self, PZHarness.Fixtures.setPerk(p, perk, level))
@@ -686,7 +655,7 @@ function T.changeItem(self, item, changes)
     alsoOnServer(self, "PZHarness.changeItem", { id = item:getID(), changes = changes })
 end
 
--- Registering tests ----------------------------------------------------------------------------
+-- Registering tests
 
 -- Why spec's opt-out of single player or multiplayer is malformed, or nil. The reason is required
 -- so that every skip says why in the run's summary.
@@ -841,7 +810,7 @@ function T.test(name, spec)
     }
 end
 
--- Squares --------------------------------------------------------------------------------------
+-- Squares
 
 local function squareOf(near)
     if not near then
@@ -889,7 +858,7 @@ function T.squares(self, count, opts)
     return #found == count and found or nil
 end
 
--- Fixtures -------------------------------------------------------------------------------------
+-- Fixtures
 
 --- Removes `thing` (an IsoObject or a vehicle) when the test ends, the way the game does, so the
 --- mods' removal handlers run (PZHarness.Fixtures.removePlaced). Returns `thing`.
@@ -1133,14 +1102,13 @@ function T.vehicle(self, script, opts)
 end
 
 -- This client's copies of the vehicles T.placeVehicle found, to the handle each was found for.
--- The server hands a new vehicle the id it freed last (VehicleIDMap keeps freed ids on a stack),
--- often the one the previous test's undo just removed, and a client that hasn't taken that
--- removal yet still finds the old copy under the id, which then never updates. A copy found for
--- one handle is never taken for another. Kahlua has no weak tables, so T.placeVehicle drops the
--- copies this client has removed, which nothing can find again.
+-- The server reuses the most recently freed vehicle id (VehicleIDMap), often the one the previous
+-- test just removed, and a client that hasn't processed that removal still finds the stale copy.
+-- So a copy found for one handle is never taken for another. Kahlua has no weak tables, so
+-- T.placeVehicle prunes removed copies.
 local foundVehicles = {}
 -- How long a multiplayer client waits after its copy of a new vehicle arrives, for the server's
--- second full update of it (see T.placeVehicle): three of the server's 100 ms send cycles.
+-- second full update of it (see T.placeVehicle): a few of the server's send cycles.
 local VEHICLE_SETTLE_MS = 300
 
 --- T.vehicle placed the way the authority does: on the server in multiplayer, which sends it to
@@ -1178,11 +1146,10 @@ function T.placeVehicle(self, script, opts)
         handle.id, handle.x, handle.y, handle.z = reply.id, reply.x, reply.y, reply.z
         handle.square = getSquare(reply.x, reply.y, reply.z)
     end)
-    -- A client that meets a vehicle id it doesn't know asks for a full update, and can ask twice.
-    -- The server sends the second instead of the part changes it has pending and clears them,
-    -- while a client that already has the vehicle takes only its position from a full update
-    -- (VehicleManager.sendVehicles, VehicleFullUpdatePacket): a part change made before the second
-    -- one arrives is lost here until that part changes again. The server sends every 100 ms.
+    -- A client that meets an unknown vehicle id asks for a full update, possibly twice. The server
+    -- sends the second in place of pending part changes and clears them, while a client that has
+    -- the vehicle takes only its position from it (VehicleManager.sendVehicles,
+    -- VehicleFullUpdatePacket): a part change made before the second arrives is lost here.
     if isClient() then
         local sinceMs
         queueWait(math.huge, nil, function()
@@ -1193,14 +1160,14 @@ function T.placeVehicle(self, script, opts)
     return handle
 end
 
--- Lookups and data -----------------------------------------------------------------------------
+-- Lookups and data
 
 -- In shared/PZHarness/Fixtures.lua, so a dev mod's server handlers have them too.
 T.lineUpTrailer = PZHarness.Fixtures.lineUpTrailer
 T.objectWithSprite = PZHarness.Fixtures.objectWithSprite
 T.countPairs = PZHarness.Fixtures.countPairs
 
--- Recipes --------------------------------------------------------------------------------------
+-- Recipes
 
 --- Every craftRecipe whose name starts with `prefix` (the `recipePrefix` setting by default).
 function T.recipeNames(prefix)
@@ -1309,7 +1276,7 @@ function T.placeWorkTable(player)
     end)
 end
 
--- Crafting -------------------------------------------------------------------------------------
+-- Crafting
 
 -- The crafting logic the game starts `recipe` from the item `from` with: the right-click menu's,
 -- with a table in reach as the surface, or with `bench` (from T.bench) the bench window's.
@@ -1438,18 +1405,14 @@ function T.startCraft(self, recipe, from, bench)
     end)
 end
 
---- Registers a test that crafts `spec.recipe` from the first `spec.from` item the way the
---- right-click menu does or, with `spec.bench` ({ entity script, sprite }, see T.bench), at that
---- workstation the way its crafting window does; instantly unless `spec.instant` is false. The
---- character knows every recipe of the mod, has at least the levels the recipe requires, stands
---- by a table, and carries exactly the inputs of one craft (T.recipeInputs with `spec.prefer`,
---- given with T.give, so this client's copies are in `self.items.inputs`) and whatever
---- `spec.setup(self)` adds; setup runs once the inputs are there, and the craft starts after the
---- waits it queued, once there is light to craft by. validate() expects the counts in
---- `spec.counts` in the inventory of the server's copy of the character or dropped at its feet
---- (T.count, into `self.counts.craft`), then runs `spec.validate(self)`. `spec.after(self)`, if
---- given, runs in a step after that count, before validate, to queue more reads of what the
---- craft made. A failing test also reports why the game refused the craft.
+--- Registers a test that crafts `spec.recipe` from the first `spec.from` item via the right-click
+--- menu or, with `spec.bench` ({ entity script, sprite }, see T.bench), via that workstation's
+--- window; instantly unless `spec.instant` is false. The character knows the mod's recipes, has the
+--- required levels, stands by a table and carries exactly one craft's inputs (T.recipeInputs with
+--- `spec.prefer`, copies in `self.items.inputs`) plus what `spec.setup(self)` adds. validate()
+--- expects `spec.counts` in the server copy's inventory or at its feet (T.count into
+--- `self.counts.craft`), then runs `spec.validate(self)`; `spec.after(self)` may queue more reads
+--- before that. A failing test also reports why the game refused the craft.
 function T.craftTest(name, spec)
     local counted = {}
     for fullType in pairs(spec.counts or {}) do

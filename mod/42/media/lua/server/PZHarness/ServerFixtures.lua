@@ -2,15 +2,11 @@ require "PZHarness/ServerHandlers"
 require "PZHarness/Fixtures"
 require "PZHarness/Snapshot"
 
--- Development only, not published. The server's half of the test library's two-sided fixtures
+-- Development only, not published. The server half of the test library's two-sided fixtures
 -- (client/PZHarness/TestLib.lua): on a multiplayer client a fixture changes the client's copy and
 -- calls one of these handlers for the server's, which the server undoes when the test ends. Single
--- player changes its one copy on the client side and calls only the handlers that make or track
--- things ("PZHarness.give", "PZHarness.dress", "PZHarness.count", "PZHarness.tile",
--- "PZHarness.bench", "PZHarness.trackPlaced"), which work the same in both. Names start with
--- "PZHarness." so they never meet a dev mod's. The dev mod's hooks (`sandboxChanged`, `remove`,
--- `spawnVehicle`) come from PZHarness.registerTests (shared/PZHarness/Fixtures.lua), as the
--- client's do.
+-- player changes its one copy client-side and calls only the handlers that make or track things.
+-- Names start with "PZHarness." so they never collide with a dev mod's.
 
 PZHarness = PZHarness or {}
 
@@ -189,9 +185,9 @@ handler("PZHarness.setPerkLevels", function(player, args)
     return {}
 end)
 
--- The runner's restore of the `perks` setting (`args.perks`, perk ids): the levels the server's
--- copy has now, whatever the client's copy shows, which the server's perk sync (PlayerXpPacket)
--- can leave a level behind for up to a second. Answers them in `levels`, for the client's restore.
+-- The runner's restore of the `perks` setting (`args.perks`, perk ids): the server copy's current
+-- levels, which the client's copy may lag (PlayerXpPacket). Answers them in `levels`, for the
+-- client's restore.
 handler("PZHarness.keepPerkLevels", function(player, args, defer)
     local levels = {}
     for _, id in ipairs(args.perks) do

@@ -1,9 +1,7 @@
 -- Development only, not published. What a test may leave behind in one side's copy of the game,
--- read cheaply enough to compare before and after every test: the objects on each square around
--- the character, the vehicles and powered squares among them, the character's lasting state, the
--- sandbox options, the grid, the clock and the climate overrides. Shared, so the server reads its
--- own copy the same way (the runner's leak check, client/PZHarness/Leaks.lua, and the
--- "PZHarness.snapshot" handler in server/PZHarness/ServerFixtures.lua).
+-- cheap enough to read before and after every test: objects on squares around the character,
+-- vehicles, power, the character's lasting state, sandbox options, grid, clock and climate.
+-- Shared so the server snapshots its own copy the same way (see client/PZHarness/Leaks.lua).
 
 PZHarness = PZHarness or {}
 local Snapshot = {}

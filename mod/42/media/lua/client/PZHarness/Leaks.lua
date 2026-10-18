@@ -1,14 +1,10 @@
--- Development only, not published. The runner's leak check between tests (PZHarness/Runner.lua):
--- a snapshot of this game's copy around the character (shared/PZHarness/Snapshot.lua), compared
--- with the one before the last test.
+-- Development only, not published. The runner's leak check between tests: a snapshot around the
+-- character (shared/PZHarness/Snapshot.lua) compared with the one before the last test.
 --
--- In multiplayer the server takes its own ("PZHarness.snapshot" in
--- server/PZHarness/ServerFixtures.lua) while this client takes its copy's, and reports what
--- changed in its copy, which is the one that counts for objects and vehicles. This client then
--- compares the two copies on every square either side saw change. What the server sent can still
--- be on its way, so a difference, or a change of this client's own state, gets looked at again
--- every few ticks until this client has caught up with what the server reported, up to a limit,
--- and only what is still there then is reported.
+-- In multiplayer the server snapshots its copy too and reports what changed there, which is
+-- authoritative for objects and vehicles; the client then compares both copies on every square
+-- either side saw change. Server updates may still be in flight, so differences are rechecked
+-- every few ticks until the client catches up or a limit passes, and only what remains is reported.
 
 require "PZHarness/Snapshot"
 require "PZHarness/ServerCalls"
@@ -69,14 +65,12 @@ local function suspectSquares(before, snapshot, clientChanged, serverChanged)
 end
 
 --- Starts a check around `character`'s square, `radius` squares each way on each of `levels` (z
---- levels; the character's own by default), leaving out the objects the patterns in `ignore`
---- match. In multiplayer the server's half is asked for at once around `at` ({ x, y, z }, the
---- square the character will stand on), so the request goes out with whatever else the server
---- has to do first; without `at`, once the check first looks. Returns a function to call every
---- tick from when this client's copy is ready to be looked at: nil until the check is done, then
---- { leaks = { lines }, desyncs = { lines }, waitedFull }, both lists empty the first time, when
---- there is nothing yet to compare with, and when the character's square isn't loaded;
---- `waitedFull` is true when this client never caught up with the server before the limit.
+--- levels; the character's own by default), ignoring objects matching the `ignore` patterns. In
+--- multiplayer the server's half is requested at once around `at` ({ x, y, z }) so it queues
+--- behind the server's other work; without `at`, on the first poll. Returns a function to call
+--- every tick: nil until done, then { leaks = { lines }, desyncs = { lines }, waitedFull }. Both
+--- lists are empty when there is no baseline yet or the character's square isn't loaded;
+--- `waitedFull` is true when the client never caught up with the server before the limit.
 function Leaks.start(character, at, radius, levels, ignore)
     local Snapshot = PZHarness.Snapshot
     local result = { leaks = {}, desyncs = {}, waitedFull = false }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Writes the mod's workshop.txt description from its README.md (docs/workshop-page.md), keeping the
-# title, id, tags and visibility already there, and says how much of Steam's 8000 bytes it uses. A
+# title, id, tags and visibility already there, and says how much of Steam's limit it uses. A
 # mod's dev/workshop-txt.sh sources this; --check writes nothing and fails when workshop.txt is out
 # of date, as bin/static-check.sh runs it. Needs python3.
 set -euo pipefail

@@ -12,7 +12,7 @@
 #   --test --stay    the same, but the game stays open after the run, and the next --test --stay
 #                    reruns the tests in it after loading the conf's RELOAD_FILES again. Any other
 #                    change to the mods restarts the game. While it waits it shows and logs
-#                    "<TAG> IDLE"; it quits after 30 minutes without a run, or when another run
+#                    "<TAG> IDLE"; it quits after its idle time without a run, or when another run
 #                    needs the game.
 #   --test --mp      the same in multiplayer: starts a dedicated server with the three mods and a
 #                    client that joins it as the admin, runs the tests on the client, and fails on
@@ -258,8 +258,8 @@ if [ -n "$MODE" ] && declare -F "harness_check_$MODE" > /dev/null; then
     "harness_check_$MODE"
 fi
 # Only a game that died or hung outside a test: the runner fails a stuck test itself after its
-# per-test limit (Runner.lua). A cold --mp run of a whole suite takes about 2.5 minutes, and REPEAT
-# runs it that many times over. The other modes, such as a mod's long reports, keep the old cap.
+# per-test limit (Runner.lua). REPEAT runs the suite that many times over, so the cap scales with
+# it. The other modes, such as a mod's long reports, get a longer cap.
 if [ "$MODE" = test ]; then
     TIMEOUT=${TIMEOUT:-$((300 * ROUNDS))}
 else

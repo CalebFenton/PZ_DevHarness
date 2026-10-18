@@ -1,19 +1,11 @@
--- Development only, not published. bin/run-client.sh loads this mod with the mod under test and
--- its dev mod, and writes <cachedir>/Lua/PZHarness.txt: the mode (empty when playing by hand), the
--- selection (TESTS prefixes and exact "=<name>" names, or the mod's own for its modes), whether to
--- stay, whether the client joins a dedicated server (--mp), the console mark of the mode, the
--- tests' console tag, and for tests the leak check (LEAKS), the order (ORDER) and the rounds
--- (REPEAT).
+-- Development only, not published. bin/run-client.sh loads this mod alongside the mod under test
+-- and its dev mod, and writes <cachedir>/Lua/PZHarness.txt describing the run (mode, selection,
+-- stay, --mp, console mark and tag, test options).
 --
--- The dev mod calls PZHarness.register (see docs/adopting.md). In a mode, the mod's debug scenario then
--- starts from the main menu (with -debug and DebugScenario.ForceLaunch=true in debug-options.ini);
--- once the world around the character has loaded, the runner runs the mod's tests ("test") or the
--- mod's handler for the mode, prints "<mark> DONE" and quits. With --test --stay the game stays
--- open and reruns the tests on request instead. run-client.sh reads those lines from console.txt.
---
--- With --mp the client instead joins the server run-client.sh started, as its admin, makes a
--- default character, takes it to the scenario's start and runs the scenario's onStart there; the
--- tests then run the same way.
+-- In a mode, the mod's debug scenario starts from the main menu; once the world has loaded the
+-- runner runs the tests or the mode's handler, prints "<mark> DONE" and quits (or, with --stay,
+-- waits for rerun requests). run-client.sh reads those lines from console.txt. With --mp the
+-- client joins the dedicated server as admin instead and runs the scenario's onStart there.
 
 require "ISUI/ISUIElement"
 require "PZHarness/ServerCalls"
@@ -30,19 +22,18 @@ local SETTLE_MAX_TICKS = 600
 local SQUARE_WAIT_MS = 10000
 -- A test still busy after this many real seconds fails with what it was waiting on, its queue is
 -- cleared and its undos run, so one hung step can't stall the run. A spec's `timeoutSeconds`
--- raises it for a test that is slow on purpose. The slowest tests take under 10 seconds.
+-- raises it for a test that is slow on purpose.
 local TEST_TIMEOUT_SECONDS = 30
 -- How many of the slowest tests the run's summary names.
 local SLOWEST_COUNT = 10
--- The leak check looks this much further than the test library places fixtures (its
--- SEARCH_RADIUS), unless the dev mod's `leakRadius` setting says otherwise.
+-- How much further than TestLib's SEARCH_RADIUS the leak check looks, unless the dev mod sets
+-- `leakRadius`.
 local LEAK_MARGIN = 2
 -- At most this many LEAK and DESYNC lines per test, and DIRTY lines per run; a count of the rest
 -- follows.
 local LEAK_LINES_SHOWN = 10
--- With --stay, run-client.sh writes this file in <cachedir>/Lua to rerun the tests; the game looks
--- for it every REQUEST_POLL_TICKS ticks and quits after STAY_IDLE_MS without one. Starting a
--- multiplayer game again costs about a minute, so a kept game waits through a long pause.
+-- With --stay, run-client.sh writes this file in <cachedir>/Lua to rerun the tests. The idle limit
+-- is long because restarting a multiplayer game is slow.
 local REQUEST_FILE = "PZHarnessRerun.txt"
 local REQUEST_POLL_TICKS = 15
 local STAY_IDLE_MS = 30 * 60 * 1000
@@ -51,7 +42,7 @@ local IDLE_FPS = 24
 -- The highest uiRenderFPS the option takes (Core.optionUiRenderFps).
 local FAST_UI_FPS = 120
 -- With --mp, run-client.sh writes this file in <cachedir>/Lua once the server has started; the
--- client waits at the main menu until then, looking for it every CONNECT_POLL_TICKS ticks.
+-- client waits at the main menu until then.
 local CONNECT_FILE = "PZHarnessConnect.txt"
 local CONNECT_POLL_TICKS = 15
 
@@ -169,8 +160,8 @@ local function testNames()
     return result, skipped, unmatched
 end
 
--- Random numbers from 1 to n that the same seed repeats (Park and Miller's generator: the products
--- stay exact in a double), since ZombRand can't be seeded.
+-- Seeded random integer in 1..n (Park-Miller; products stay exact in a double), since ZombRand
+-- can't be seeded.
 local function seededRandom(seed)
     local value = seed % 2147483646 + 1
     return function(n)
@@ -203,11 +194,9 @@ local function orderedRounds(names, order, rounds)
     return result
 end
 
--- The inventory windows hold the containers that crafts and the craft menu take their inputs from
--- (ISInventoryPaneContextMenu.getContainers), and catch up with a change only when the UI next
--- draws: until then they keep a bag the reset just took away, such as the key ring a multiplayer
--- character starts with, whose container the client can't name to the server
--- ("Unable to resolve container location"), so the action never reaches it.
+-- The inventory windows supply crafting's containers (ISInventoryPaneContextMenu.getContainers)
+-- but only catch up when the UI next draws. Until then they keep bags the reset removed, which the
+-- client can't name to the server ("Unable to resolve container location").
 function PZHarness.refreshInventoryWindows()
     for _, page in ipairs({ getPlayerInventory(0), getPlayerLoot(0) }) do
         if page then
@@ -276,13 +265,10 @@ local function settleVerdict(state, found)
     countVerdict(state, verdict.name, #failures == 0)
 end
 
--- What the server does between two tests, and after the last, sent behind the undos of the test
--- that just ended so that all of it comes back in one round trip, since the server takes a
--- client's requests in the order they were sent: in multiplayer its reset of the character, which
--- the leak check needs as much as the next test does, then the leak check's own request
--- (Leaks.start) around `at`, the square the character starts the next test on. Answers come in
--- that order too, so once the reset's has, this client's half of the leak check can start while
--- the server takes its snapshot.
+-- What the server does between tests, sent behind the ended test's undos so it all comes back in
+-- one round trip (the server handles a client's requests in order): in multiplayer the character
+-- reset, then the leak check's request (Leaks.start) around `at`. Answers arrive in the same order,
+-- so once the reset answers, the client half of the leak check can start.
 local function askBetweenTests(state, at)
     local nextIndex = state.index + 1
     state.askedFor, state.resetAnswered = nextIndex, false
@@ -295,12 +281,10 @@ local function askBetweenTests(state, at)
     end
 end
 
--- The current test is done once its action queue is empty, or stopped once it overruns its limit
--- (TEST_TIMEOUT_SECONDS or its spec's timeoutSeconds): its queue cleared, and validate() fails it
--- with what it was waiting on. Then validate() runs, and its verdict waits for the leak check
--- (settleVerdict); the test's wall time and its time waiting on the server go to the run's
--- summary, the cheat and the character go back to where the test started, and what the server
--- does between tests goes out.
+-- The current test is done once its action queue is empty, or stopped once it overruns its time
+-- limit, in which case validate() fails it with what it was waiting on. Its verdict then waits
+-- for the leak check (settleVerdict); timings go to the summary, cheat and character are restored,
+-- and the between-tests request goes out.
 local function finishCurrentTest(state)
     local current, player = state.current, state.player
     local queue = ISTimedActionQueue.getTimedActionQueue(player).queue
@@ -331,11 +315,9 @@ local function finishCurrentTest(state)
     askBetweenTests(state, state.start)
 end
 
--- Whether the leak check may come, then the next test or the end of the run: the character's
--- square has loaded again after a test that went far, or SQUARE_WAIT_MS have passed; and the
--- server has answered what the last test sent it, its undos above all, so a test never meets what
--- the one before built, and the reset askBetweenTests sent after them, which the first test and
--- one that never started send here. The leak check then waits for its own answer.
+-- Whether the leak check, then the next test, may start: the character's square has reloaded (or
+-- SQUARE_WAIT_MS passed), and the server has answered everything the last test sent, its undos
+-- above all, so a test never meets what the previous one built.
 local function readyForNextTest(state)
     local here = state.player:getCurrentSquare()
     if not here and getTimestampMs() - state.doneMs < SQUARE_WAIT_MS then
@@ -348,10 +330,9 @@ local function readyForNextTest(state)
     return state.resetAnswered or not PZHarness.ServerCalls.busy()
 end
 
--- Between two tests, and after the last: the runner's reset of the character, then the leak check
--- (PZHarness/Leaks.lua), which compares the world with how it was before the test that just ended,
--- then that test's verdict. Returns true once all of it is done. A check whose square never loaded
--- finds nothing and starts the baselines over.
+-- Between tests: the character reset, then the leak check (PZHarness/Leaks.lua), then the ended
+-- test's verdict. Returns true once all of it is done. A check whose square never loaded finds
+-- nothing and restarts the baselines.
 local function checkBetweenTests(state)
     if state.checkedFor == state.index then
         return true
@@ -382,10 +363,9 @@ local function checkBetweenTests(state)
     return true
 end
 
--- Starts test `name` from the character's square, which the leak check's reset has just reset. If
--- that square still hasn't loaded since the last test took the character far away, the test fails
--- without running, since nothing could bring the character back to where it started, and the next
--- one waits again. The time since the last test ended counts as between tests in the run's summary.
+-- Starts test `name` from the freshly reset character's square. If that square still hasn't
+-- loaded since the last test went far, the test fails without running, since the character
+-- couldn't be brought back to its start.
 local function startNextTest(state, name)
     local player = state.player
     state.gapMs = state.gapMs + getTimestampMs() - state.doneMs
@@ -409,9 +389,8 @@ local function startNextTest(state, name)
     state.current:run()
 end
 
--- Prints the SLOWEST_COUNT slowest tests, then where the run's time went: in the tests, between
--- them (square loads, the server's resets and undos the runner waits for, the leak checks), and in
--- multiplayer how much of both had a server answer outstanding.
+-- Prints the slowest tests, then where the run's time went: in tests, between them, and in
+-- multiplayer how much of it waited on the server.
 local function printSlowest(state)
     local times = state.times
     table.sort(times, function(a, b)
@@ -456,9 +435,8 @@ local function printTally(state)
     end
 end
 
--- Prints the skipped tests, the counts of a repeated run, the slowest tests, the time the run took
--- and its verdict, counting the failures that came after their tests' verdicts, then calls
--- onDone().
+-- Prints the run's summary and verdict, counting failures that arrived after their tests'
+-- verdicts, then calls onDone().
 local function finishRun(state)
     PZHarness.runnerOwnsVerdicts = false
     state.gapMs = state.gapMs + getTimestampMs() - state.doneMs
@@ -477,8 +455,8 @@ local function finishRun(state)
     state.onDone()
 end
 
--- The leak check's mode (LEAKS: "fail", "warn" or "off"), its radius, its z levels, and the
--- patterns of the objects it leaves out: the built-in ones and the dev mod's `leakIgnore`.
+-- The leak check's settings: mode, radius, z levels and ignore patterns (built-in plus the dev
+-- mod's `leakIgnore`).
 local function leakSettings()
     local mode = run.leaks ~= nil and run.leaks ~= "" and run.leaks or "fail"
     local tests = PZHarness.testSettings
@@ -499,16 +477,11 @@ local function printLeftBehind()
     end
 end
 
--- Runs the selected tests one after another with the resets of the debug menu's runner (RunTest
--- and OnTick in vanilla Tests/TimedActionsTests.lua, whose locals Lua can't reach): before each
--- test full health, an empty inventory, nothing worn or held, the inventory windows caught up with
--- that, ISBuildMenu.cheat off and the test's name said aloud; validate() once the action queue is
--- empty; then the cheat back and the character back in the middle of the square the test started
--- on. Vanilla pauses a second after every test so you can read the result; here the next test
--- starts on the next tick, or once readyForNextTest says so and the leak check after the last
--- test is done (checkBetweenTests). In multiplayer the server's copy of the character gets the
--- same reset first (PZHarness.Fixtures.resetCharacter). The run's ORDER, REPEAT and LEAKS come
--- from `run` (PZHarness.txt, or a --stay request). Calls onDone() at the end.
+-- Runs the selected tests one after another with the resets of vanilla's debug-menu runner
+-- (Tests/TimedActionsTests.lua, whose locals Lua can't reach): full health, empty inventory,
+-- nothing worn or held, cheat off before each test; validate() once the action queue empties;
+-- then the cheat and character position restored. Unlike vanilla there is no pause between tests.
+-- In multiplayer the server's copy of the character is reset first. Calls onDone() at the end.
 local function runTests(onDone)
     local names, skipped, unmatched = testNames()
     local rounds = math.max(1, tonumber(run.rounds) or 1)
@@ -539,16 +512,13 @@ local function runTests(onDone)
         rounds = rounds, leaks = leaks, leakRadius = leakRadius, leakLevels = leakLevels, leakIgnore = leakIgnore,
         passed = 0, failed = #unmatched, index = 0, ticks = 0, startedMs = startedMs, doneMs = startedMs,
         lateFailures = PZHarness.ServerCalls.lateFailures,
-        -- For the summary: each test's { name, seconds, serverSeconds }, the time between tests and
-        -- the part of it the leak checks took, the checks that waited the full time for this
-        -- client to catch up with the server, the server waits so far, which a kept game's
-        -- earlier runs add to, and each test's passes and failures over the rounds.
+        -- For the summary: per-test timings, time between tests and its leak-check share, server
+        -- waits (accumulated across a kept game's runs) and per-test pass/fail counts.
         times = {}, gapMs = 0, leakMs = 0, leakWaitedFull = 0, serverStartMs = PZHarness.ServerCalls.waitedMs(), tally = {},
         current = nil, name = nil, player = nil, start = nil, wasCheat = nil,
         testStartMs = nil, testServerMs = nil,
-        -- The test index what the server does between tests was asked for (askBetweenTests) and
-        -- whether its reset has answered, the one this client last reset the character after, the
-        -- verdict waiting for the leak check, the check under way, and the test index it ran after.
+        -- Between-tests bookkeeping: which test index the server request was sent for and whether
+        -- its reset answered, the pending verdict, and the leak check under way.
         askedFor = nil, resetAnswered = false, resetFor = nil, verdict = nil, check = nil, checkStartMs = nil, checkedFor = nil,
     }
     local function onTick()
@@ -573,10 +543,9 @@ local function runTests(onDone)
     Events.OnTick.Add(onTick)
 end
 
--- The request run-client.sh writes to REQUEST_FILE: an id, the selection (TESTS prefixes and
--- "=<name>" names), then "option <key>=<value>" lines for the run's settings (leaks, order,
--- rounds), then the Lua files to run again, in the order the mod listed them: this game's paths,
--- then, with --mp, "server " and the server's paths of those it loads too. Nil if there is none.
+-- The request run-client.sh writes to REQUEST_FILE: an id, the selection, "option <key>=<value>"
+-- lines, then the Lua files to reload in load order (with --mp, "server "-prefixed server paths
+-- too). Nil if there is none.
 local function readRequest()
     local reader = getFileReader(REQUEST_FILE, false)
     if not reader then
@@ -608,11 +577,9 @@ function IdleNote:render()
     self:drawText(IDLE_TEXT, 0, 0, 1, 1, 0.4, 1, UIFont.Large)
 end
 
--- Runs the tests again for every new request until STAY_IDLE_MS pass without one. reloadLuaFile
--- runs a file again but ignores its Events.*.Add calls (LuaCompiler.rewriteEvents), which suits
--- test files: they only register tests, or server handlers. Every test of the mod is unregistered
--- first, so a test that was renamed or deleted doesn't run again. In multiplayer the server
--- reloads its files first and marks the run in its log.
+-- Reruns the tests for every new request until STAY_IDLE_MS pass without one. reloadLuaFile
+-- ignores a file's Events.*.Add calls (LuaCompiler.rewriteEvents), which suits test files. All of
+-- the mod's tests are unregistered first so renamed or deleted ones don't run again.
 local function serveReruns()
     local performance = getPerformance()
     local fps, uncapped = performance:getFramerate(), performance:isFramerateUncapped()
@@ -770,7 +737,7 @@ local function startMode()
     mode.run(run.selection, done)
 end
 
--- Multiplayer (--mp) -----------------------------------------------------------------------------
+-- Multiplayer (--mp)
 
 -- How long the character may take to reach the scenario's start, whose chunks the server sends.
 local START_WAIT_MS = 30000
@@ -833,13 +800,11 @@ local function hasPerkLevels(player, levels)
     return true
 end
 
--- Copies the perk levels and known recipes onStart gave this client's character to the server's
--- copy, which crafts and actions check, and calls `start` once the server has them and this
--- client shows them. The server replaces this client's perk list with its own copy's every second
--- (NetworkPlayerManager, PlayerXpPacket), and one it sent before it had the levels can land after
--- its answer, so the first test would find the skills too low: the wait holds until a sync after
--- the answers has rebuilt the list (new PerkInfo objects) with the levels, at most SETUP_SYNC_MS.
--- Recipes the server sends are only added (SyncPlayerFieldsPacket), so they can't go back.
+-- Copies onStart's perk levels and recipes to the server's copy of the character, which crafts
+-- and actions check, and calls `start` once both sides have them. The server overwrites the
+-- client's perk list periodically (PlayerXpPacket), and one sent before it had the levels can land
+-- after its answer, so this waits for a later sync (new PerkInfo objects) to show the levels, up to
+-- SETUP_SYNC_MS. Synced recipes are only ever added, so they can't regress.
 local function copySetupToServer(start)
     local player = getSpecificPlayer(0)
     local levels = PZHarness.Fixtures.perkLevels(player)
@@ -869,13 +834,10 @@ local function copySetupToServer(start)
     Events.OnTick.Add(onTick)
 end
 
--- The server places a new character on a point of a spawn region (CreatePlayerPacket), so the
--- character goes to the scenario's start, where single player starts, as soon as it is in the
--- game. Then, once the world around it has loaded as it has when single player starts the
--- scenario: the scenario's onStart and the mod's, then the run once the server's copy has the
--- perks and recipes they gave (copySetupToServer). The test library's helpers they call
--- (T.learnRecipes, T.placeWorkTable) reach the server themselves; items needn't, since every test
--- starts with an empty inventory. Anything else goes through the mod's own server handlers.
+-- The server places a new character in a spawn region, so it is moved to the scenario's start as
+-- soon as it is in the game. Once the world has loaded: the scenario's and mod's onStart, then the
+-- run once the server has the perks and recipes they gave. TestLib's helpers reach the server
+-- themselves; anything else needs the mod's own server handlers.
 local function startMultiplayer()
     local scenario = debugScenarios[PZHarness.config.scenario] or {}
     local loc = scenario.startLoc
@@ -914,11 +876,9 @@ if run.mp then
     Events.OnGameStart.Add(startMultiplayer)
 end
 
--- Every world started from the mod's scenario, by hand too, records the three mods, which
--- DebugScenarios doesn't do for the new save (see MainScreen.resetLuaIfNeeded), and has no
--- zombies, so nothing attacks the character. A --test world is quiet too: the options
--- run-client.sh lists in `quiet` (QUIET_WORLD in lib/harness.sh). All of it goes in before the
--- new world is made, and the scenario's own setSandbox after it, so the mod's settings win.
+-- Every world from the mod's scenario records the active mods, which DebugScenarios doesn't do
+-- (see MainScreen.resetLuaIfNeeded), and has no zombies. A --test world also gets the `quiet`
+-- options from run-client.sh. The scenario's own setSandbox runs after, so the mod's settings win.
 local function wrapSetSandbox(scenario, quiet)
     local originalSetSandbox = scenario.setSandbox
     scenario.setSandbox = function()
@@ -970,13 +930,10 @@ function PZHarness.register(config)
     -- would stop whenever someone switches to another window.
     getCore():setOptionPauseOnFocusloss(false)
 
-    -- Game time per second doesn't depend on the frame rate (FPSTracking), so more frames a second
-    -- only shorten what is counted in ticks: the tests' waits for the game to apply a change, and
-    -- from here on the world loading. Measured on an M3 Max, uncapped draws about 260 frames a
-    -- second against 60. The option can't do it: Core.loadOptions resets uncappedFPS to false and
-    -- frameRate to 60. Every mode loads uncapped: the main menu and the loading screen step per
-    -- frame, and the game takes at most 16 loaded assets a frame. A mode whose steps wait fixed
-    -- tick counts goes back to 60 when the scenario starts, before its first step.
+    -- Game time per second doesn't depend on frame rate, so uncapped frames only shorten what's
+    -- counted in ticks (test waits, world loading). The option can't do it: Core.loadOptions resets
+    -- uncappedFPS and frameRate. Every mode loads uncapped; a mode whose steps wait fixed tick
+    -- counts recaps when the scenario starts.
     local mode = PZHarness.config.modes[run.mode]
     local uncapped = run.mode == "test" or (mode and mode.uncapped)
     getPerformance():setFramerateUncapped(true)

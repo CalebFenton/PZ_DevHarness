@@ -1,8 +1,7 @@
 -- Development only, not published. What the test library's two-sided fixtures do to one side's
--- copy of the game: the client's or single player's (client/PZHarness/TestLib.lua) and, in
--- multiplayer, the server's too (server/PZHarness/ServerFixtures.lua). Shared, so both sides make
--- the same change, and so a dev mod's server handlers have the lookups too. Each setter returns
--- the function that undoes it. The dev mod's test settings are here too, for the same reason.
+-- copy of the game, shared so the client (TestLib.lua) and server (ServerFixtures.lua) make the
+-- same change and dev mod server handlers get the lookups too. Each setter returns its undo. The
+-- dev mod's test settings live here for the same reason.
 
 PZHarness = PZHarness or {}
 local Fixtures = {}
@@ -68,10 +67,9 @@ function Fixtures.setSandbox(options, name, key, value, changed)
     end
 end
 
--- A server works out the daylight from its clock on its next climate tick but sends it to the
--- clients, which light their squares with it, only on the ten-minute ticks (ClimateManager.update):
--- a clock set from 12:00 to 0:00 would leave them in daylight for up to ten game minutes. This
--- makes the next climate tick send it.
+-- A server computes daylight on its next climate tick but only sends it to clients on periodic
+-- ticks (ClimateManager.update), so a clock jump would leave clients in stale light for a while.
+-- This makes the next climate tick send it.
 local function sendDaylight()
     if isServer() then
         getClimateManager():updateEveryTenMins()
@@ -249,10 +247,9 @@ function Fixtures.ring(x, y, r)
 end
 
 --- Turns `car` and `trailer` square to `facing` ("N", "E", "S" or "W") and moves the trailer so its
---- coupler sits on the car's tow bar, as a player lines them up to hitch: vanilla hitches a trailer
---- only with the two points within a square and the vehicles near parallel
---- (BaseVehicle.canAttachTrailer). addVehicleDebug skews each heading by up to about 11 degrees at
---- random, and a hitch left to pull a trailer in from farther off can fail to or jackknife it.
+--- coupler sits on the car's tow bar: vanilla hitches only with the two points within a square and
+--- the vehicles near parallel (BaseVehicle.canAttachTrailer), and addVehicleDebug skews headings at
+--- random, so an unaligned hitch can fail or jackknife.
 function Fixtures.lineUpTrailer(car, trailer, facing)
     -- The rotation addVehicleDebug gives a heading, before its random skew.
     local yaw = ((IsoDirections[facing]:toAngle() + math.pi) * 180 / math.pi) % 360
