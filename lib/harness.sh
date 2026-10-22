@@ -125,6 +125,8 @@ GAME_LOCK_TAKEOVER="$GAME_LOCK.takeover"
 acquire_game_lock() {
     local owner said=
     SESSION_PID= SESSION_CACHE= SESSION_GAMES=
+    # The wait for another script's game, up to the caller's timing_mark start (report_run).
+    timing_mark asked
     until mkdir "$GAME_LOCK" 2>/dev/null; do
         owner=$(cat "$GAME_LOCK/pid" 2>/dev/null || true)
         # A dead owner, or no pid at all for a while: the owner died between mkdir and writing it.
@@ -286,9 +288,17 @@ run_precheck() {
 # Run timing --------------------------------------------------------------------------------------
 
 # One line per run of the client and server scripts, for a look at where the time goes across many
-# runs and for run-client.sh to know a run it has seen, and what failed in the last test run of
-# each kind, for run-client.sh --failed. The mod's .gitignore lists both.
-RUNS_LOG="$REPO/dev/.runs.log"
+# runs and for run-client.sh to know a run it has seen, one line per test of a --test run with its
+# verdict and wall time, and what failed in the last test run of each kind, for run-client.sh
+# --failed. A git worktree's runs go to its main checkout's logs, which outlive the worktree; what
+# failed stays with the checkout, whose code --failed reruns. The mod's .gitignore lists all three.
+RUNS_REPO=$REPO
+RUNS_GIT_DIR=$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+if [ "$(basename "$RUNS_GIT_DIR")" = .git ] && [ -d "$(dirname "$RUNS_GIT_DIR")/dev" ]; then
+    RUNS_REPO=$(dirname "$RUNS_GIT_DIR")
+fi
+RUNS_LOG="$RUNS_REPO/dev/.runs.log"
+RUNS_TESTS_LOG="$RUNS_REPO/dev/.runs-tests.log"
 RUNS_FAILED="$REPO/dev/.runs-failed"
 
 # Wall-clock seconds to a tenth: macOS's date has no fractions, and its bash no EPOCHREALTIME.
@@ -309,17 +319,23 @@ seconds_between() {
     awk -v from="$1" -v to="$2" 'BEGIN { printf "%.1f", to - from }'
 }
 
-# Prints a "timing:" line per phase and the total since TIMING_start, and appends the run to
-# RUNS_LOG. $1 is the exit status, $2 the mode, $3 the selection, $4 the test counts; each further
-# argument is a phase, "key|milestone|what": it runs from the last milestone reached before it
-# (TIMING_start first) to its own, and a milestone the run never reached leaves its phase out. A
-# fourth field, "|from", names the milestone a phase runs from instead, for one that overlaps the
-# others, such as a server booting while the client does.
+# Prints a "timing:" line for the wait for the game lock, one per phase and the total since
+# TIMING_start, and appends the run to RUNS_LOG, dated RUN_AT. $1 is the exit status, $2 the mode,
+# $3 the selection, $4 the test counts; each further argument is a phase, "key|milestone|what": it
+# runs from the last milestone reached before it (TIMING_start first) to its own, and a milestone
+# the run never reached leaves its phase out. A fourth field, "|from", names the milestone a phase
+# runs from instead, for one that overlaps the others, such as a server booting while the client
+# does. The wait comes before TIMING_start, so total leaves it out.
 report_run() {
     local status=$1 mode=$2 selection=$3 counts=$4
     shift 4
     [ -n "${TIMING_start:-}" ] || return 0
     local previous=$TIMING_start fields= phase key milestone what from var at begin seconds
+    if [ -n "${TIMING_asked:-}" ]; then
+        seconds=$(seconds_between "$TIMING_asked" "$TIMING_start")
+        echo "timing: wait $seconds s (for another script's game to exit)"
+        fields=" wait=$seconds"
+    fi
     for phase in "$@"; do
         IFS='|' read -r key milestone what from <<< "$phase"
         var="TIMING_$milestone"
@@ -339,7 +355,8 @@ report_run() {
     done
     seconds=$(seconds_between "$TIMING_start" "$(now)")
     echo "timing: total $seconds s"
-    printf '%s mode=%s selection=%s %s exit=%s%s total=%s%s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$mode" \
+    RUN_AT=$(date +%Y-%m-%dT%H:%M:%S%z)
+    printf '%s mode=%s selection=%s %s exit=%s%s total=%s%s\n' "$RUN_AT" "$mode" \
         "$selection" "$counts" "$status" "$fields" "$seconds" "${RUN_FINGERPRINT:+ fingerprint=$RUN_FINGERPRINT}" >> "$RUNS_LOG"
 }
 

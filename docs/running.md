@@ -14,7 +14,7 @@ What `dev/run-debug-client.sh` does with each flag, why a run is fast, and the r
 | `--test --mp` | The same in multiplayer: a dedicated server and a client that joins it; see [multiplayer.md](multiplayer.md). |
 | `--test --mp --stay` | Both stay open; the next `--test --mp --stay` reruns the tests in them. |
 | `--test --failed` | Runs only the tests that failed in the last `--test` run of the same kind (with or without `--mp`), and the one a stopped run was in. |
-| `--test --changed` | Runs the tests the conf's `TEST_MAP` gives for the files changed since `HEAD`, staged, unstaged or untracked, and prints each file's share and why. A changed file under the mods that no glob covers runs every test; with nothing changed under the mods, nothing runs. |
+| `--test --changed` | Runs the tests the conf's `TEST_MAP` gives for the files the batch changed: since the branch left its upstream, committed or not, untracked files included ([choosing tests](#choosing-tests)). Prints the base and each file's share and why. A changed file under the mods that no glob covers runs every test; with nothing changed under the mods, nothing runs. |
 | `--<mode>` | Runs the mod's handler for the mode and quits. A capture mode with `MODE_CAPTURES_<mode>` then crops its shots into the mod's captures ([adopting.md](adopting.md#capture-modes)); one with `MODE_GROUPS_<mode>` shoots only the groups its selection variable names, every group if it names none, and refuses an unknown name before the game starts. |
 
 `--failed` and `--changed` combine with `--mp` and `--stay`, not with each other or with `TESTS`.
@@ -31,7 +31,8 @@ cache dir (with `--mp` the client's; `SERVER_CACHE` the server's); `SERVER_PORT`
 `--mp` server off 16361 (it also takes the next port); `JAVAC` names the compiler for
 `ClickToStart.java` (any JDK from 8 on; the game's own Java has none); `PZ_APP` names another
 game `Contents` folder; `RERUN=1` runs a `--test` run the script would refuse as a
-[repeat](#repeats).
+[repeat](#repeats); `SINCE=<ref>` sets the commit the batch starts after, for `--changed` and the
+`suspects` lines.
 
 Console lines, in `<cache>/console.txt`: `<TAG> START <n>`, `<TAG> ORDER <order>` and
 `<TAG> REPEAT <n> rounds` when set, `<TAG> LEAKS <mode>`, `TEST: <name>`, `<TAG> LEAK <name>: <what>`
@@ -46,7 +47,8 @@ opted out of this mode, each of those three ending with the test's wall time, `(
 `<TAG> SERVER FAIL <test>: <error>` for a handler or undo that failed, and `<TAG> RUN <id>` for a
 rerun. The script prints every line with the run's mark and both logs' paths, and exits 0 only if
 the run finished, at least one test passed, nothing failed and no Lua error was logged on either
-side.
+side. After a `--test` run with failures it prints `--failed reruns: <names>` and the
+[suspects](#suspects) of each failed test.
 
 ## A quiet world
 
@@ -108,17 +110,39 @@ lines when the next run starts, since that run starts on top of it.
 
 ## Choosing tests
 
-`--failed` reads `dev/.runs-failed` in the mod's repository, which every `--test` run that got as
-far as its tests rewrites for its kind (`test` or `test-mp`): the tests with a `FAIL` line, and
-the test a Lua error or the timeout stopped, each with the number of runs of that kind in a row it
-has failed. A run whose tests all passed leaves the list empty, and `--failed` then runs nothing.
-The mod should gitignore it, as it does `dev/.runs.log`. At the end of a run with failures the
-script prints `--failed reruns: <names>`, and, for a test that has failed three runs in a row, a
-line that says reruns aren't narrowing it down and points at [debugging.md](debugging.md).
+`--failed` reads `dev/.runs-failed` in the checkout, which every `--test` run that got as far as
+its tests rewrites for its kind (`test` or `test-mp`): the tests with a `FAIL` line, and the test
+a Lua error or the timeout stopped, each with the number of runs of that kind in a row it has
+failed. A run whose tests all passed leaves the list empty, and `--failed` then runs nothing. The
+mod should gitignore it, as it does `dev/.runs.log`. At the end of a run with failures the script
+prints `--failed reruns: <names>`, and, for a test that has failed three runs in a row, a line
+that says reruns aren't narrowing it down and points at [debugging.md](debugging.md).
 
-`--changed` reads `git diff --name-only HEAD` and the untracked files, of the repository and of
-the harness submodule, and the conf's `TEST_MAP` ([adopting.md](adopting.md#devharnessconf)). It
-refuses to run while a `TEST_MAP` glob matches no file in the repository.
+`--changed` runs what the batch reaches: the files changed since its base, committed, staged,
+unstaged or untracked, of the repository and of the harness submodule, mapped through the conf's
+`TEST_MAP` ([adopting.md](adopting.md#devharnessconf)). The base is `SINCE=<ref>` when set, else
+`git merge-base HEAD @{u}`, where the branch left its upstream, else `HEAD`, which leaves out the
+branch's commits. The harness's own changes count from the harness commit the repository
+recorded at the base. The script prints `--changed: base <hash> (<why>)`, a
+`--changed: <file>: <prefixes>` line per file, and `--changed: running <prefixes>`. It refuses to
+run while a `TEST_MAP` glob matches no file in the repository.
+
+### Suspects
+
+After a `--test` run with failures, full or not, the script prints which of the batch's changes
+could have caused each one: a `suspects: the files changed since <hash> (<why>) ...` line, then
+per failed test
+
+```
+suspects <test>: <file> (<hash> "<subject>", ..., uncommitted); <file> (...)
+```
+
+The files are those of `--changed`'s batch whose `TEST_MAP` entries reach the test: an entry's
+prefix the test's name starts with, or `=<name>` naming it, and a file under the mods that no glob
+covers reaches every test. Each has the batch's commits that touched it, newest first, and
+`uncommitted` when it differs from `HEAD` or is untracked. A test none reaches gets
+`suspects <test>: none of the changed files reach it`: the cause is older than the base, or the
+map misses it.
 
 ### Repeats
 
@@ -127,8 +151,10 @@ A `--test` run's verdict depends on the kind of run (`--mp`, `--stay`), the sele
 update replaces) and the files the game loads: the three mods, the harness's scripts and the
 conf. `dev/.runs.log` keeps a fingerprint of those with each run, and a run whose fingerprint
 already has a verdict there doesn't start a game: the script prints that verdict and exits with
-that run's status. A run that never got its verdict, such as one a Lua error stopped, doesn't
-count. `RERUN=1` runs it anyway, for when the game rather than a test failed.
+that run's status. The fingerprint names the files relative to the repository, so a run in a git
+worktree with the same files, which logs to the same `dev/.runs.log`, counts as the same run. A
+run that never got its verdict, such as one a Lua error stopped, doesn't count. `RERUN=1` runs it
+anyway, for when the game rather than a test failed.
 
 ### Checks before a run
 
@@ -146,9 +172,10 @@ trip that takes the server the test's undos, its reset and its half of the leak 
 multiplayer it adds how much of both had a server answer outstanding, and how many leak checks
 waited the full half second for the client to catch up with the server.
 
-On exit, `run-client.sh` and `validate-server.sh` print a `timing: <phase> <s> s (<what>)` line
-per phase, each from the end of the one before, then `timing: total`. The clock starts once the
-script holds the game lock, so a wait for another script's game doesn't count. The phases are
+On exit, `run-client.sh` and `validate-server.sh` print `timing: wait <s> s`, how long the script
+waited for the game lock another script's game held, then a `timing: <phase> <s> s (<what>)`
+line per phase, each from the end of the one before, then `timing: total`. The phases' clock
+starts once the script holds the game lock, so the total leaves the wait out. The phases are
 `setup` (to the game's launch; in a kept game, to the rerun request), `boot` (to the harness's
 Lua), `world` (to the world loaded around the character), `start` (to the first test), `run` (to
 the last result), `quit` (to the game's exit, and with `--mp` to the server's after it saves), and
@@ -158,11 +185,15 @@ error stopped has `stopped` (to the poll that saw the error) in place of `run` a
 is left out. The script reads the milestones off the console as it polls it, so they are good to
 about half a second.
 
-Each run also appends one line to `dev/.runs.log` in the mod's repository, which the mod should
-gitignore: the date, `mode=` (`test`, `test-mp`, a mode's name, `validate`; `-rerun` for a run in
-a kept game), `selection=` (`TESTS`, the mode's selection, or `all`), the counts of the `DONE`
-line, `exit=` (the script's exit status), each phase as `<phase>=<s>`, `total=`, and for `--test`
-`fingerprint=`, which the script reads to refuse a [repeat](#repeats).
+Each run also appends one line to `dev/.runs.log`: the date, `mode=` (`test`, `test-mp`, a mode's
+name, `validate`; `-rerun` for a run in a kept game), `selection=` (`TESTS`, the mode's selection,
+or `all`), the counts of the `DONE` line, `exit=` (the script's exit status), `wait=`, each phase
+as `<phase>=<s>`, `total=`, and for `--test` `fingerprint=`, which the script reads to refuse a
+[repeat](#repeats). A `--test` run appends a line per test result that has its wall time to
+`dev/.runs-tests.log`, dated as the run's line: `<date> mode=<mode> test=<name>
+status=<pass|fail|skip> seconds=<s>`, n lines for a test `REPEAT` runs n times. Both logs live in
+the repository's main checkout, where a run in a git worktree of it writes too, so its runs outlive
+the worktree; `dev/.runs-failed` stays with each checkout. The mod should gitignore all three.
 
 ## Why it is fast, and what that costs
 

@@ -67,7 +67,7 @@ Nothing gets patched. The game's files stay as Steam installed them, and the lau
 | A Lua error | The debug error handler stops the game until you notice. | The run ends at once and prints the stack trace. |
 | Multiplayer | Host a server, start a second game, and join it. | `--mp`. |
 
-You also don't have to run everything. `TESTS=<prefix>` picks tests by name, `--failed` reruns only what failed last time, and `--changed` runs the tests that cover the files you changed since your last commit, using a map from your files to your tests that you keep in the harness's config.
+You also don't have to run everything. `TESTS=<prefix>` picks tests by name, `--failed` reruns only what failed last time, and `--changed` runs the tests that cover the files your branch changed, committed or not, using a map from your files to your tests that you keep in the harness's config. When a test fails, the run names the changed files that reach it and the commits that touched them.
 
 ### It tests multiplayer on one computer
 
@@ -123,10 +123,10 @@ You need macOS, Project Zomboid Build 42 installed through Steam, and a Java JDK
     dev/run-debug-client.sh --test --mp
     ```
 
-5. While you work on a few tests, keep the game open so each rerun skips the startup:
+5. While you work, batch your edits, committing each change on its own, then run the tests they reach once:
 
     ```sh
-    TESTS=mymod_craft_ dev/run-debug-client.sh --test --stay
+    dev/run-debug-client.sh --test --changed
     ```
 
 ## Documentation

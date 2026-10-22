@@ -21,13 +21,17 @@
 #                    RELOAD_FILES again too.
 #   --test --failed  runs only the tests that failed, or were running when the game stopped, in
 #                    the last --test run of the same kind (with or without --mp)
-#   --test --changed runs the tests the conf's TEST_MAP gives for the files changed since HEAD
+#   --test --changed runs the tests the conf's TEST_MAP gives for the files changed in the batch:
+#                    since the branch left its upstream (SINCE=<ref> sets the base), uncommitted
+#                    work included
 #   --<mode>         one of the conf's MODES: starts the scenario and runs the mod's handler for it
 #                    instead of the tests
 #
 # With --test, REPEAT=<n> runs the selection n times in one game, ORDER=reverse or
 # ORDER=shuffle[:<seed>] changes the order, and LEAKS=fail (the default), warn or off sets what the
-# leak check between tests does. docs/running.md and docs/debugging.md describe them.
+# leak check between tests does. After a failure the script names, for each failed test, the
+# batch's changed files that reach it and their commits. docs/running.md and docs/debugging.md
+# describe them.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../lib/harness.sh"
 
@@ -105,16 +109,58 @@ select_failed() {
     SELECTION="=${names//,/,=}"
 }
 
-# Every file changed since HEAD, staged, unstaged or untracked, relative to the repository, the
-# harness submodule's own changes included.
+# The batch that --changed and the suspects of a failure look at: what changed since BATCH_BASE,
+# SINCE when set, else where the branch left its upstream, else HEAD, which leaves out the
+# branch's commits. HARNESS_BASE is the harness commit the repository recorded at BATCH_BASE, so
+# the batch has the harness's own commits too, else the harness's HEAD. Both HEADs are kept as the
+# run starts, so a commit made during the run isn't counted in it.
+batch_base() {
+    local upstream submodule=${HARNESS#"$REPO/"}
+    BATCH_HEAD=$(git -C "$REPO" rev-parse HEAD)
+    HARNESS_HEAD=$(git -C "$HARNESS" rev-parse HEAD)
+    if [ -n "${SINCE:-}" ]; then
+        if ! BATCH_BASE=$(git -C "$REPO" rev-parse --verify --quiet "$SINCE^{commit}"); then
+            echo "SINCE=$SINCE names no commit of the repository" >&2
+            exit 2
+        fi
+        BATCH_BASE_WHY="SINCE=$SINCE"
+    elif upstream=$(git -C "$REPO" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null) \
+        && BATCH_BASE=$(git -C "$REPO" merge-base HEAD "$upstream"); then
+        BATCH_BASE_WHY="where the branch left $upstream"
+    else
+        BATCH_BASE=$BATCH_HEAD
+        BATCH_BASE_WHY="HEAD: the branch has no upstream, so SINCE=<ref> adds its commits"
+    fi
+    HARNESS_BASE=$(git -C "$REPO" rev-parse --verify --quiet "$BATCH_BASE:$submodule" || true)
+    if [ -z "$HARNESS_BASE" ] || ! git -C "$HARNESS" cat-file -e "$HARNESS_BASE^{commit}" 2>/dev/null; then
+        HARNESS_BASE=$HARNESS_HEAD
+    fi
+    BATCH_BASE_SAID="$(git -C "$REPO" rev-parse --short "$BATCH_BASE") ($BATCH_BASE_WHY)"
+}
+
+# Every file changed in the batch, committed, staged, unstaged or untracked, relative to the
+# repository, the harness submodule's own changes included.
 changed_files() {
     local submodule=${HARNESS#"$REPO/"}
     {
-        git -C "$REPO" diff --name-only HEAD
+        git -C "$REPO" diff --name-only "$BATCH_BASE"
         git -C "$REPO" ls-files --others --exclude-standard
-        { git -C "$HARNESS" diff --name-only HEAD; git -C "$HARNESS" ls-files --others --exclude-standard; } \
+        { git -C "$HARNESS" diff --name-only "$HARNESS_BASE"; git -C "$HARNESS" ls-files --others --exclude-standard; } \
             | sed "s|^|$submodule/|"
     } | sort -u
+}
+
+# The batch's commits that touched file $1, newest first, as "<hash> "<subject>"", and
+# "uncommitted" if it differs from HEAD or is untracked.
+file_history() {
+    local submodule=${HARNESS#"$REPO/"} dir=$REPO base=$BATCH_BASE head=$BATCH_HEAD file=$1
+    if [[ $file == "$submodule/"* ]]; then
+        dir=$HARNESS base=$HARNESS_BASE head=$HARNESS_HEAD file=${file#"$submodule/"}
+    fi
+    git -C "$dir" log --format='%h "%<(60,trunc)%s' "$base..$head" -- "$file" | sed 's/ *$/"/'
+    if [ -n "$(git -C "$dir" status --porcelain -- "$file")" ]; then
+        echo uncommitted
+    fi
 }
 
 # Every file of the repository and the harness submodule, tracked or untracked, relative to the
@@ -151,38 +197,59 @@ check_test_map() {
     fi
 }
 
-# The test prefixes the conf's TEST_MAP gives for the changed files under the mod, the dev mod and
-# the harness mod, saying why for each file. A changed file there that no glob covers runs every
-# test; files elsewhere, such as docs and art, run none.
-select_changed() {
+# What file $1 reaches, in REACH: "-" for none, as for a file outside the mod, the dev mod and
+# the harness mod, such as docs and art; "*" for every test, as for a file there that no TEST_MAP
+# glob covers; else the test prefixes of every glob that matches it, comma-separated, empty for a
+# file no test exercises.
+file_reach() {
     local roots=("${MOD_DIR#"$REPO/"}/" "${DEV_MOD_DIR#"$REPO/"}/" "${HARNESS_MOD_DIR#"$REPO/"}/")
-    local file root under matched entry glob prefixes picked= everything= relevant=
-    check_test_map
-    while read -r file; do
-        under=
-        for root in "${roots[@]}"; do
-            [[ $file == "$root"* ]] && under=1
-        done
-        [ -n "$file" ] && [ -n "$under" ] || continue
-        relevant=1
-        matched=
-        for entry in ${TEST_MAP[@]+"${TEST_MAP[@]}"}; do
-            glob=${entry%%=*}
-            prefixes=${entry#*=}
-            # shellcheck disable=SC2053 # the glob is a pattern
-            if [[ $file == $glob ]]; then
-                matched=1
-                picked="$picked,$prefixes"
-                echo "--changed: $file: ${prefixes:-no tests}"
-            fi
-        done
-        if [ -z "$matched" ]; then
-            echo "--changed: $file: no TEST_MAP glob covers it, so every test runs"
-            everything=1
+    local root under= matched= entry glob prefixes=
+    for root in "${roots[@]}"; do
+        [[ $1 == "$root"* ]] && under=1
+    done
+    if [ -z "$under" ]; then
+        REACH=-
+        return
+    fi
+    for entry in ${TEST_MAP[@]+"${TEST_MAP[@]}"}; do
+        glob=${entry%%=*}
+        # shellcheck disable=SC2053 # the glob is a pattern
+        if [[ $1 == $glob ]]; then
+            matched=1
+            prefixes="$prefixes,${entry#*=}"
         fi
+    done
+    if [ -z "$matched" ]; then
+        REACH='*'
+        return
+    fi
+    REACH=$(tr ',' '\n' <<< "$prefixes" | sed '/^$/d' | sort -u | paste -sd, -)
+}
+
+# The test prefixes the conf's TEST_MAP gives for the batch's changed files, saying why for each
+# file (file_reach).
+select_changed() {
+    local file picked= everything= relevant=
+    check_test_map
+    echo "--changed: base $BATCH_BASE_SAID"
+    while read -r file; do
+        [ -n "$file" ] || continue
+        file_reach "$file"
+        case $REACH in
+            -) continue ;;
+            '*')
+                echo "--changed: $file: no TEST_MAP glob covers it, so every test runs"
+                everything=1
+                ;;
+            *)
+                echo "--changed: $file: ${REACH:-no tests}"
+                picked="$picked,$REACH"
+                ;;
+        esac
+        relevant=1
     done < <(changed_files)
     if [ -z "$relevant" ]; then
-        echo "--changed: nothing under the mods changed since HEAD; no tests to run"
+        echo "--changed: nothing under the mods changed since the base; no tests to run"
         exit 0
     fi
     if [ -n "$everything" ]; then
@@ -197,8 +264,43 @@ select_changed() {
     echo "--changed: running $SELECTION"
 }
 
+# For each test that failed, the line "suspects <test>: <file> (<commits>); ...": the batch's
+# changed files that reach it (file_reach; an entry "=<name>" reaches that test alone), each with
+# file_history's commits, newest first.
+print_suspects() {
+    local names=$1 name file files reach prefix line hit history
+    [ -n "$names" ] && [ -n "${BATCH_BASE:-}" ] || return 0
+    files=$(changed_files)
+    echo "suspects: the files changed since $BATCH_BASE_SAID that reach each failed test"
+    for name in ${names//,/ }; do
+        line=
+        while read -r file; do
+            [ -n "$file" ] || continue
+            file_reach "$file"
+            hit=
+            case $REACH in
+                -) ;;
+                '*') hit=1 ;;
+                *)
+                    for prefix in ${REACH//,/ }; do
+                        if [[ $prefix == =* && $name == "${prefix#=}" ]] || [[ $prefix != =* && $name == "$prefix"* ]]; then
+                            hit=1
+                        fi
+                    done
+                    ;;
+            esac
+            [ -n "$hit" ] || continue
+            history=$(file_history "$file" | awk 'NR > 1 { printf ", " } { printf "%s", $0 }')
+            line="$line; $file (${history:-no commit})"
+        done <<< "$files"
+        line=${line:-; none of the changed files reach it}
+        echo "suspects $name: ${line#; }"
+    done
+}
+
 if [ "$MODE" = test ]; then
     SELECTION=${TESTS:-}
+    batch_base
     if [ -n "$FAILED" ]; then
         select_failed
     elif [ -n "$CHANGED" ]; then
@@ -268,12 +370,16 @@ fi
 
 # What a --test run's verdict depends on: the kind of run, the selection and settings, the game
 # install and its code, which a Steam update changes, and the contents of the files the game loads
-# from the three mods, the harness and the conf. RUNS_LOG keeps it with each run.
+# from the three mods, the harness and the conf. RUNS_LOG keeps it with each run. The files are
+# named relative to the repository, so a worktree of it with the same files has the same
+# fingerprint, as its runs go to the same RUNS_LOG.
 run_fingerprint() {
     {
         printf '%s\n' "$MP" "$STAY" "$SELECTION" "$LEAKS" "$ORDER" "$ROUNDS" "$PZ"
-        find "$PZ/Java/projectzomboid.jar" "$MOD_DIR" "$DEV_MOD_DIR" "$HARNESS_MOD_DIR" "$HARNESS/bin" \
-            "$HARNESS/lib" "$HARNESS/java" "$REPO/dev/harness.conf" -type f -print0 | sort -z | xargs -0 md5 -r
+        md5 -r "$PZ/Java/projectzomboid.jar"
+        (cd "$REPO" && find "${MOD_DIR#"$REPO/"}" "${DEV_MOD_DIR#"$REPO/"}" "${HARNESS_MOD_DIR#"$REPO/"}" \
+            "${HARNESS#"$REPO/"}/bin" "${HARNESS#"$REPO/"}/lib" "${HARNESS#"$REPO/"}/java" dev/harness.conf \
+            -type f -print0 | sort -z | xargs -0 md5 -r)
     } | md5 -q
 }
 
@@ -572,22 +678,39 @@ record_failed_tests() {
     mv "$RUNS_FAILED.tmp" "$RUNS_FAILED"
     if [ -n "$names" ]; then
         echo "--failed reruns: ${names//,/, }"
+        print_suspects "$names"
     fi
     if [ -n "$stuck" ]; then
         echo "failed $STUCK_RUNS or more runs in a row:$stuck. Rerunning won't narrow it; read ${HARNESS#"$REPO/"}/docs/debugging.md and change approach first"
     fi
 }
 
+# One RUNS_TESTS_LOG line per PASS, FAIL or SKIP line of this run that has the test's wall time,
+# dated as the run's RUNS_LOG line: "<date> mode=<mode> test=<name> status=<pass, fail or skip>
+# seconds=<s>". A test REPEAT runs n times has n lines.
+record_test_times() {
+    [ "$MODE" = test ] && [ -n "${RUN_AT:-}" ] && [ -f "$RUN_LOG" ] || return 0
+    awk -v tag="$TAG" -v at="$RUN_AT" -v mode="$1" '
+        match($0, "> " tag " (PASS|FAIL|SKIP) ") && match($0, /\([0-9.]+ s\)$/) {
+            seconds = substr($0, RSTART + 1, RLENGTH - 4)
+            rest = substr($0, index($0, "> " tag " ") + length(tag) + 3)
+            status = tolower(substr(rest, 1, 4))
+            name = substr(rest, 6)
+            sub(/[: ].*/, "", name)
+            printf "%s mode=%s test=%s status=%s seconds=%s\n", at, mode, name, status, seconds
+        }' "$RUN_LOG" >> "$RUNS_TESTS_LOG"
+}
+
 # On exit (exit_report, lib/harness.sh): records what failed for --failed, prints this run's phases
-# and appends it to RUNS_LOG. A kept game's rerun has no boot or world phase, and only a game that
-# quits has a quit phase. A run a Lua error stopped has a stopped phase instead of the run, up to
-# the poll that saw the error.
+# and appends it to RUNS_LOG, and its tests to RUNS_TESTS_LOG. A kept game's rerun has no boot or
+# world phase, and only a game that quits has a quit phase. A run a Lua error stopped has a stopped
+# phase instead of the run, up to the poll that saw the error.
 report_timing() {
     [ -n "$MODE" ] || return 0
     record_failed_tests
-    local counts
+    local counts mode="$MODE${MP:+-mp}${SESSION_PID:+-rerun}"
     counts=$(sed -n "s/.*> $TAG DONE \(passed=[0-9]* failed=[0-9]* skipped=[0-9]*\)\$/\1/p" "$RUN_LOG" 2>/dev/null | tail -1)
-    report_run "$1" "$MODE${MP:+-mp}${SESSION_PID:+-rerun}" "${SELECTION:-all}" \
+    report_run "$1" "$mode" "${SELECTION:-all}" \
         "${counts:-passed=- failed=- skipped=-}" \
         "setup|launch|script start to the game's launch, or to the rerun request in a kept game" \
         "boot|lua|game launch to the harness's Lua" \
@@ -597,6 +720,7 @@ report_timing() {
         "stopped|stopped|to the Lua error that stopped the run" \
         "quit|exit|to the game's exit, and with --mp the server's" \
         "server|server_ready|server launch to ready|server_start"
+    record_test_times "$mode"
 }
 
 # The milestones in this run's log, each timed when a poll first sees it.

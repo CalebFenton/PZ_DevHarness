@@ -1,30 +1,37 @@
 # Debugging with the harness
 
 Which run to reach for, and how to read a failure, so a change takes a handful of game runs
-rather than dozens. A game run is the most expensive step of a change, a fresh one most of all, so
-each one should be able to tell you something the last one didn't. [running.md](running.md)
-describes every flag and line named here.
+rather than dozens. A game run is the most expensive step of a change: about 20 seconds of
+starting and quitting before and after the tests, and more with `--mp`. So batch the changes
+and spend one run on them, and make each run able to tell you something the last one didn't.
+[running.md](running.md) describes every flag and line named here.
 
 ## What to run when
 
 1. After every edit, `dev/static-check.sh` ([static-check.md](static-check.md); it takes seconds
    and needs no game). The conf's `PRECHECK` runs it before every game run as well.
-2. While you work on a change, a kept game and only the tests it touches:
+2. Make a batch of changes, committing each logical change on its own, then spend one run on the
+   tests the whole batch reaches:
 
     ```sh
-    dev/run-debug-client.sh --test --stay --changed          # the tests TEST_MAP gives for your changes
-    TESTS=mymod_craft_ dev/run-debug-client.sh --test --stay # or name them
+    dev/run-debug-client.sh --test --changed          # the tests TEST_MAP gives for the batch
+    TESTS=mymod_craft_ dev/run-debug-client.sh --test # or name them
     ```
 
-    Add `--mp` when the change touches what the server does or sends. A kept game reloads only
-    the conf's `RELOAD_FILES` (test files and server handler files); a change to anything else
-    restarts it, which the script does on its own.
-3. Once, before you commit, the whole suite in fresh games, in both modes:
+    `--changed` counts everything since the branch left its upstream, commits and uncommitted
+    work alike, and prints the base it used; `SINCE=<ref>` sets another. Add `--mp` when the
+    batch touches what the server does or sends. Don't run the game after each edit.
+3. Once, before you push or merge, the whole suite in fresh games, in both modes:
 
     ```sh
     dev/run-debug-client.sh --test
     dev/run-debug-client.sh --test --mp
     ```
+
+`--stay` keeps the game open and reruns in it, skipping the start; it reloads only the conf's
+`RELOAD_FILES` and keeps what earlier runs built in its world
+([running.md](running.md#why-it-is-fast-and-what-that-costs)). It suits rerunning a test file
+you are editing many times over, not the batch's run, whose verdict should come from a fresh game.
 
 The script won't repeat a run whose selection, settings and files haven't changed since it last
 got a verdict: it prints that verdict instead ([repeats](running.md#repeats)). Set `RERUN=1` only
@@ -41,11 +48,18 @@ all of them, with everyone's changes in one run.
 1. Read the `FAIL` line's reasons, the `LEAK` and `DESYNC` lines above it, and the log whose path
    the script prints, before changing anything. The reasons name what was missing, what the
    server answered, the action that cleared the queue, or what a stopped test was waiting on.
-2. If that doesn't explain it, write down the explanations that fit, add the one diagnostic that
+2. Find the change that broke it. The run prints a `suspects <test>: ...` line per failed test
+   ([suspects](running.md#suspects)): the batch's changed files that reach it, each with the
+   commits that touched it and `uncommitted` if it has uncommitted changes. Read those commits'
+   diffs first; reading costs less than a run. If they don't settle it, run only that test,
+   `TESTS==<name> dev/run-debug-client.sh --test`, at the suspect commits, oldest first, until it
+   fails. A test with no suspect broke before the base, or `TEST_MAP` misses the file that reaches
+   it.
+3. If that doesn't explain it, write down the explanations that fit, add the one diagnostic that
    tells them apart (an `expect` with the value in its message, or a `print`), and rerun only the
-   failures: `dev/run-debug-client.sh --test --stay --failed`.
-3. Fix, then rerun the failures once more, then the suite before you commit.
-4. When the script says a test has failed three runs in a row, stop rerunning. Write down what
+   failures: `dev/run-debug-client.sh --test --failed`.
+4. Fix, then rerun the failures once more, then the suite before you push or merge.
+5. When the script says a test has failed three runs in a row, stop rerunning. Write down what
    each run ruled out and change the approach: a different diagnostic, a smaller test, or reading
    the game's code (decompiled Java and its Lua) for what the step really does.
 
@@ -68,7 +82,7 @@ Something an earlier test left behind, or the order, changes it.
 `REPEAT=<n>` runs the selection n times in one game and prints each test's passes and failures:
 
 ```sh
-REPEAT=20 TESTS=mymod_world_trailer_ dev/run-debug-client.sh --test --stay
+REPEAT=20 TESTS=mymod_world_trailer_ dev/run-debug-client.sh --test
 ```
 
 Add `ORDER=shuffle` to mix the order between rounds as well.
