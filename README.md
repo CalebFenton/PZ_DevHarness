@@ -52,7 +52,7 @@ Project Zomboid is a Java program. Lua mods, the harness's own Lua included, onl
 
 So the harness doesn't start the game the usual way. It starts a small Java launcher of its own, [`ClickToStart.java`](java/ClickToStart.java), which starts the real game inside the same program. Sharing the program lets the launcher look at the game's internals while it runs, through Java's reflection: code can look up another class's private fields by name and change them. The launcher waits for the loading screen and sets the flag a real click would set. It also gives the game more worker threads for loading textures, models and animations; the game uses at most 4, and on an M3 Max the loading screen went from about 8 seconds to about 2. And it loads the tiles' depth maps, which the game loads one at a time after everything else, while the main menu shows, so the world is ready about a second sooner. The dedicated server for multiplayer runs starts through a twin, [`FastServer.java`](java/FastServer.java), which gives the server the same loader threads and took its start from about 18.5 seconds to about 14.
 
-Nothing gets patched. The game's files stay as Steam installed them, and the launchers live only in the harness, never in your published mod. If a game update renames something they reach for, they print so and leave the game alone: it loads slower, or waits for you to click.
+The game's files stay as Steam installed them: the launchers change the running game in memory only, and they live only in the harness, never in your published mod. If a game update renames something they reach for, they print so and leave the game alone: it loads slower, or waits for you to click.
 
 ### It's quick
 

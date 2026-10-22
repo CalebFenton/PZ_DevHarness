@@ -19,12 +19,18 @@ and spend one run on them, and make each run able to tell you something the last
     ```
 
     `--changed` counts everything since the branch left its upstream, commits and uncommitted
-    work alike, and prints the base it used; `SINCE=<ref>` sets another. Add `--mp` when the
-    batch touches what the server does or sends. Don't run the game after each edit.
-3. Once, before you push or merge, the whole suite in fresh games, in both modes:
+    work alike, and prints the base it used; `SINCE=<ref>` sets another. Batches run in single
+    player. Don't run the game after each edit.
+3. Once, before you push or merge, the whole suite in a fresh game:
 
     ```sh
     dev/run-debug-client.sh --test
+    ```
+
+4. Before a release, the whole suite against a dedicated server too, which costs about three times
+   the single player run:
+
+    ```sh
     dev/run-debug-client.sh --test --mp
     ```
 
