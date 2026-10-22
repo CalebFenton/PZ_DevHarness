@@ -253,6 +253,10 @@ the worktree; `dev/.runs-failed` stays with each checkout. The mod should gitign
   under the real path of `$TMPDIR`: the game reads tile depth maps by absolute path and refuses
   paths through a symlink (`ZomboidFileSystem.validatePrefix`). The dev mod and the harness mod
   have no tiles and are linked.
+- Every run in a mode starts a new world, and its save stays in `<cache>/Saves/Sandbox`; a run
+  deletes all but the three newest before it starts. A plain run keeps them.
+- The launchers (`java/`) compile into `<cache>/launcher`, which a mod's checkouts share. A build
+  is reused only for the same sources, by their contents, so a checkout never runs another's.
 - The runner reads the run from `<cache>/Lua/PZHarness.txt`, rerun requests from
   `<cache>/Lua/PZHarnessRerun.txt` and, with `--mp`, the server to join from
   `<cache>/Lua/PZHarnessConnect.txt`. Without the first file, as in a game the script didn't

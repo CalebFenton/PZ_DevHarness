@@ -544,6 +544,13 @@ EOF
         # The character the client kept of the last run's server, whose world is gone.
         rm -rf "$CACHE/Saves/Multiplayer"
     fi
+    # Every harness run starts a new world and leaves its save behind, gigabytes over weeks; the
+    # newest few stay for looking into a run.
+    if [ -n "$MODE" ] && [ -d "$CACHE/Saves/Sandbox" ]; then
+        ls -1t "$CACHE/Saves/Sandbox" | tail -n +4 | while IFS= read -r save; do
+            rm -rf "${CACHE:?}/Saves/Sandbox/$save"
+        done
+    fi
 }
 
 # The server of --mp: the three mods, no zombies, a quiet world, not paused while nobody plays,

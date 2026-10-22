@@ -72,18 +72,23 @@ fi
 # the published mod, in a cache dir under a path with no symlink in it.
 TMP_REAL="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
 
-# Compiles a dev Java file, and the files of its folder it uses, into a directory when one of
-# those sources is newer than its class. The game's own Java has no compiler, so it needs a JDK's
-# javac (or JAVAC); class files for Java 8 run on the game's newer JVM, and any JDK from 8 on can
-# write them.
+# Compiles a dev Java file, and the files of its folder it uses, into a directory unless the
+# directory already holds a build of those exact sources. Checkouts share the cache dir, so a
+# build is matched by the sources' contents, not their times: one checkout's newer class never
+# stands in for another's sources. The game's own Java has no compiler, so it needs a JDK's javac
+# (or JAVAC); class files for Java 8 run on the game's newer JVM, and any JDK from 8 on can write
+# them.
 compile_java() {
     local source=$1 dir=$2
-    local class folder
+    local class folder stamp sources
     class="$dir/$(basename "$source" .java).class"
+    stamp="$dir/$(basename "$source" .java).sources"
     folder=$(dirname "$source")
-    if [ ! -f "$class" ] || [ -n "$(find "$folder" -maxdepth 1 -name '*.java' -newer "$class")" ]; then
+    sources=$(cat "$folder"/*.java | shasum | cut -d' ' -f1)
+    if [ ! -f "$class" ] || [ "$(cat "$stamp" 2>/dev/null)" != "$sources" ]; then
         mkdir -p "$dir"
         "${JAVAC:-javac}" -nowarn -Xlint:-options -source 8 -target 8 -sourcepath "$folder" -d "$dir" "$source"
+        echo "$sources" > "$stamp"
     fi
 }
 
