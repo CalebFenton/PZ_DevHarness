@@ -1,7 +1,8 @@
 /**
  * Starts the dedicated server with more asset loader threads, as ClickToStart does for the client:
  * before it starts, the server waits for the game's models, animations and clothing to load on the
- * same pool of at most 4 threads, all of them busy throughout.
+ * same pool of at most 4 threads, all of them busy throughout. Its packets go out at once
+ * (NetLatency).
  *
  * Reading a static field of a class that isn't initialized yet would initialize it here, out of
  * the server's startup order, so this waits until the server's main thread is in the loop of
@@ -13,6 +14,7 @@ public class FastServer {
 
     public static void main(String[] args) throws Exception {
         Thread main = Thread.currentThread();
+        NetLatency.immediateOnceNetworking();
         Thread widener = new Thread(() -> widenOnceLoading(main), "FastServer");
         widener.setDaemon(true);
         widener.start();

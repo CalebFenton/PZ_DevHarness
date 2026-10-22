@@ -27,8 +27,8 @@ and spend one run on them, and make each run able to tell you something the last
     dev/run-debug-client.sh --test
     ```
 
-4. Before a release, the whole suite against a dedicated server too, which costs about three times
-   the single player run:
+4. Before a release, the whole suite against a dedicated server too, which costs about two and a
+   half times the single player run:
 
     ```sh
     dev/run-debug-client.sh --test --mp
@@ -42,6 +42,9 @@ you are editing many times over, not the batch's run, whose verdict should come 
 The script won't repeat a run whose selection, settings and files haven't changed since it last
 got a verdict: it prints that verdict instead ([repeats](running.md#repeats)). Set `RERUN=1` only
 when the game rather than a test failed, such as a crash before the tests started.
+
+When a run or a test takes longer than it should, `TRACE=1` says where the time went, test by
+test and wait by wait ([running.md](running.md#where-the-time-goes)), before you guess at a cause.
 
 ## Several agents, one game
 

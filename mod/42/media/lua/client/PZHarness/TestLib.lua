@@ -193,7 +193,7 @@ function T.waitUntil(condition, maxFrames, what)
 end
 
 --- What a queued action is, for the runner's message when a test overruns its limit: a harness
---- wait's `what`, else where the wait or step was queued, else the action's type.
+--- wait's `what`, else where the step's function or the wait was written, else the action's type.
 function T.describeAction(action)
     if not action then
         return "nothing queued"
@@ -204,15 +204,17 @@ function T.describeAction(action)
     if action.what then
         return action.what
     end
-    local fn = action.done or action.onTick
+    local fn = action.step or action.done or action.onTick
     local file = fn and tostring(getFilenameOfClosure(fn)):match("[^/]*$")
-    return "a wait queued at " .. tostring(file) .. ":" .. tostring(fn and getFirstLineOfClosure(fn))
+    return (action.step and "the step at " or "a wait queued at ") .. tostring(file) .. ":"
+        .. tostring(fn and getFirstLineOfClosure(fn))
 end
 
 --- Runs `fn` once the actions queued before it are done. What fn queues (actions, T.server,
 --- T.step...) runs right after it, in order, before what was queued after the step.
 function T.step(fn)
-    queueWait(1, function() fn() end).crossable = batching
+    local wait = queueWait(1, function() fn() end)
+    wait.crossable, wait.step = batching, fn
 end
 
 local function lit()
@@ -226,7 +228,7 @@ local function waitForLight(wantLit)
     queueWait(math.huge, nil, function()
         sinceMs = sinceMs or getTimestampMs()
         return lit() == wantLit or getTimestampMs() - sinceMs > LIGHT_MS
-    end)
+    end, wantLit and "light where the character stands" or "dark where the character stands")
 end
 
 -- Server

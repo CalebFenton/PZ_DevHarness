@@ -111,7 +111,8 @@ end
 -- Client commands arrive reliably but in any order (PacketTypes.ClientCommand), so each client's
 -- requests are served in the order of their ids within its session (client/PZHarness/
 -- ServerCalls.lua), and one that comes early waits here for those before it: the next id and the
--- waiting requests of each player's session.
+-- waiting requests of each player's session. Each answer carries when its request arrived, and
+-- when its handler started and finished, for a TRACE run (client/PZHarness/Trace.lua).
 local queues = {}
 
 if isServer() then
@@ -125,12 +126,15 @@ if isServer() then
             queue = { session = args.session, next = 1, early = {} }
             queues[owner] = queue
         end
-        queue.early[args.id] = { command = command, args = args }
+        queue.early[args.id] = { command = command, args = args, arrivedMs = getTimestampMs() }
         while queue.early[queue.next] do
             local request = queue.early[queue.next]
             queue.early[queue.next] = nil
             queue.next = queue.next + 1
-            sendServerCommand(player, MODULE, "reply", Handlers.handle(player, request.command, request.args))
+            local startedMs = getTimestampMs()
+            local answer = Handlers.handle(player, request.command, request.args)
+            answer.arrivedMs, answer.startedMs, answer.finishedMs = request.arrivedMs, startedMs, getTimestampMs()
+            sendServerCommand(player, MODULE, "reply", answer)
         end
     end)
 end

@@ -24,7 +24,8 @@ Environment: `TESTS=<prefix>,...` runs only the tests whose names start with one
 game and ends with a `<TAG> REPEAT <name> passed=<n> failed=<n>` line per test, the most failed
 first; `ORDER=reverse` runs the tests in reverse order, and `ORDER=shuffle` in an order from a
 seed the script picks and prints, which `ORDER=shuffle:<seed>` repeats; `LEAKS=fail` (the
-default), `warn` or `off` sets what the [leak check](#leaks-and-desyncs) does; `TIMEOUT` caps a
+default), `warn` or `off` sets what the [leak check](#leaks-and-desyncs) does; `TRACE=1` reports
+[where the time went](#where-the-time-goes), test by test; `TIMEOUT` caps a
 run in seconds (default 300 for `--test`, times `REPEAT`, enough for a cold `--mp` run of a
 whole suite, so it only catches a game that died; 1200 for the other modes); `CACHE` moves the
 cache dir (with `--mp` the client's; `SERVER_CACHE` the server's); `SERVER_PORT` moves the
@@ -155,7 +156,8 @@ already has a verdict there doesn't start a game: the script prints that verdict
 that run's status. The fingerprint names the files relative to the repository, so a run in a git
 worktree with the same files, which logs to the same `dev/.runs.log`, counts as the same run. A
 run that never got its verdict, such as one a Lua error stopped, doesn't count. `RERUN=1` runs it
-anyway, for when the game rather than a test failed.
+anyway, for when the game rather than a test failed. A `TRACE=1` run always runs: its timings
+differ from run to run.
 
 ### Checks before a run
 
@@ -172,6 +174,21 @@ square to load again after a test that went far, the leak checks, and in multipl
 trip that takes the server the test's undos, its reset and its half of the leak check. In
 multiplayer it adds how much of both had a server answer outstanding, and how many leak checks
 waited the full half second for the client to catch up with the server.
+
+`TRACE=1` traces a `--test` run to find out why. The runner records each test, what headed its
+action queue and for how long, the reset and leak check between tests, and every server call:
+sent, arrived at the server, its handler started (after the requests before it) and finished,
+answered on the client, handed to its caller (after the answers before it). The server stamps
+its times on every answer; both read the machine's clock. After the run `lib/trace.py` prints
+where the time in tests went: how much a wait for the server's answer spent on each leg of the
+oldest call still out, how much ran on after the answer was in (the client waiting for what the
+answer promised, or the next frame), what headed the queue longest in total (a harness wait by
+what it waits for, a step or a mod's wait by its file and line, a game action by its type), the
+same split for the gaps between tests, each leg's median, 90th percentile and longest, the calls
+that took longest in total, and the slowest tests with their split. It also writes
+`<cache dir>/trace.json`, which [Perfetto](https://ui.perfetto.dev) shows as a timeline: tests
+and gaps, the action queue, and each call's legs. The raw records stay in
+`<cache dir>/Lua/PZHarnessTrace.txt`.
 
 On exit, `run-client.sh` and `validate-server.sh` print `timing: wait <s> s`, how long the script
 waited for the game lock another script's game held, then a `timing: <phase> <s> s (<what>)`
@@ -221,6 +238,14 @@ the worktree; `dev/.runs-failed` stays with each checkout. The mod should gitign
   The menu takes a few tenths of a second longer, since the render thread uploads the maps
   meanwhile, and the `world` phase about a second less (13.0 to 11.9 seconds on an M3 Max). The
   loading screen then waits for the animations, which finish about when the world has loaded.
+- Packets at once. The game sends each packet type at a priority, and its network library (RakNet)
+  sends all but the highest only on its next pass, about every 10 ms, so a server call's round
+  trip took a median 27 ms on one computer. In multiplayer ClickToStart and FastServer's
+  NetLatency give every packet type that highest priority once the game's networking starts,
+  which cut the median to 12 ms and Renewable Energy's 315 multiplayer tests from 189 to 163
+  seconds. Every type has the same priority, so packets keep the order the game sends them in;
+  only the waits for the library's pass go. A real network's delay was never in the tests anyway:
+  client and server share one computer.
 - Settling by loaded chunks. A run starts once one square in every chunk 40 squares around the
   character has loaded, not after a fixed delay.
 - Fast UI in captures. A mode registered `fastUI` draws the UI at its highest rate, so its steps

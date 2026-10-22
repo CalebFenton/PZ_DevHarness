@@ -28,10 +28,10 @@
 #                    instead of the tests
 #
 # With --test, REPEAT=<n> runs the selection n times in one game, ORDER=reverse or
-# ORDER=shuffle[:<seed>] changes the order, and LEAKS=fail (the default), warn or off sets what the
-# leak check between tests does. After a failure the script names, for each failed test, the
-# batch's changed files that reach it and their commits. docs/running.md and docs/debugging.md
-# describe them.
+# ORDER=shuffle[:<seed>] changes the order, LEAKS=fail (the default), warn or off sets what the
+# leak check between tests does, and TRACE=1 reports where the run's time went (lib/trace.py).
+# After a failure the script names, for each failed test, the batch's changed files that reach it
+# and their commits. docs/running.md and docs/debugging.md describe them.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../lib/harness.sh"
 
@@ -84,7 +84,7 @@ fi
 SELECTION=
 MARK=$TAG
 # The test runs' settings, which the runner reads with the selection.
-LEAKS=${LEAKS:-fail} ORDER=${ORDER:-} ROUNDS=${REPEAT:-1}
+LEAKS=${LEAKS:-fail} ORDER=${ORDER:-} ROUNDS=${REPEAT:-1} TRACE=${TRACE:-}
 # Where --failed finds what failed last, one line per kind of run: "<test or test-mp>
 # <name>:<runs>,...", each test that failed with the number of runs of that kind in a row it has
 # failed.
@@ -393,7 +393,8 @@ run_fingerprint() {
 if [ "$MODE" = test ]; then
     RUN_FINGERPRINT=$(run_fingerprint)
     previous=$(grep " fingerprint=$RUN_FINGERPRINT\$" "$RUNS_LOG" 2>/dev/null | grep -v " passed=- " | tail -1 || true)
-    if [ -n "$previous" ] && [ -z "${RERUN:-}" ]; then
+    # A traced run is for its timings, which differ from run to run.
+    if [ -n "$previous" ] && [ -z "${RERUN:-}" ] && [ -z "$TRACE" ]; then
         echo "this exact run already ran at ${previous%% *}, with $(grep -o 'passed=[^ ]* failed=[^ ]* skipped=[^ ]*' <<< "$previous"), and nothing it loads has changed since"
         echo "change the code or the selection first; REPEAT=<n> measures a flaky test, and RERUN=1 runs it again when the game rather than a test failed"
         exit "$(sed -n 's/.* exit=\([0-9]*\) .*/\1/p' <<< "$previous")"
@@ -409,6 +410,8 @@ LOG="$CACHE/console.txt"
 HARNESS_FILE="$CACHE/Lua/PZHarness.txt"
 REQUEST_FILE="$CACHE/Lua/PZHarnessRerun.txt"
 CONNECT_FILE="$CACHE/Lua/PZHarnessConnect.txt"
+# Where a TRACE run's runner records its timings (PZHarness/Trace.lua).
+TRACE_FILE="$CACHE/Lua/PZHarnessTrace.txt"
 
 # Whether $1, relative to the dev mod, is one of the files a rerun loads again.
 reloaded() {
@@ -474,7 +477,7 @@ request_rerun() {
     {
         echo "$RUN_ID"
         echo "$SELECTION"
-        printf 'option leaks=%s\noption order=%s\noption rounds=%s\n' "$LEAKS" "$ORDER" "$ROUNDS"
+        printf 'option leaks=%s\noption order=%s\noption rounds=%s\noption trace=%s\n' "$LEAKS" "$ORDER" "$ROUNDS" "$TRACE"
         for pattern in "${RELOAD_FILES[@]}"; do
             for file in "$CACHE/mods/$DEV_MOD_FOLDER/"$pattern; do
                 [ -f "$file" ] || continue
@@ -513,7 +516,7 @@ prepare_cache() {
     # tests too.
     link_dev_mods
     mkdir -p "$CACHE/Lua"
-    rm -f "$REQUEST_FILE" "$CONNECT_FILE"
+    rm -f "$REQUEST_FILE" "$CONNECT_FILE" "$TRACE_FILE"
     # Written when playing by hand too: the tests take their console tag from it. A --test world
     # is quiet (QUIET_WORLD, lib/harness.sh); the runner sets those options before the scenario's
     # own setSandbox, which may override them.
@@ -521,8 +524,8 @@ prepare_cache() {
     if [ "$MODE" = test ]; then
         quiet=$(IFS=,; echo "${QUIET_WORLD[*]+${QUIET_WORLD[*]}}")
     fi
-    printf 'mode=%s\nselection=%s\nstay=%s\nmp=%s\nmark=%s\ntag=%s\nleaks=%s\norder=%s\nrounds=%s\nquiet=%s\n' \
-        "$MODE" "$SELECTION" "$STAY" "$MP" "$MARK" "$TAG" "$LEAKS" "$ORDER" "$ROUNDS" "$quiet" > "$HARNESS_FILE"
+    printf 'mode=%s\nselection=%s\nstay=%s\nmp=%s\nmark=%s\ntag=%s\nleaks=%s\norder=%s\nrounds=%s\ntrace=%s\nquiet=%s\n' \
+        "$MODE" "$SELECTION" "$STAY" "$MP" "$MARK" "$TAG" "$LEAKS" "$ORDER" "$ROUNDS" "$TRACE" "$quiet" > "$HARNESS_FILE"
     cat > "$CACHE/mods/default.txt" <<EOF
 VERSION = 1,
 
@@ -859,6 +862,13 @@ if ! logged "$MARK"; then
     exit 1
 fi
 grep -o "$MARK.*" "$RUN_LOG" | grep -v "^$TAG RUN " | uniq || true
+if [ "$MODE" = test ] && [ -n "$TRACE" ]; then
+    if [ -f "$TRACE_FILE" ]; then
+        "$HARNESS/lib/trace.py" "$TRACE_FILE" "$CACHE/trace.json" || echo "trace: lib/trace.py failed on $TRACE_FILE"
+    else
+        echo "trace: the runner wrote no $TRACE_FILE"
+    fi
+fi
 # Anything the mod logs counts, from loading on. A mod mistake can also surface as an error in
 # vanilla Lua, such as a crafting window drawing an item the mod defined badly, so every Lua error
 # counts once the harness has started, and so does any exception logged through the three mods'

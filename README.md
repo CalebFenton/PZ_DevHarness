@@ -50,7 +50,7 @@ Runs are silent, since the harness turns every volume down in its own folder. On
 
 Project Zomboid is a Java program. Lua mods, the harness's own Lua included, only get the parts of it the developers handed to Lua, and some of what a hands-free run needs isn't among them. Lua can't press "Click to start" on the loading screen, for one, so an unattended game would wait there forever.
 
-So the harness doesn't start the game the usual way. It starts a small Java launcher of its own, [`ClickToStart.java`](java/ClickToStart.java), which starts the real game inside the same program. Sharing the program lets the launcher look at the game's internals while it runs, through Java's reflection: code can look up another class's private fields by name and change them. The launcher waits for the loading screen and sets the flag a real click would set. It also gives the game more worker threads for loading textures, models and animations; the game uses at most 4, and on an M3 Max the loading screen went from about 8 seconds to about 2. And it loads the tiles' depth maps, which the game loads one at a time after everything else, while the main menu shows, so the world is ready about a second sooner. The dedicated server for multiplayer runs starts through a twin, [`FastServer.java`](java/FastServer.java), which gives the server the same loader threads and took its start from about 18.5 seconds to about 14.
+So the harness doesn't start the game the usual way. It starts a small Java launcher of its own, [`ClickToStart.java`](java/ClickToStart.java), which starts the real game inside the same program. Sharing the program lets the launcher look at the game's internals while it runs, through Java's reflection: code can look up another class's private fields by name and change them. The launcher waits for the loading screen and sets the flag a real click would set. It also gives the game more worker threads for loading textures, models and animations; the game uses at most 4, and on an M3 Max the loading screen went from about 8 seconds to about 2. And it loads the tiles' depth maps, which the game loads one at a time after everything else, while the main menu shows, so the world is ready about a second sooner. The dedicated server for multiplayer runs starts through a twin, [`FastServer.java`](java/FastServer.java), which gives the server the same loader threads and took its start from about 18.5 seconds to about 14. In multiplayer both have the game send every packet at once, instead of on its network library's next pass about every 10 ms, which took Renewable Energy's multiplayer suite from about 189 seconds to 163.
 
 The game's files stay as Steam installed them: the launchers change the running game in memory only, and they live only in the harness, never in your published mod. If a game update renames something they reach for, they print so and leave the game alone: it loads slower, or waits for you to click.
 
@@ -83,7 +83,7 @@ Then it checks. After each test the harness compares the world around the charac
 
 ### It helps you chase a flaky test
 
-`REPEAT=20` runs the selection 20 times in one game and counts each test's passes and failures. `ORDER=shuffle` runs tests in a random order and prints the seed, so `ORDER=shuffle:<seed>` repeats that exact order. Each run also prints the slowest tests and, in multiplayer, how long each spent waiting on the server.
+`REPEAT=20` runs the selection 20 times in one game and counts each test's passes and failures. `ORDER=shuffle` runs tests in a random order and prints the seed, so `ORDER=shuffle:<seed>` repeats that exact order. Each run also prints the slowest tests and, in multiplayer, how long each spent waiting on the server; `TRACE=1` breaks a run's time down by what each test waited on and by every server call's legs, and writes a timeline you can open in Perfetto.
 
 ### It's built for AI coding assistants too
 
@@ -117,7 +117,7 @@ You need macOS, Project Zomboid Build 42 installed through Steam, and a Java JDK
 
     The run ends with `<TAG> DONE passed=<n> failed=0 skipped=<n>` and exits 0.
 
-4. Run the same tests against a dedicated server:
+4. Before a release, run the same tests against a dedicated server:
 
     ```sh
     dev/run-debug-client.sh --test --mp

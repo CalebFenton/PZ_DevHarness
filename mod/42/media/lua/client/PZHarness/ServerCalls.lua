@@ -8,6 +8,8 @@
 -- serves them in id order, and answers reach callers in that order too. Requests can therefore be
 -- pipelined, and a test's undos stay in the order they were made.
 
+require "PZHarness/Trace"
+
 PZHarness = PZHarness or {}
 local ServerCalls = {}
 PZHarness.ServerCalls = ServerCalls
@@ -17,8 +19,8 @@ local MODULE = "PZHarness"
 local ANSWER_MS = 15000
 local SESSION = getTimestampMs()
 
--- Unanswered requests by id: { onAnswer, sentMs, answer }, `answer` once it has come while an
--- earlier request still waits for its own.
+-- Unanswered requests by id: { onAnswer, kind, request, sentMs, answer, answeredMs }, `answer`
+-- once it has come while an earlier request still waits for its own.
 local pending = {}
 local lastId = 0
 -- Real milliseconds with at least one request unanswered, up to the last time none was, and since
@@ -38,14 +40,17 @@ function ServerCalls.send(kind, request, onAnswer)
     request.tag = PZHarness.run.tag
     local player = getSpecificPlayer(0)
     if not isClient() then
-        onAnswer(PZHarness.ServerHandlers.handle(player, kind, request))
+        local sentMs = getTimestampMs()
+        local answer = PZHarness.ServerHandlers.handle(player, kind, request)
+        PZHarness.Trace.call(kind, request, answer, sentMs, getTimestampMs())
+        onAnswer(answer)
         return
     end
     request.session = SESSION
     if not ServerCalls.busy() then
         waitingSinceMs = getTimestampMs()
     end
-    pending[lastId] = { onAnswer = onAnswer, sentMs = getTimestampMs() }
+    pending[lastId] = { onAnswer = onAnswer, kind = kind, request = request, sentMs = getTimestampMs() }
     sendClientCommand(player, MODULE, kind, request)
 end
 
@@ -98,6 +103,7 @@ local function deliver()
             waitedMs = waitedMs + getTimestampMs() - waitingSinceMs
             waitingSinceMs = nil
         end
+        PZHarness.Trace.call(entry.kind, entry.request, entry.answer, entry.sentMs, entry.answeredMs)
         entry.onAnswer(entry.answer)
     end
 end
@@ -105,7 +111,7 @@ end
 local function answered(id, answer)
     local entry = pending[id]
     if entry then
-        entry.answer = answer
+        entry.answer, entry.answeredMs = answer, getTimestampMs()
         deliver()
     end
 end

@@ -11,6 +11,7 @@ require "ISUI/ISUIElement"
 require "PZHarness/ServerCalls"
 require "PZHarness/Fixtures"
 require "PZHarness/Leaks"
+require "PZHarness/Trace"
 
 PZHarness = PZHarness or {}
 
@@ -288,6 +289,7 @@ end
 local function finishCurrentTest(state)
     local current, player = state.current, state.player
     local queue = ISTimedActionQueue.getTimedActionQueue(player).queue
+    PZHarness.Trace.observe(state.name, queue[1], state.ticks)
     if queue[1] then
         local limit = current.timeoutSeconds or TEST_TIMEOUT_SECONDS
         if getTimestampMs() - state.testStartMs < limit * 1000 then
@@ -300,6 +302,8 @@ local function finishCurrentTest(state)
     local passed = not current.validate or current:validate()
     state.current = nil
     state.doneMs = getTimestampMs()
+    PZHarness.Trace.observe(state.name, nil, state.ticks)
+    PZHarness.Trace.test(state.name, state.testStartMs, state.doneMs, state.ticks - state.testStartTicks)
     -- TestLib's validate leaves its failures and the test's time; a test registered some other way
     -- has only its verdict.
     local seconds = current.seconds or (state.doneMs - state.testStartMs) / 1000
@@ -348,6 +352,7 @@ local function checkBetweenTests(state)
             return true
         end
         state.checkStartMs = getTimestampMs()
+        PZHarness.Trace.gap("reset", state.doneMs, state.checkStartMs)
     end
     local found = state.check()
     if not found then
@@ -355,6 +360,7 @@ local function checkBetweenTests(state)
     end
     state.check = nil
     state.leakMs = state.leakMs + getTimestampMs() - state.checkStartMs
+    PZHarness.Trace.gap("leaks", state.checkStartMs, getTimestampMs())
     if found.waitedFull then
         state.leakWaitedFull = state.leakWaitedFull + 1
     end
@@ -384,7 +390,7 @@ local function startNextTest(state, name)
     player:Say(name)
     state.wasCheat = ISBuildMenu.cheat
     ISBuildMenu.cheat = false
-    state.testStartMs = getTimestampMs()
+    state.testStartMs, state.testStartTicks = getTimestampMs(), state.ticks
     state.testServerMs = PZHarness.ServerCalls.waitedMs()
     state.current:run()
 end
@@ -439,6 +445,7 @@ end
 -- verdicts, then calls onDone().
 local function finishRun(state)
     PZHarness.runnerOwnsVerdicts = false
+    PZHarness.Trace.stop()
     state.gapMs = state.gapMs + getTimestampMs() - state.doneMs
     local failed = state.failed + PZHarness.ServerCalls.lateFailures - state.lateFailures
     for _, skip in ipairs(state.skipped) do
@@ -501,6 +508,9 @@ local function runTests(onDone)
         print(run.tag .. " FAIL " .. filter .. ": the selection names no test")
     end
     PZHarness.Leaks.reset()
+    if run.trace ~= nil and run.trace ~= "" then
+        PZHarness.Trace.start()
+    end
     PZHarness.runnerOwnsVerdicts = true
     local startedMs = getTimestampMs()
     -- `start` holds where the current test started, as numbers: the square object itself goes back
@@ -516,7 +526,7 @@ local function runTests(onDone)
         -- waits (accumulated across a kept game's runs) and per-test pass/fail counts.
         times = {}, gapMs = 0, leakMs = 0, leakWaitedFull = 0, serverStartMs = PZHarness.ServerCalls.waitedMs(), tally = {},
         current = nil, name = nil, player = nil, start = nil, wasCheat = nil,
-        testStartMs = nil, testServerMs = nil,
+        testStartMs = nil, testStartTicks = nil, testServerMs = nil,
         -- Between-tests bookkeeping: which test index the server request was sent for and whether
         -- its reset answered, the pending verdict, and the leak check under way.
         askedFor = nil, resetAnswered = false, resetFor = nil, verdict = nil, check = nil, checkStartMs = nil, checkedFor = nil,
