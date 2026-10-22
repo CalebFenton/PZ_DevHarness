@@ -127,9 +127,13 @@ batch_base() {
     elif upstream=$(git -C "$REPO" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null) \
         && BATCH_BASE=$(git -C "$REPO" merge-base HEAD "$upstream"); then
         BATCH_BASE_WHY="where the branch left $upstream"
+    elif upstream=$(git -C "$REPO" rev-parse --abbrev-ref origin/HEAD 2>/dev/null) \
+        && BATCH_BASE=$(git -C "$REPO" merge-base HEAD "$upstream"); then
+        # A local branch, as an agent's worktree has, covers what it added to the default branch.
+        BATCH_BASE_WHY="where the branch left $upstream, having no upstream of its own"
     else
         BATCH_BASE=$BATCH_HEAD
-        BATCH_BASE_WHY="HEAD: the branch has no upstream, so SINCE=<ref> adds its commits"
+        BATCH_BASE_WHY="HEAD: the branch has no upstream and the repository no origin/HEAD, so SINCE=<ref> adds its commits"
     fi
     HARNESS_BASE=$(git -C "$REPO" rev-parse --verify --quiet "$BATCH_BASE:$submodule" || true)
     if [ -z "$HARNESS_BASE" ] || ! git -C "$HARNESS" cat-file -e "$HARNESS_BASE^{commit}" 2>/dev/null; then

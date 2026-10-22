@@ -121,8 +121,9 @@ that says reruns aren't narrowing it down and points at [debugging.md](debugging
 `--changed` runs what the batch reaches: the files changed since its base, committed, staged,
 unstaged or untracked, of the repository and of the harness submodule, mapped through the conf's
 `TEST_MAP` ([adopting.md](adopting.md#devharnessconf)). The base is `SINCE=<ref>` when set, else
-`git merge-base HEAD @{u}`, where the branch left its upstream, else `HEAD`, which leaves out the
-branch's commits. The harness's own changes count from the harness commit the repository
+`git merge-base HEAD @{u}`, where the branch left its upstream; a branch with no upstream, as an
+agent's worktree branch, counts from where it left `origin/HEAD`, and without that from `HEAD`,
+which leaves out the branch's commits. The harness's own changes count from the harness commit the repository
 recorded at the base. The script prints `--changed: base <hash> (<why>)`, a
 `--changed: <file>: <prefixes>` line per file, and `--changed: running <prefixes>`. It refuses to
 run while a `TEST_MAP` glob matches no file in the repository.
