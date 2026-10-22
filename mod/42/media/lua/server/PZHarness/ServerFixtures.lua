@@ -227,9 +227,11 @@ handler("PZHarness.reset", function(player)
     return {}
 end)
 
--- Where the server's copy of the character is, for T.goNextTo.
-handler("PZHarness.position", function(player)
-    return { x = player:getX(), y = player:getY(), z = player:getZ() }
+-- T.goNextTo: the server's copy of the character to the middle of the square its client just
+-- teleported to.
+handler("PZHarness.moveTo", function(player, args)
+    Fixtures.teleportToMiddle(player, args.x, args.y, args.z)
+    return {}
 end)
 
 handler("PZHarness.changeItem", function(player, args)

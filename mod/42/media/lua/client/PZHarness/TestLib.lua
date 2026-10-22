@@ -998,31 +998,35 @@ function T.standNextTo(square)
     end
 end
 
--- How long, in real milliseconds, the server must have kept the character on the new square
--- before T.goNextTo trusts it: position updates sent before the teleport, such as the runner's move
--- to the test's start, can still arrive and move it back.
-local SETTLE_MS = 300
-
---- Queues T.standNextTo(square), then a wait until a multiplayer server has the character there
---- too, and has kept it there for SETTLE_MS. The server learns the character moved only from the
---- client's position updates, after any still on their way, and an instant timed action queued at
---- once can reach its complete() on the server while it still stands at the old place.
+--- Queues T.standNextTo(square), then on a multiplayer client puts the server's copy of the
+--- character on the same square. A client sends its position on a timer, up to a second apart, as
+--- a move from floor to floor doesn't count as a new square for it (NetworkPlayerAI, under the
+--- default AntiCheatNoClip), and the server then walks its copy toward the newest position it got,
+--- a step each update: an instant timed action queued meanwhile reaches its complete() on the
+--- server at the wrong place. So the client sends its new position at once (setIgnoreMovement asks
+--- for an update), and once the character's square has caught up, the request that moves the
+--- server's copy goes after that update, which the server then already walks toward.
 function T.goNextTo(self, square)
-    local at, sinceMs = {}, nil
+    local at = {}
     T.step(function()
         T.standNextTo(square)
-        -- The character's square catches up with a teleport only on its next update.
         local p = T.player()
-        at.x, at.y = math.floor(p:getX()), math.floor(p:getY())
-    end)
-    T.serverUntil(self, "PZHarness.position", {}, function(reply)
-        if not (math.floor(reply.x) == at.x and math.floor(reply.y) == at.y) then
-            sinceMs = nil
-            return false
+        at.x, at.y, at.z = math.floor(p:getX()), math.floor(p:getY()), math.floor(p:getZ())
+        if isClient() then
+            local ignoring = p:getIgnoreMovement()
+            p:setIgnoreMovement(true)
+            p:setIgnoreMovement(ignoring)
         end
-        sinceMs = sinceMs or getTimestampMs()
-        return not isClient() or getTimestampMs() - sinceMs >= SETTLE_MS
     end)
+    if not isClient() then
+        return
+    end
+    -- The character's square catches up with a teleport only on its next update.
+    waitOnClient(function()
+        local here = T.player():getCurrentSquare()
+        return here ~= nil and here:getX() == at.x and here:getY() == at.y
+    end)
+    T.server(self, "PZHarness.moveTo", function() return at end)
 end
 
 -- Queues the moveables action `mode` ("place" or "pickup") of `sprite` on `square` the way the
@@ -1110,7 +1114,11 @@ end
 -- T.placeVehicle prunes removed copies.
 local foundVehicles = {}
 -- How long a multiplayer client waits after its copy of a new vehicle arrives, for the server's
--- second full update of it (see T.placeVehicle): a few of the server's send cycles.
+-- second full update of it (see T.placeVehicle). A request still queued when the copy came goes
+-- out within 100 ms (GameClient's requestsFrequency), and the server answers on its next vehicle
+-- send, at most every 100 ms and only on its own updates, ten a second (VehicleManager.updateRate),
+-- so up to about 300 ms in all. Nothing Lua can see says whether a second request was queued or
+-- when its update came, so the wait can't end sooner.
 local VEHICLE_SETTLE_MS = 300
 
 --- T.vehicle placed the way the authority does: on the server in multiplayer, which sends it to

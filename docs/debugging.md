@@ -27,8 +27,8 @@ and spend one run on them, and make each run able to tell you something the last
     dev/run-debug-client.sh --test
     ```
 
-4. Before a release, the whole suite against a dedicated server too, which costs about two and a
-   half times the single player run:
+4. Before a release, the whole suite against a dedicated server too, which costs about twice the
+   single player run:
 
     ```sh
     dev/run-debug-client.sh --test --mp
