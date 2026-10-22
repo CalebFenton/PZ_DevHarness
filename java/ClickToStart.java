@@ -3,8 +3,8 @@ import java.lang.reflect.Field;
 /**
  * Starts the game client and presses "Click to start" whenever the loading screen shows it, so
  * the unattended runs of bin/run-client.sh (--test and the mod's own modes) need no one at the
- * computer. It also gives the game's asset loader more threads (AssetLoading), which shortens
- * loading.
+ * computer. It also gives the game's asset loader more threads (AssetLoading) and loads the tile
+ * depth maps early (DepthMaps), which shortens loading.
  *
  * GameLoadingState.update() continues only after a real left click, a joypad A press, or its
  * private forceDone flag, and Lua can reach none of them, so this sets forceDone. The game runs its
@@ -28,6 +28,7 @@ public class ClickToStart {
                 Thread.sleep(POLL_MS);
             }
             AssetLoading.widen();
+            DepthMaps.preloadOnceQueued();
             ClassLoader loader = ClickToStart.class.getClassLoader();
             Field states = Class.forName("zombie.GameWindow").getField("states");
             Field current = Class.forName("zombie.gameStates.GameStateMachine").getField("current");

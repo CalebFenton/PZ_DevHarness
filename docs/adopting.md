@@ -12,7 +12,7 @@ How a mod takes the harness on, what it tells the harness about itself, and the 
 | `check/` | The static check's Java probe and Python checker, and the `.pack` and `.tiles` readers it uses. |
 | `lib/harness.sh` | Paths, JVM arguments, the game lock, `install_mod`, `compile_java`, and the dedicated server both scripts start (`prepare_server`, `start_server`, `stop_server`, `server_problems`). A mod's own dev scripts may source it. |
 | `lib/capture.py` | Crops a [capture mode](#capture-modes)'s screenshots into the mod's captures; a mod's own extraction may import it. |
-| `java/ClickToStart.java` | Starts the client, presses "Click to start" on the loading screen and gives the asset loader more threads (`java/AssetLoading.java`). |
+| `java/ClickToStart.java` | Starts the client, presses "Click to start" on the loading screen, gives the asset loader more threads (`java/AssetLoading.java`) and loads the tile depth maps early (`java/DepthMaps.java`). |
 | `java/FastServer.java` | Starts the dedicated server of `--mp` and `validate-server.sh` with the same wider asset loader. |
 | `mod/42/` | The harness mod (`cf_test_harness`): `client/PZHarness/Runner.lua`, `TestLib.lua`, `ServerCalls.lua` and `Leaks.lua`, the leak check between tests, and `Capture.lua`, the steps and shots of [capture modes](#capture-modes); `server/PZHarness/ServerHandlers.lua`, the server's half of the tests' server channel, and `ServerFixtures.lua`, the server's half of the two-sided fixtures; `shared/PZHarness/Fixtures.lua`, what both halves do, `Checks.lua`, expectations for server handlers, and `Snapshot.lua`, what the leak check reads on each side. |
 

@@ -214,6 +214,13 @@ the worktree; `dev/.runs-failed` stays with each checkout. The mod should gitign
   at most 16 loads in flight), which cuts that wait to about 2 seconds. A dedicated server waits
   for its models and animations the same way before it starts, and FastServer gives it the same
   pool, which halves that wait.
+- Depth maps early. The game queues the tiles' depth maps behind every texture and animation, and
+  each holds a lock for its whole load, so they load one at a time, about 2 seconds of them, at
+  the end of the loading screen, which waits for them. ClickToStart's DepthMaps runs the same
+  loads on a thread of its own while the main menu shows, and the queued ones then return at once.
+  The menu takes a few tenths of a second longer, since the render thread uploads the maps
+  meanwhile, and the `world` phase about a second less (13.0 to 11.9 seconds on an M3 Max). The
+  loading screen then waits for the animations, which finish about when the world has loaded.
 - Settling by loaded chunks. A run starts once one square in every chunk 40 squares around the
   character has loaded, not after a fixed delay.
 - Fast UI in captures. A mode registered `fastUI` draws the UI at its highest rate, so its steps
