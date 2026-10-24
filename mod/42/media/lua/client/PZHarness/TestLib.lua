@@ -1193,6 +1193,21 @@ function T.recipeNames(prefix)
     return names
 end
 
+--- Every build menu recipe whose name starts with `prefix` (the `recipePrefix` setting by
+--- default): the entities' recipes, which getAllCraftRecipes, and so T.recipeNames, leaves out.
+function T.buildRecipeNames(prefix)
+    prefix = prefix or settings().recipePrefix or ""
+    local names = {}
+    local recipes = getScriptManager():getAllBuildableRecipes()
+    for i = 0, recipes:size() - 1 do
+        local name = recipes:get(i):getName()
+        if PZHarness.startsWith(name, prefix) then
+            table.insert(names, name)
+        end
+    end
+    return names
+end
+
 --- Teaches `player` every recipe whose name starts with `prefix` (the `recipePrefix` setting by
 --- default); in multiplayer the server's copy too. Not undone. Callable outside a test, as from a
 --- scenario's onStart; in multiplayer it queues a wait for the server, so a craft queued after it

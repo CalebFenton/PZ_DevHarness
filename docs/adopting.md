@@ -12,10 +12,11 @@ How a mod takes the harness on, what it tells the harness about itself, and the 
 | `check/` | The static check's Java probe and Python checker, and the `.pack` and `.tiles` readers it uses. |
 | `lib/harness.sh` | Paths, JVM arguments, the game lock, `install_mod`, `compile_java`, and the dedicated server both scripts start (`prepare_server`, `start_server`, `stop_server`, `server_problems`). A mod's own dev scripts may source it. |
 | `lib/capture.py` | Crops a [capture mode](#capture-modes)'s screenshots into the mod's captures; a mod's own extraction may import it. |
+| `lib/promo.py`, `lib/fonts/` | Lays out a mod's README images, Workshop gallery, poster, preview and mod icon from those captures, imported by the mod's `art/promo/compose.py` ([workshop-page.md](workshop-page.md#laying-out-the-images)), with the NotoSans font it draws in. |
 | `lib/trace.py` | Reports where a `TRACE=1` run's time went and writes it as a Perfetto timeline ([running.md](running.md#where-the-time-goes)). |
 | `java/ClickToStart.java` | Starts the client, presses "Click to start" on the loading screen, gives the asset loader more threads (`java/AssetLoading.java`), loads the tile depth maps early (`java/DepthMaps.java`) and in multiplayer sends every packet at once (`java/NetLatency.java`). |
 | `java/FastServer.java` | Starts the dedicated server of `--mp` and `validate-server.sh` with the same wider asset loader, sending every packet at once. |
-| `mod/42/` | The harness mod (`cf_test_harness`): `client/PZHarness/Runner.lua`, `TestLib.lua`, `ServerCalls.lua` and `Leaks.lua`, the leak check between tests, `Trace.lua`, what a `TRACE=1` run records, and `Capture.lua`, the steps and shots of [capture modes](#capture-modes); `server/PZHarness/ServerHandlers.lua`, the server's half of the tests' server channel, and `ServerFixtures.lua`, the server's half of the two-sided fixtures; `shared/PZHarness/Fixtures.lua`, what both halves do, `Checks.lua`, expectations for server handlers, and `Snapshot.lua`, what the leak check reads on each side. |
+| `mod/42/` | The harness mod (`cf_test_harness`): `client/PZHarness/Runner.lua`, `TestLib.lua`, `ServerCalls.lua` and `Leaks.lua`, the leak check between tests, `Trace.lua`, what a `TRACE=1` run records, `Capture.lua`, the steps and shots of [capture modes](#capture-modes), and `Stage.lua`, their [staging](#staging); `server/PZHarness/ServerHandlers.lua`, the server's half of the tests' server channel, and `ServerFixtures.lua`, the server's half of the two-sided fixtures; `shared/PZHarness/Fixtures.lua`, what both halves do, `Checks.lua`, expectations for server handlers, and `Snapshot.lua`, what the leak check reads on each side. |
 
 ## Adopting it
 
@@ -258,7 +259,7 @@ end)
 - The server: `server(self, name, args)` calls the dev mod's handler `name` and leaves its answer in `self.server[name]` exactly as the handler returned it, so `false`, `0` and `nil` arrive as themselves; `serverUntil(self, name, args, done, maxMs)` calls it until `done(reply)`; `give(self, name, items)`; `count(self, name, types, opts)`; `batch(fn)` sends the calls `fn` queues back to back in one round trip ([multiplayer.md](multiplayer.md#the-server-channel)).
 - Verdicts: `printVerdict(name, failures, seconds)` prints a test's PASS or FAIL line. The harness runner prints it once its leak check after the test is done ([running.md](running.md#leaks-and-desyncs)); the debug menu's runner gets it from validate.
 - Squares and fixtures: `squares`, `track`; placed by the server: `placeTile`, `placeBench`, `placeVehicle`; placed and picked up by the character, as a player does with the moveables cursor: `placeAsPlayer(self, square, itemType, sprite, modData)` (a handle `{ x, y, z, square }`, `object` once this client has it, removed when the test ends) and `pickUpAsPlayer(self, handleOrSquare, sprite)`; this game only: `tile`, `placeMoveable`, `bench`, `vehicle`; `lineUpTrailer`.
-- Crafting: `recipeNames`, `learnRecipes`, `forgetRecipes`, `recipeInputs`, `addRecipeInputs` (this game only), `inputItem(input, prefer)`, `placeWorkTable`, `craftRefusal`, `startCraft`. `inputItem` is the script item `recipeInputs` picks for one of a recipe's inputs: the first of its possible items named in `prefer`, else the first that isn't a generic `Base.Moveable`. Any test that starts a craft with `startCraft` and fails also reports why the game refused it, at the start or, for a craft it queued and then dropped, at perform, so a mod's own craft tests get that without `craftTest`.
+- Crafting: `recipeNames`, `buildRecipeNames` (the build menu's recipes, which `getAllCraftRecipes`, and so `recipeNames`, leaves out), `learnRecipes`, `forgetRecipes`, `recipeInputs`, `addRecipeInputs` (this game only), `inputItem(input, prefer)`, `placeWorkTable`, `craftRefusal`, `startCraft`. `inputItem` is the script item `recipeInputs` picks for one of a recipe's inputs: the first of its possible items named in `prefer`, else the first that isn't a generic `Base.Moveable`. Any test that starts a craft with `startCraft` and fails also reports why the game refused it, at the start or, for a craft it queued and then dropped, at perform, so a mod's own craft tests get that without `craftTest`.
 - Lookups: `player`, `objectWithSprite`, `countPairs`; `PZHarness.Fixtures` has these and `vehicleById` for server handlers too, `ring(x, y, r)`, which iterates (`for sx, sy in ...`) over the squares at exactly `r` squares from x, y, each once, for a search that widens ring by ring from the nearest, and `teleportToMiddle(player, x, y, z)`: `teleportTo` alone leaves the character on the square's north-west corner, from where vanilla's `walkAdj` takes a square two to the north or west as in reach, walks nowhere, and an action that needs the square adjacent stops.
 - Building and removing in a server handler, as the library's own fixtures do on either side (`PZHarness.Fixtures`): `newTile(square, sprite, modData)`, `newBench(square, entity, sprite, player)` (the bench, or nil and what is missing), `freeAdjacentSquare(here, used)`, and `removePlaced(thing)`, which removes an object through the `remove` setting, else the vanilla way, or a vehicle permanently; a server sends each to its clients.
 - Walking: `standNextTo(square)` puts the character where vanilla's `walkAdj` would walk it, facing `square`, so the walk a menu option or an action queues first has no way to go and the turn an action's `waitToStart` waits for (`faceThisObject`, `shouldBeTurning`) is already done; walking and turning take real time, which neither the instant cheat nor the frame rate shortens. `placeAsPlayer` and `pickUpAsPlayer` do it themselves. `goNextTo(self, square)` queues the same, then on a multiplayer client puts the server's copy of the character there too, so an instant action's `complete()` finds it in reach: left alone, the server hears of the move only on the client's next timed position update, up to a second later, and then walks its copy over from wherever the updates before put it (the runner's move to the test's start among them). The client sends its new position at once, and the server's copy is moved after that update has reached it, so nothing older can move it back. A test that queues an action whose `complete()` checks the character's reach goes there this way.
@@ -324,6 +325,22 @@ end
   `Capture.elementRegion(name, element)` entries in UI units; each becomes `<name>.png` in the
   captures folder. `run:screenshot(file)` saves `<file>.png` without a region.
 - `Capture.writeJson(file, value)` writes any Lua value as JSON to `<cachedir>/Lua/<file>`.
+- Icon sheets: `run:addIconSheet(name, icons)` lays `icons` (a list of `{ name, texture }`, or a
+  function returning one when the step runs) out on a backdrop at their own size and shoots them
+  matted, each icon its own region `<icon name>.png`.
+- Item and recipe names: `Capture.newCatalog(opts)` builds the entries a mod's pages are laid out
+  from, in the game's language. `catalog:items(fullTypes)` gives `{ icon, name, fullType }` for each
+  item; `catalog:recipes(prefix)` gives every craftRecipe and then every build menu recipe whose
+  name starts with `prefix` (the `recipePrefix` test setting by default) as `{ id, name, skills,
+  learn = { needed, magazines, auto, autoAll, research }, inputs, outputs, build }`, an input
+  `{ items, count, keep, tag, uses, fluid or fills }`, a build menu recipe's `build` the `{ icon,
+  name }` of what it builds; `catalog:recipe(name, build)` and `catalog:item(fullType, count)` give
+  one. Icons are named `icon_<Module>_<Type>` for an item, the crafting window's icon, and
+  `icon_build_<recipe>` for the build menu's; `catalog:iconList()` lists every icon the entries
+  name so far, for `run:addIconSheet`. `opts.prefer` lists the full types an input that takes any
+  item with a tag shows (as `PZHarness.Test.inputItem` picks), `opts.fluidContainers` the
+  container, by fluid type, a line that takes or fills any container shows, and
+  `opts.literature` the items whose names `learn.magazines` lists.
 
 `lib/capture.py <cache dir> <mark> <captures folder>` turns a matted pair into alpha (a pixel
 that reads k on black and w on white has alpha 1 - (w - k) and colour k / a), crops every region
@@ -331,3 +348,61 @@ and writes the rest of `<mark>.json` to the folder's `promo.json`, with the capt
 made. Only the groups the run shot are replaced, and a group's captures it no longer makes go. A
 mod with captures of its own defines `harness_after_<mode>` to run its own script, which imports
 `Extraction` from it, saves its images with `save(image, group, name)` and calls `finish()`.
+
+### Staging
+
+`PZHarness.Stage`, from `PZHarness/Stage.lua`, holds what staging a world shot takes; its waits
+are runSteps waits and its `add...` functions add steps to a run:
+
+```lua
+local Stage = require "PZHarness/Stage"
+
+local groups = {
+    yard = function()
+        Stage.addLookAround(run.steps, getPlayer(), spot)  -- squares never seen draw dark
+        run:add(function() return Stage.zoomOut(1) end)    -- a step out from the closest zoom
+        run:addOpaque("yard", function()
+            return { Stage.centred("yard", { spot }) }        -- README-wide, the spot in the middle
+        end)
+    end,
+}
+Stage.runGroups(run, selection, groups, function(chosen)
+    spot = Stage.closestSquare(getPlayer(), isOpenGround)   -- nil fails the run with what's missing
+    if not spot then return "open ground" end
+    Stage.addWorldSettings(run, { hour = 12, origins = { spot } })
+end, data, done)
+```
+
+- Finding and clearing: `closestSquare(player, accepts)` (within `SEARCH_RADIUS`, nearest first,
+  then west, then north), `eachSquareAround(x, y, z, radius, fn)`, `removeTrees(x, y, z)` (within
+  `TREE_RADIUS`: near a building a tree out of sight draws as a black silhouette),
+  `isGroundCover(object)` and `clearGroundCover(square)` (grass, weeds, bushes and litter),
+  `removeVehicles(x1, y1, x2, y2, z)`, and `silenceRadios(origins)`, as radio and television
+  captions float over the shots.
+- Seeing: `addLookAround(steps, player, square)` puts the character on the square's middle and turns
+  it round at once, each facing held for a few lighting passes, then waits on
+  `lightingSettled(player, change)`: no square newly seen and no light changed for 300 ms, and
+  with `change` a change first, as a new hour or light takes most of a second to show.
+- Zoom: `zoomOut(stepsOut)` sets the zoom that many steps out from the closest and returns the wait
+  for it; `pushClosestZoom()` adds the 25% the game draws but the options leave out, without
+  saving it, and `popClosestZoom()` takes it away.
+- Framing, in UI units: `onScreen(square)` is its floor's centre, `screenBox(squares, top)` what
+  they and their tiles cover (`top(square)` gives a taller reach than `TILE_TOP` at zoom 1).
+  `centred(name, squares, opts)`, `rightAligned` (room on the left for a title) and the square
+  `squareRegion` give regions `opts.width` (`WORLD_W`, the README's 1260, by default) wide kept on
+  the screen, `cropped` just the squares, and `screenRegion(name, left, top, right, bottom)` any
+  rectangle cut at the screen's edges; each reaches `CROP_MARGIN` past what it frames.
+- The world: `addWorldSettings(run, { hour, wind, origins })` sets the hour, full colour (a fresh
+  world's climate greys the picture by season), the climate's wind intensity, waiting until the
+  wind blows, and silences the radios around `origins`; `addHour(run, hour)` turns the clock and
+  waits for the lighting to follow.
+- Interface shots, matted: `addWindowShot(run, name, { open, ready, near, close })` opens a window
+  at 100, 100 on a backdrop (`near()`, a square, has the character stand beside it meanwhile, for
+  a window that closes out of reach), and `addMenuShot(run, name, open)` a context menu, `open()`
+  returning its menus, the top one first, their submenus opened with `openSubMenu(menu, name)`,
+  vanilla's debug options hidden.
+- `runGroups(run, selection, groups, prepare, data, done)` runs a capture mode's groups: it fails a
+  selection that names a group `groups` lacks, calls `prepare(chosen)`, which finds and builds what
+  the groups need and returns why it can't, hides the UI, puts the mouse in a corner, where the
+  world outlines nothing and no menu follows it, adds each group's steps under `run:group`, logs
+  `<mark> TIME <group> <seconds> s` for each and the total, and runs the run.

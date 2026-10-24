@@ -1,9 +1,11 @@
 -- Development only, not published. Support for screenshot modes (docs/adopting.md, "Capture
 -- modes"): steps run one per tick with waits between them, and UI shots are taken on a black and
 -- a white backdrop so lib/capture.py can recover per-pixel transparency. Named regions go to
--- <cachedir>/Lua/<mark>.json for lib/capture.py to crop.
+-- <cachedir>/Lua/<mark>.json for lib/capture.py to crop, with the item and recipe names a mod's
+-- pages are laid out from (Capture.newCatalog) and the icons they name (Run:addIconSheet).
 
 require "ISUI/ISPanel"
+require "PZHarness/TestLib"
 
 PZHarness = PZHarness or {}
 local Capture = {}
@@ -293,6 +295,265 @@ function Run:run(data, done)
         end
         done()
     end, self.mark)
+end
+
+-- Icon sheets
+
+local IconSheet = ISPanel:derive("PZHarnessCaptureIconSheet")
+
+function IconSheet:render()
+    for _, icon in ipairs(self.icons) do
+        self:drawTextureScaled(icon.texture, icon.x, icon.y, icon.w, icon.h, 1, 1, 1, 1)
+    end
+end
+
+-- Space between icons on a sheet, so that no crop takes in a neighbour's edge.
+local ICON_GAP = 32
+
+--- Adds the steps that lay `icons` out on a backdrop at their own size and shoot them matted as
+--- `name`, each icon its own region. `icons` is a list of { name, texture }, such as
+--- Catalog:iconList(), or a function returning one when the step runs.
+function Run:addIconSheet(name, icons)
+    local sheet
+    self:add(function()
+        local backdrop = self:newBackdrop()
+        sheet = IconSheet:new(100, 100, getCore():getScreenWidth() - 200, getCore():getScreenHeight() - 200)
+        sheet:noBackground()
+        sheet.icons = {}
+        local x, y, rowHeight = 0, 0, 0
+        for _, icon in ipairs(type(icons) == "function" and icons() or icons) do
+            local w, h = icon.texture:getWidthOrig(), icon.texture:getHeightOrig()
+            if x + w > sheet.width then
+                x, y, rowHeight = 0, y + rowHeight + ICON_GAP, 0
+            end
+            table.insert(sheet.icons, { name = icon.name, texture = icon.texture, x = x, y = y, w = w, h = h })
+            x = x + w + ICON_GAP
+            rowHeight = math.max(rowHeight, h)
+        end
+        backdrop:addChild(sheet)
+        return Capture.drawn(Capture.DRAW_FRAMES)
+    end)
+    self:addMatted(name, function()
+        local regions = {}
+        for _, icon in ipairs(sheet.icons) do
+            table.insert(regions, Capture.region(icon.name, sheet:getAbsoluteX() + icon.x, sheet:getAbsoluteY() + icon.y,
+                icon.w, icon.h))
+        end
+        return regions
+    end)
+    self:removeBackdrop()
+end
+
+-- Items and recipes
+
+--- The icon the crafting window draws for `fullType`: the script's, which for a moveable is not
+--- the tile the inventory shows, or else the item's own.
+function Capture.iconTexture(fullType)
+    local icon = getScriptManager():getItem(fullType):getIcon()
+    return icon and getTexture("Item_" .. icon) or instanceItem(fullType):getTex()
+end
+
+local Catalog = {}
+Catalog.__index = Catalog
+
+--- The item and recipe entries a mod's pages are laid out from, in the game's language, and the
+--- icons they name, for Run:addIconSheet. `opts.prefer`: the full types an input that takes any
+--- item with a tag shows, as PZHarness.Test.inputItem picks; `opts.fluidContainers`: by fluid type,
+--- the container a line that takes or fills any fluid container shows; `opts.literature`: the
+--- full types of the items that teach recipes.
+function Capture.newCatalog(opts)
+    opts = opts or {}
+    return setmetatable({ prefer = opts.prefer or {}, fluidContainers = opts.fluidContainers or {},
+        literature = opts.literature or {}, icons = {}, order = {} }, Catalog)
+end
+
+-- Registers `texture` for the icon sheet as `key`, named `name`, once.
+function Catalog:addIcon(key, name, texture)
+    if not self.icons[key] then
+        self.icons[key] = { name = name, texture = texture }
+        table.insert(self.order, key)
+    end
+    return key
+end
+
+--- An item entry: { icon, name, fullType, count }, its icon `icon_<Module>_<Type>`.
+function Catalog:item(fullType, count)
+    local key = "icon_" .. string.gsub(fullType, "%.", "_")
+    if not self.icons[key] then
+        self:addIcon(key, instanceItem(fullType):getDisplayName(), Capture.iconTexture(fullType))
+    end
+    return { icon = key, name = self.icons[key].name, fullType = fullType, count = count }
+end
+
+--- An item entry for each of `fullTypes`, in order.
+function Catalog:items(fullTypes)
+    local items = {}
+    for _, fullType in ipairs(fullTypes) do
+        table.insert(items, self:item(fullType))
+    end
+    return items
+end
+
+--- What the build menu's recipe `name` builds (an entity of module Base): { icon, name }, its icon
+--- `icon_build_<name>` the build menu's.
+function Catalog:build(name)
+    local key = "icon_build_" .. name
+    if not self.icons[key] then
+        local script = getScriptManager():getGameEntityScript("Base." .. name)
+        local component = script:getComponentScriptFor(ComponentType.CraftRecipe)
+        self:addIcon(key, getRecipeDisplayName(name), component:getIconTexture())
+    end
+    return { icon = key, name = self.icons[key].name }
+end
+
+-- The fluid of a recipe line's fluid part and the litres it takes or gives: { name, litres }, and
+-- the fluid's type.
+local function fluidEntry(fluid, litres)
+    return { name = fluid:getTranslatedName(), litres = litres }, fluid:getFluidTypeString()
+end
+
+-- One input line: the items it names (every one, as alternatives, with what each takes), or for a
+-- tag or any item the preferred one. A line that takes a fluid from a container (`fluid`), or
+-- pours one into an empty container the player keeps (`fills`), says which and how much; `tag`
+-- marks a line whose item only stands for the many it takes, and `uses` one that counts a
+-- drainable's uses rather than items.
+function Catalog:input(input)
+    local names, counts = {}, {}
+    local listed = input:getItems()
+    for i = 0, listed:size() - 1 do
+        local fullType = listed:get(i)
+        if not string.find(fullType, "%.") then
+            fullType = "Base." .. fullType
+        end
+        table.insert(names, fullType)
+        table.insert(counts, input:getIntAmount(i))
+    end
+    local entry = { items = {}, count = input:getIntAmount(), keep = input:isKeep(), tag = #names == 0 }
+    local fluidType
+    if input:hasConsumeFromItem() then
+        local consume = input:getConsumeFromItemScript()
+        local fluids = consume:getPossibleInputFluids()
+        if fluids:size() > 0 then
+            entry.fluid, fluidType = fluidEntry(fluids:get(0), consume:getAmount())
+        end
+    elseif input:hasCreateToItem() then
+        local create = input:getCreateToItemScript()
+        if create:getFluid() then
+            entry.fills, fluidType = fluidEntry(create:getFluid(), create:getAmount())
+        end
+    end
+    if #names == 0 then
+        names = { self.fluidContainers[fluidType] or PZHarness.Test.inputItem(input, self.prefer):getFullName() }
+        counts = { entry.count }
+    end
+    local first = getScriptManager():getItem(names[1])
+    -- A drainable input counts uses unless it says ItemCount.
+    entry.uses = first:isItemType(ItemType.DRAINABLE) and not input:isItemCount()
+    for i, fullType in ipairs(names) do
+        table.insert(entry.items, self:item(fullType, counts[i]))
+    end
+    return entry
+end
+
+local function skillList(count, get)
+    local skills = {}
+    for i = 0, count - 1 do
+        local skill = get(i)
+        table.insert(skills, { name = skill:getPerk():getName(), level = skill:getLevel() })
+    end
+    return skills
+end
+
+-- The names of the literature that teaches the recipe `name`.
+function Catalog:teaching(name)
+    local found = {}
+    for _, fullType in ipairs(self.literature) do
+        local learned = getScriptManager():getItem(fullType):getLearnedRecipes()
+        for i = 0, (learned and learned:size() or 0) - 1 do
+            if learned:get(i) == name then
+                table.insert(found, getItemNameFromFullType(fullType))
+            end
+        end
+    end
+    return found
+end
+
+-- The names of the items that research each recipe, by recipe: the ones whose script lists it
+-- among its ResearchableRecipes, which the game extends with every recipe's own outputs
+-- (OutputMapper). Built once, since it walks every item script.
+local researchers
+
+local function researchedBy(name)
+    if not researchers then
+        researchers = {}
+        local scripts = getScriptManager():getAllItems()
+        for i = 0, scripts:size() - 1 do
+            local script = scripts:get(i)
+            local recipes = script:hasResearchableRecipes() and script:getResearchableRecipes()
+            for j = 0, (recipes and recipes:size() or 0) - 1 do
+                local recipe = recipes:get(j)
+                researchers[recipe] = researchers[recipe] or {}
+                table.insert(researchers[recipe], getItemNameFromFullType(script:getFullName()))
+            end
+        end
+        for _, names in pairs(researchers) do
+            table.sort(names)
+        end
+    end
+    return researchers[name] or {}
+end
+
+--- The recipe `name`, a craftRecipe or, with `build`, the build menu's recipe of an entity: { id,
+--- name, skills, learn = { needed, magazines, auto, autoAll, research }, inputs, outputs, build }.
+function Catalog:recipe(name, build)
+    local recipe = getScriptManager():getCraftRecipe(name)
+    local entry = {
+        id = name,
+        name = getRecipeDisplayName(name),
+        skills = skillList(recipe:getRequiredSkillCount(), function(i) return recipe:getRequiredSkill(i) end),
+        learn = {
+            needed = recipe:needToBeLearn(),
+            magazines = self:teaching(name),
+            auto = skillList(recipe:getAutoLearnAnySkillCount(), function(i) return recipe:getAutoLearnAnySkill(i) end),
+            autoAll = skillList(recipe:getAutoLearnAllSkillCount(), function(i) return recipe:getAutoLearnAllSkill(i) end),
+            research = researchedBy(name),
+        },
+        inputs = {},
+        outputs = {},
+        build = build and self:build(name) or nil,
+    }
+    local inputs = recipe:getInputs()
+    for i = 0, inputs:size() - 1 do
+        table.insert(entry.inputs, self:input(inputs:get(i)))
+    end
+    local outputs = recipe:getOutputs()
+    for i = 0, outputs:size() - 1 do
+        local output = outputs:get(i)
+        table.insert(entry.outputs, self:item(output:getPossibleResultItems():get(0):getFullName(), output:getIntAmount()))
+    end
+    return entry
+end
+
+--- Every recipe whose name starts with `prefix` (the `recipePrefix` test setting by default): the
+--- craftRecipes, then the build menu's.
+function Catalog:recipes(prefix)
+    local recipes = {}
+    for _, name in ipairs(PZHarness.Test.recipeNames(prefix)) do
+        table.insert(recipes, self:recipe(name))
+    end
+    for _, name in ipairs(PZHarness.Test.buildRecipeNames(prefix)) do
+        table.insert(recipes, self:recipe(name, true))
+    end
+    return recipes
+end
+
+--- Every icon the entries made so far name, in the order they were first named: { name, texture }.
+function Catalog:iconList()
+    local list = {}
+    for _, key in ipairs(self.order) do
+        table.insert(list, { name = key, texture = self.icons[key].texture })
+    end
+    return list
 end
 
 return Capture
