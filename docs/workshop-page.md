@@ -19,8 +19,9 @@ description, and the README the description comes from.
    load reaches everywhere, and a change it makes to the character, such as a trait, stays behind
    when the mod goes. This list is raw material, not an outline.
 2. **Plan the images** ([Images](#images)): the preview, the description's images and the gallery.
-   Shoot them with a [capture mode](adopting.md#capture-modes) and lay them out with a script, so
-   a change to the mod is a reshoot, never hand work.
+   Shoot them with a [capture mode](adopting.md#capture-modes) and lay them out with a script
+   ([Laying out the images](#laying-out-the-images)), so a change to the mod is a reshoot, never
+   hand work.
 3. **Write the description** in the order of [The description](#the-description-top-to-bottom),
    in the [voice](#voice) below. Write the pitch first, and again last.
 4. **Cut.** For each sentence ask: would a player deciding whether to subscribe, or stuck in their
@@ -163,11 +164,93 @@ all of an account's Project Zomboid items.
 | `preview.png` | The thumbnail in search results, collections and the item's sidebar: what decides whether anyone opens the page | Square PNG, 256 or 512 pixels, at most 1,024,000 bytes (`SteamWorkshopItem.validatePreviewImage`); the mod's one recognisable thing, readable at thumbnail size |
 | Description images | The README and the description | 1260 pixels wide, shown at 630, on a line of their own, with alt text saying what's in them; at most two to a section |
 | Gallery | Above the description | See [The gallery](#the-gallery) |
-| `poster.png` | The game's mod list | Drawn stretched to 200 by 200, beside `mod.info`'s description |
+| `poster.png` | The game's mod list | Drawn stretched to 200 by 200, beside `mod.info`'s description; the same picture as `preview.png` |
+| The mod's icon | The game's mod list, beside the mod's name, at about 22 pixels, and the load order list at about 28 | `mod.info`'s `icon=`: a 64 square PNG, drawn pixel by pixel at 32 and doubled (`promo.save_mod_icon`); one object in a few blocks of colour |
 
 Every image shows something a player will do or see; none is decoration. Show each item once: a
 sheet beats a screenshot per item. Description images load from `raw.githubusercontent.com`, so
 they show on Steam only once the repository is public.
+
+## Laying out the images
+
+`lib/promo.py` lays out every image above from the captures a [capture mode](adopting.md#capture-modes)
+wrote to `art/promo/captures`, in the look every mod's pages share: a dark card, NotoSans
+(`lib/fonts`, under the SIL Open Font License in `lib/fonts/OFL.txt`), icons and interface
+captures grown by whole numbers with nearest-neighbour sampling so their pixels stay crisp. The
+mod's `art/promo/compose.py` holds what is the mod's own: which captures go where, the crops, the
+rows of the item sheet and the sections of the recipe sheet, the captions. It is a `uv run
+--script` file that puts the harness's `lib` on `sys.path`:
+
+```python
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pillow==12.3.0"]
+# ///
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "dev" / "harness" / "lib"))
+import promo
+
+CAPTURES = promo.Captures(REPO / "art" / "promo" / "captures")
+ITEMS = promo.ItemSheet(CAPTURES, [("Tools", ["MyMod.Kettle", "MyMod.Whistle"])])
+
+promo.save(ITEMS.draw(), REPO / "art" / "promo" / "images" / "items.png")
+promo.save_gallery([("items", promo.page("Everything you can make", ITEMS.draw(width=promo.PAGE[0], k=1.4,
+                                                                               height=promo.PAGE[1])))],
+                   REPO / "art" / "promo" / "gallery")
+```
+
+Pinning Pillow keeps a rerun from unchanged captures writing the same bytes. What it has:
+
+- **Captures.** `Captures(folder)` reads the folder's `promo.json`: `strings` (`modName`, the
+  mod's name as the game shows it), and `items` and `recipes` as `PZHarness/Capture.lua` writes
+  them, each naming its icon's capture (`icon_<Module>_<Type>`, `icon_build_<name>`). Calling it
+  with a name gives that capture; `icon(key, size)` an icon grown by the largest whole number
+  that fits size; `thing(key)` the name and icon of an item, by full type, or of what a build
+  menu recipe builds, by the recipe's id.
+- **Drawing.** Everything is drawn at the README's width, `WIDTH`, or `k` times that for a
+  gallery page, where `sized(n, k)` is n of the README's pixels. `canvas`, `paste` (over a soft
+  shadow), `text`, `wrap`, `panel`, `badge`, `caption` (a pill on a world shot), `arrow`;
+  `pixels`, `scaled`, `fit`, `cover`, `full_width`, `trim`, `rounded`; `title_over`, the mod's
+  name over a world shot's darkened left side, for the banner; the colours `BACKGROUND`,
+  `PANEL`, `TEXT` and `MUTED`. `save(image, path)` writes a README image and fails unless it is
+  `WIDTH` wide.
+- **The item sheet.** `ItemSheet(captures, rows, models=False)`, rows of (caption, keys) by
+  what the things are for, a key being what `thing` takes. It fails unless every item in
+  `promo.json` has a place. A card is the icon over the name; with `models`, the item's
+  `model_<Module>_<Type>` capture framed from its box in `promo.json`'s `models`, over the icon
+  beside the name. `draw(rows, width, columns, k, height)` draws the rows given, or all of them;
+  `pages(pages, k)` makes gallery pages of (file name, caption, row captions, columns), and fails
+  unless each row is on one.
+- **The recipe sheet.** `RecipeSheet(captures, sections, accent, accents, results)`, sections of
+  (caption, recipe ids). It fails unless every recipe is in exactly one section. A card is the
+  recipe's name, skills, how it's learned and its tools, then its inputs, an arrow and its
+  results; a build menu recipe shows what it builds, and one with neither inputs nor outputs,
+  which a character only learns for a menu to offer, only its name and how it's learned.
+  `accents` colours a section's cards by its caption, else `accent`; `results` names, by full
+  type, the item a recipe whose OnCreate makes it shows. `draw` and `pages` are the item
+  sheet's, a page taking (section caption, slice of its ids) pairs and failing unless every
+  recipe is on exactly one page.
+- **The gallery.** `page(caption, content)` puts content of `PAGE`'s size under the caption
+  band; `hero(shot, title)` is the hero's content, the shot covering the page under the mod's
+  name, and `shot_page(shot)` a capture centred on the page. `save_gallery(pictures, folder)`
+  writes (name, picture) pairs as `NN-name.jpg` in upload order, deletes everything else in the
+  folder, and fails on a file of a megabyte or more, the limit of
+  `ISteamUGC::AddItemPreviewFile` and half the upload page's.
+- **The poster.** `poster(shot, title, line, accent)`: the shot over a band with the mod's name,
+  as large as fits, and a line of a few words; `save_poster(image, paths)` writes it to
+  `42/poster.png` and `preview.png` and fails over the preview's limit.
+- **The icon.** `save_mod_icon(image, path)` takes a `MOD_ICON` (32) square drawing and writes
+  it doubled with hard edges: the lists shrink it with linear filtering and no mipmaps, and from
+  64 each screen pixel blends at most two of the drawing's, where from 32 a one-pixel line
+  smears into its neighbours.
+
+Crops are in capture pixels, as named constants in the script: a reshoot that frames a shot
+differently moves them. After a run, look at every image at the size Steam shows it
+([The process](#the-process), step 6), the poster at 200 pixels and the icon at 22.
 
 ## Where it shows
 
