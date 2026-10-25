@@ -106,6 +106,16 @@ function T.optionFor(menu, item)
     end)
 end
 
+--- The mechanics window's menu for the vehicle part `part`, built by vanilla's own
+--- ISVehicleMechanics.doPartContextMenu on a window that has just what that function reads.
+function T.partMenu(vehicle, part)
+    local window = setmetatable({ chr = T.player(), playerNum = 0, vehicle = vehicle }, { __index = ISVehicleMechanics })
+    window.getAbsoluteX = function() return 0 end
+    window.getAbsoluteY = function() return 0 end
+    window:doPartContextMenu(part, 0, 0)
+    return window.context
+end
+
 -- Reading options -----------------------------------------------------------------------------
 
 --- Whether `option` is in the menu and not greyed out.
@@ -192,20 +202,39 @@ function T.running(handler)
     return function(context) return T.optionRunning(context, handler) end
 end
 
---- Queues opening the world menu of `getObject()`, looked up when the step runs, so a copy a
---- server's sync replaced is the one read, and noting in self.menu[label] what the option
---- `find(context)` finds: { found, offered, tooltip, submenu, name }. When `choose` and it is
---- offered, the character faces the object (T.face) and chooses it.
-function T.useOption(self, getObject, label, find, choose)
+--- Notes in self.menu[label] what `option` (nil when not in the menu) shows: { found, offered,
+--- tooltip, submenu, name }, which T.expectOffered and T.expectOptionRefused check. Returns whether
+--- it is offered.
+function T.noteOption(self, label, option)
     self.menu = self.menu or {}
+    self.menu[label] = { found = option ~= nil, offered = T.offered(option), tooltip = T.tooltipOf(option),
+        submenu = option ~= nil and option.subOption ~= nil, name = option and option.name }
+    return self.menu[label].offered
+end
+
+--- T.noteOption, then, when `option` is offered, chooses it, the character first stood next to
+--- `square` (T.standNextTo) when given. Returns whether it chose it.
+function T.chooseOption(self, label, option, square)
+    if not T.noteOption(self, label, option) then
+        return false
+    end
+    if square then
+        T.standNextTo(square)
+    end
+    T.choose(option)
+    return true
+end
+
+--- Queues opening the world menu of `getObject()`, looked up when the step runs, so a copy a
+--- server's sync replaced is the one read, and T.noteOption of the option `find(context)` finds.
+--- When `choose` and it is offered, the character faces the object (T.face) and chooses it.
+function T.useOption(self, getObject, label, find, choose)
     T.step(function()
         local object = T.need(self, getObject(), "this client's copy of what " .. label .. " works on")
         local context = object and T.need(self, T.worldMenu(object), "a world menu for " .. label)
         if not context then return end
         local option = find(context)
-        self.menu[label] = { found = option ~= nil, offered = T.offered(option), tooltip = T.tooltipOf(option),
-            submenu = option ~= nil and option.subOption ~= nil, name = option and option.name }
-        if choose and T.offered(option) then
+        if T.noteOption(self, label, option) and choose then
             T.face(object)
             T.choose(option)
         end
@@ -253,13 +282,13 @@ function T.expectLine(self, label, text, want)
     T.expect(found == (want ~= false), label .. ": the menu " .. (found and "says " or "doesn't say ") .. text)
 end
 
---- Expects the option T.useOption noted as `label` offered.
+--- Expects the option T.noteOption noted as `label` offered; returns whether it was.
 function T.expectOffered(self, label)
     local seen = self.menu and self.menu[label]
-    T.expect(seen and seen.offered, label .. ": not offered (" .. tostring(seen and seen.tooltip) .. ")")
+    return T.expect(seen and seen.offered, label .. ": not offered (" .. tostring(seen and seen.tooltip) .. ")")
 end
 
---- Expects the option T.useOption noted as `label` in the menu but greyed out, its tooltip saying
+--- Expects the option T.noteOption noted as `label` in the menu but greyed out, its tooltip saying
 --- the text of `tooltipKey` when given.
 function T.expectOptionRefused(self, label, tooltipKey)
     local seen = self.menu and self.menu[label]

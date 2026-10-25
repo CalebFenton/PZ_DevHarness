@@ -35,12 +35,6 @@ function T.readUntil(self, name, args, label, done, maxMs)
     T.step(function() self.reads[label] = self.server[name] end)
 end
 
---- Queues the server handler `name` with `args` and leaves its answer in self[key].
-function T.serverInto(self, key, name, args)
-    T.server(self, name, args)
-    T.step(function() self[key] = self.server[name] end)
-end
-
 --- Expects a server check's answer ({ failures = { message, ... } }, PZHarness.checkHandler) to
 --- have found nothing wrong; no answer at all fails too.
 function T.expectNoFailures(answer)

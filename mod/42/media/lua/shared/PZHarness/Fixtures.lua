@@ -539,13 +539,17 @@ function Fixtures.teleportToMiddle(player, x, y, z)
 end
 
 --- Changes `item` as `changes` says: `condition`, `uses` (the fraction of a full drainable item,
---- setCurrentUsesFloat), `modData` (keys to set). Returns the item.
+--- setCurrentUsesFloat), `repaired` (vanilla's repair count), `modData` (keys to set). Returns the
+--- item.
 function Fixtures.changeItem(item, changes)
     if changes.condition then
         item:setCondition(changes.condition)
     end
     if changes.uses then
         item:setCurrentUsesFloat(changes.uses)
+    end
+    if changes.repaired then
+        item:setHaveBeenRepaired(changes.repaired)
     end
     for key, value in pairs(changes.modData or {}) do
         item:getModData()[key] = value

@@ -54,9 +54,7 @@ end)
 -- hook run on. Answers the level before and after, and the levels it replaced in `saved`.
 handler("PZHarness.levelUp", function(player, args, defer)
     local perk = Perks.FromString(args.perk)
-    if not perk or perk == Perks.MAX then
-        return nil, "the perk " .. tostring(args.perk)
-    end
+    PZHarness.need(perk and perk ~= Perks.MAX, "the perk " .. tostring(args.perk))
     local saved = setLevelsUntilEnd(player, args.levels, args.perk, defer)
     local before = player:getPerkLevel(perk)
     local next = PerkFactory.getPerk(perk):getTotalXpForLevel(before + 1)

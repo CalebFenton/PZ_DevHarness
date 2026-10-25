@@ -43,10 +43,11 @@ inventory and the world are the client's copies, and the mod's server Lua (which
 early when `isClient()`) is empty, so what only the authority can do goes through `T.server`:
 
 - `PZHarness.serverHandler(name, fn)` in the dev mod's server Lua registers `fn(player, args,
-  defer)`, which returns a table of plain values (or nil and what is missing). `player` is the
+  defer)`, which returns a table of plain values; `PZHarness.need(value, what)` returns `value`, or
+  ends the handler as missing `what` when it is nil or false. `player` is the
   server's copy of the calling character. `defer(undo)` takes back what it built when the calling
-  test ends, on the server, in order with the test's own undos; a handler that fails has its undos
-  run at once.
+  test ends, on the server, in order with the test's own undos; a handler that fails or misses
+  something has its undos run at once.
 - `T.server(self, name, args)` queues the call and a wait for its answer, which lands in
   `self.server[name]`. `args` may be a function of `self`, called when the call goes out, to use an
   earlier answer. A failed or missing answer fails the test as `T.need` does and drops the steps
@@ -95,7 +96,7 @@ player behaves as before:
   A client lights its squares with the daylight the server sends it, which the server does only
   every ten game minutes, so the server's `setTime` (and its undo) makes its next climate tick
   send it; `makeDark` then waits, up to 10 seconds, for this client's light to follow.
-- Items: `T.give(self, name, items)` (`{ type, count, uses, condition, modData, worn, equip }`)
+- Items: `T.give(self, name, items)` (`{ type, count, uses, condition, repaired, modData, worn, equip }`)
   makes them on the server, which sends them; once this client has them it puts them on and in
   hand (`PZHarness.dress`: clothing synced before its item reaches the client as a stray copy),
   and `self.items[name]` holds this client's copies. A dev mod's handler gives its own items with

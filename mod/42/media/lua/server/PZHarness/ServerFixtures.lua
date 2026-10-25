@@ -11,7 +11,7 @@ require "PZHarness/Snapshot"
 PZHarness = PZHarness or {}
 
 local Fixtures = PZHarness.Fixtures
-local handler = PZHarness.serverHandler
+local handler, need = PZHarness.serverHandler, PZHarness.need
 
 local function sandboxChanged()
     if PZHarness.testSettings.sandboxChanged then
@@ -26,10 +26,7 @@ end
 
 -- T.placeTile: a tile object of `args.sprite` with `args.modData` on the square at x, y, z.
 handler("PZHarness.tile", function(_, args, defer)
-    local square = getSquare(args.x, args.y, args.z)
-    if not square then
-        return nil, "a loaded square for a " .. tostring(args.sprite)
-    end
+    local square = need(getSquare(args.x, args.y, args.z), "a loaded square for a " .. tostring(args.sprite))
     track(defer, Fixtures.newTile(square, args.sprite, args.modData))
     return {}
 end)
@@ -37,28 +34,20 @@ end)
 -- T.placeBench: a workstation of the entity script `args.entity`, drawn as `args.sprite`, on the
 -- square at x, y, z, which the character is using as its crafting window makes them.
 handler("PZHarness.bench", function(player, args, defer)
-    local square = getSquare(args.x, args.y, args.z)
-    if not square then
-        return nil, "a loaded square for a " .. args.entity
-    end
+    local square = need(getSquare(args.x, args.y, args.z), "a loaded square for a " .. args.entity)
     local bench, missing = Fixtures.newBench(square, args.entity, args.sprite, player)
     if bench then
         track(defer, bench)
     end
-    if missing then
-        return nil, missing
-    end
+    need(not missing, missing)
     return {}
 end)
 
 -- T.placeAsPlayer: the object drawn as `args.sprite` on the square at x, y, z, which the character
 -- placed with the moveables action, goes when the test ends.
 handler("PZHarness.trackPlaced", function(_, args, defer)
-    local object = Fixtures.objectWithSprite(getSquare(args.x, args.y, args.z), args.sprite)
-    if not object then
-        return nil, "the placed " .. tostring(args.sprite) .. " on the server"
-    end
-    track(defer, object)
+    track(defer, need(Fixtures.objectWithSprite(getSquare(args.x, args.y, args.z), args.sprite),
+        "the placed " .. tostring(args.sprite) .. " on the server"))
     return {}
 end)
 
@@ -137,14 +126,12 @@ handler("PZHarness.vehicle", function(_, args, defer)
             return { id = vehicle:getId(), x = at.x, y = at.y, z = at.z }
         end
     end
-    return nil, "open ground for a " .. tostring(args.script)
+    need(nil, "open ground for a " .. tostring(args.script))
 end)
 
 handler("PZHarness.setSandbox", function(_, args, defer)
     local options, name = Fixtures.sandboxOptions(args.table, args.key)
-    if not options then
-        return nil, "the server's sandbox option " .. tostring(args.key)
-    end
+    need(options, "the server's sandbox option " .. tostring(args.key))
     defer(Fixtures.setSandbox(options, name, args.key, args.value, sandboxChanged))
     return {}
 end)
@@ -219,10 +206,7 @@ end)
 
 -- Not undone, as on the client: scenarios place it too, and a table left standing harms no test.
 handler("PZHarness.workTable", function(player)
-    local object = Fixtures.placeWorkTable(player)
-    if not object then
-        return nil, "a free square next to the character for a work table"
-    end
+    local object = need(Fixtures.placeWorkTable(player), "a free square next to the character for a work table")
     local square = object:getSquare()
     return { x = square:getX(), y = square:getY(), z = square:getZ() }
 end)
@@ -241,10 +225,7 @@ handler("PZHarness.moveTo", function(player, args)
 end)
 
 handler("PZHarness.changeItem", function(player, args)
-    local item = player:getInventory():getItemById(args.id)
-    if not item then
-        return nil, "the server's copy of item " .. tostring(args.id)
-    end
+    local item = need(player:getInventory():getItemById(args.id), "the server's copy of item " .. tostring(args.id))
     Fixtures.changeItem(item, args.changes)
     item:syncItemFields()
     return {}
@@ -298,15 +279,12 @@ function PZHarness.giveItem(player, item, opts)
     return { id = item:getID(), worn = opts.worn or nil, equip = opts.equip }
 end
 
--- T.give: `args.items`, a list of { type, count, uses, condition, modData, worn, equip }.
+-- T.give: `args.items`, a list of { type, count, uses, condition, repaired, modData, worn, equip }.
 handler("PZHarness.give", function(player, args)
     local given = {}
     for _, spec in ipairs(args.items or {}) do
         for _ = 1, spec.count or 1 do
-            local item = instanceItem(spec.type)
-            if not item then
-                return nil, "an item of type " .. tostring(spec.type)
-            end
+            local item = need(instanceItem(spec.type), "an item of type " .. tostring(spec.type))
             Fixtures.changeItem(item, spec)
             table.insert(given, PZHarness.giveItem(player, item, spec))
         end
@@ -322,10 +300,7 @@ handler("PZHarness.dress", function(player, args)
     local inventory = player:getInventory()
     local worn, equipped = false, false
     for _, entry in ipairs(args.given or {}) do
-        local item = inventory:getItemById(entry.id)
-        if not item then
-            return nil, "the server's copy of given item " .. tostring(entry.id)
-        end
+        local item = need(inventory:getItemById(entry.id), "the server's copy of given item " .. tostring(entry.id))
         if entry.worn then
             player:setWornItem(item:getBodyLocation(), item)
             worn = true

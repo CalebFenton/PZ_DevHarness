@@ -15,6 +15,11 @@ function Checks.near(label, actual, expected, tolerance)
     return ok, label .. " is " .. tostring(actual) .. ", expected " .. expected
 end
 
+--- Whether `actual` equals `expected`, and the message for when it doesn't, worded as `near`'s.
+function Checks.equal(label, actual, expected)
+    return actual == expected, label .. " is " .. tostring(actual) .. ", expected " .. tostring(expected)
+end
+
 --- A fresh list of failures and the two functions that fill it: `expect(condition, message)`
 --- records `message` when `condition` is nil or false, and `expectNear(label, actual, expected,
 --- tolerance)` records "<label> is <actual>, expected <expected>" when `actual` isn't a number

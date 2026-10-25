@@ -72,6 +72,11 @@ function T.expectNear(label, actual, expected, tolerance)
     return T.expect(ok, message)
 end
 
+function T.expectEqual(label, actual, expected)
+    local ok, message = PZHarness.Checks.equal(label, actual, expected)
+    return T.expect(ok, message)
+end
+
 --- Returns `value`; when it is nil or false, records `what` (a noun phrase: "a free indoor square
 --- for a table") as missing, which fails the test without running spec.validate.
 function T.need(self, value, what)
@@ -706,8 +711,8 @@ function T.makeDark(self)
 end
 
 --- Changes `item`, a client copy such as T.give's, as `changes` says: `condition`, `uses` (the
---- fraction of a full drainable item), `modData` (keys to set); in multiplayer the server's copy
---- too, which it then sends here. Not undone: the runner empties the inventory before the next test.
+--- fraction of a full drainable item), `repaired` (vanilla's repair count), `modData` (keys to
+--- set); in multiplayer the server's copy too, which it then sends here. Not undone: the runner empties the inventory before the next test.
 function T.changeItem(self, item, changes)
     PZHarness.Fixtures.changeItem(item, changes)
     alsoOnServer(self, "PZHarness.changeItem", { id = item:getID(), changes = changes })
@@ -1507,8 +1512,9 @@ end
 --- required levels, stands by a table and carries exactly one craft's inputs (T.recipeInputs with
 --- `spec.prefer`, copies in `self.items.inputs`) plus what `spec.setup(self)` adds. validate()
 --- expects `spec.counts` in the server copy's inventory or at its feet (T.count into
---- `self.counts.craft`), then runs `spec.validate(self)`; `spec.after(self)` may queue more reads
---- before that. A failing test also reports why the game refused the craft.
+--- `self.counts.craft`), and when `spec.refused` the game refusing the craft, then runs
+--- `spec.validate(self)`; `spec.after(self)` may queue more reads before that. A failing test also
+--- reports why the game refused the craft.
 function T.craftTest(name, spec)
     local counted = {}
     for fullType in pairs(spec.counts or {}) do
@@ -1567,8 +1573,10 @@ function T.craftTest(name, spec)
         validate = function(self)
             local counts = self.counts.craft or {}
             for fullType, count in pairs(spec.counts or {}) do
-                local actual = counts[fullType]
-                T.expect(actual == count, tostring(actual) .. " " .. fullType .. ", expected " .. count)
+                T.expectEqual(fullType, counts[fullType], count)
+            end
+            if spec.refused then
+                T.expect(self.refusal ~= nil, "the game would start the craft")
             end
             if spec.validate then
                 spec.validate(self)

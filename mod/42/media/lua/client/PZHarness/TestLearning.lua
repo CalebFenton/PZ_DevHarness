@@ -187,3 +187,67 @@ function T.autoLearnLevelsWith(rows, perk, level)
     levels[perk] = level
     return levels
 end
+
+--- Registers a mod's two tests of learning the recipes `names` by skill level, named
+--- `prefix .. "_learning_..."`:
+--- - level_up_teaches_at_the_auto_learn_level: for each perk and level their AutoLearn skills name,
+---   a character who knows none of them levels that perk up to that level, every other at 0, and
+---   then knows exactly the recipes whose AutoLearn it meets, on both sides. Catches a recipe
+---   taught a level early or never, or taught on one side only. `opts.timeoutSeconds` as a test's.
+--- - joining_server_catches_up_earned_recipes (multiplayer, when `opts.catchUp` is given): a
+---   character who reached the highest AutoLearn level before the mod was added joins, and
+---   `opts.catchUp()` sends the request the client makes as it enters the world; the server, which
+---   runs no check of its own on a join, teaches what that level earns and tells the client.
+---   Catches a joining character left without recipes the server then refuses to use.
+function T.autoLearnTests(prefix, names, opts)
+    local what = "an AutoLearn skill on " .. table.concat(names, " or ")
+    T.test(prefix .. "_learning_level_up_teaches_at_the_auto_learn_level", {
+        timeoutSeconds = opts.timeoutSeconds,
+        run = function(self)
+            local rows = T.autoLearnLevels(names)
+            if not T.need(self, #rows > 0, what) then return end
+            self.rows, self.reads = rows, self.reads or {}
+            for i, row in ipairs(rows) do
+                -- Each row starts knowing none; the end of the test puts back what was known before.
+                T.knowRecipes(self, names, false)
+                T.levelUp(self, row.perk, T.autoLearnLevelsWith(rows, row.perk, row.level - 1))
+                T.waitForKnown(self, names, T.autoLearnedAt(names, row.perk, row.level))
+                T.step(function() self.reads[i] = { up = self.server["PZHarness.levelUp"] or {}, known = self.known } end)
+            end
+        end,
+        validate = function(self)
+            for i, row in ipairs(self.rows) do
+                local result = self.reads[i] or {}
+                local up = result.up or {}
+                T.expectEqual(row.perk .. "'s level before", up.before, row.level - 1)
+                T.expectEqual(row.perk .. "'s level after", up.after, row.level)
+                self.known = result.known
+                T.expectKnown(self, names, row.perk .. " " .. row.level, T.autoLearnedAt(names, row.perk, row.level))
+            end
+        end,
+    })
+    if not opts.catchUp then return end
+    T.test(prefix .. "_learning_joining_server_catches_up_earned_recipes", {
+        mpOnly = "single player has one copy of the character, which IsoWorld.init's own check covers",
+        run = function(self)
+            local rows, highest = T.autoLearnLevels(names)
+            if not T.need(self, highest, what) then return end
+            self.highest = highest
+            T.knowRecipes(self, names, false)
+            T.setLevelsQuietly(self, T.autoLearnLevelsWith(rows, highest.perk, highest.level), names)
+            T.step(opts.catchUp)
+            T.waitForKnown(self, names, T.autoLearnedAt(names, highest.perk, highest.level))
+        end,
+        validate = function(self)
+            local before = self.server["PZHarness.setLevelsQuietly"] or {}
+            local knewAny = not before.known
+            for _, name in ipairs(names) do
+                knewAny = knewAny or before.known[name] == true
+            end
+            T.expect(not knewAny, "setting the levels alone taught the server a recipe, so the catch-up is untested")
+            local highest = self.highest
+            T.expectKnown(self, names, "joining at " .. highest.perk .. " " .. highest.level,
+                T.autoLearnedAt(names, highest.perk, highest.level))
+        end,
+    })
+end

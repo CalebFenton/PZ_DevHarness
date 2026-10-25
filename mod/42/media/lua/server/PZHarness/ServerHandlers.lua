@@ -9,9 +9,9 @@
 --       return { x = ..., y = ... }           -- plain values only: they may cross the network
 --   end)
 --
--- A handler may instead return nil and what is missing ("a loaded square for the bank"), which
--- fails the test the way T.need does. In single player the client calls Handlers.handle in the
--- same Lua state; on a dedicated server the requests arrive as client commands and the answers go
+-- A handler that lacks something ends with PZHarness.need(value, "a loaded square for the bank"),
+-- which fails the test the way T.need does. In single player the client calls Handlers.handle in
+-- the same Lua state; on a dedicated server the requests arrive as client commands and the answers go
 -- back as server commands. The registry exists on a multiplayer client too, which loads server Lua
 -- as well, so a dev mod's handler file needs no guard; only a server or single player answers.
 
@@ -24,11 +24,23 @@ local MODULE = "PZHarness"
 local handlers = {}
 -- What each call's handler deferred, by caller and call id, until its test ends.
 local undos = {}
+-- What the running handler found missing through PZHarness.need.
+local raised
 
 --- Registers `fn(player, args, defer)` as the server handler `name`, replacing any earlier one,
 --- so a reloaded handler file takes effect.
 function PZHarness.serverHandler(name, fn)
     handlers[name] = fn
+end
+
+--- `value`, unless it is nil or false: then the running handler ends, and its test fails as
+--- missing `what` rather than as a server failure.
+function PZHarness.need(value, what)
+    if value == nil or value == false then
+        raised = tostring(what)
+        error("missing " .. raised)
+    end
+    return value
 end
 
 local function undoKey(player, id)
@@ -56,10 +68,15 @@ local function call(player, request)
     local function defer(undo)
         table.insert(list, undo)
     end
-    local ok, reply, missing = pcall(handler, player, request.args or {}, defer)
+    raised = nil
+    local ok, reply = pcall(handler, player, request.args or {}, defer)
     if not ok then
         -- What the handler built before it failed goes at once: no test unwinds a failed call.
         local errors = unwind(list)
+        -- A handler that caught a need's error and failed later failed for its own reason.
+        if raised and #errors == 0 and tostring(reply):find(raised, 1, true) then
+            return { missing = raised }
+        end
         table.insert(errors, 1, tostring(reply))
         return { error = table.concat(errors, "; ") }
     end
@@ -67,7 +84,7 @@ local function call(player, request)
     if #list > 0 then
         undos[undoKey(player, request.id)] = list
     end
-    return { reply = reply, missing = missing, undo = #list > 0 }
+    return { reply = reply, undo = #list > 0 }
 end
 
 local function unwindCall(player, request)

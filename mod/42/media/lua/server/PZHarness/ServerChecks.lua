@@ -13,15 +13,11 @@ local handler = PZHarness.serverHandler
 --- Registers the server check `name`, which only reads the authority's state and answers
 --- { failures = { message, ... } }, which the test expects to be empty (T.expectNoFailures,
 --- T.serverCheck). `fn(expect, expectNear, player, args, defer)` records what it finds wrong
---- through the PZHarness.Checks.new pair; it may instead return what is missing, which fails the
---- test as a handler's `nil, missing` does.
+--- through the PZHarness.Checks.new pair.
 function PZHarness.checkHandler(name, fn)
     handler(name, function(player, args, defer)
         local expect, expectNear, failures = PZHarness.Checks.new()
-        local missing = fn(expect, expectNear, player, args, defer)
-        if missing then
-            return nil, missing
-        end
+        fn(expect, expectNear, player, args, defer)
         return { failures = failures }
     end)
 end
@@ -75,9 +71,7 @@ handler("PZHarness.fill", function(player, args)
             table.insert(items, all:get(i))
         end
     end
-    if #items == 0 then
-        return nil, "a carried " .. tostring(args.type) .. " with a fluid container on the server"
-    end
+    PZHarness.need(#items > 0, "a carried " .. tostring(args.type) .. " with a fluid container on the server")
     for _, item in ipairs(items) do
         local container = item:getFluidContainer()
         container:Empty()
