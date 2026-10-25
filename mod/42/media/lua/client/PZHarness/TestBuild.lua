@@ -15,6 +15,27 @@ function T.setRecipeSkills(self, recipe)
     end
 end
 
+-- Why the build menu refuses `recipe` to the character, checked in the game's order
+-- (CraftRecipeManager.isValidRecipeForCharacter, then CraftRecipeData.canPerform): the recipe
+-- unknown, a skill short, the dark, else the inputs.
+local function refusal(recipe)
+    local player = T.player()
+    if recipe:needToBeLearn() and not player:isRecipeKnown(recipe, true) then
+        return "the recipe " .. recipe:getName() .. " unknown"
+    end
+    for i = 0, recipe:getRequiredSkillCount() - 1 do
+        local skill = recipe:getRequiredSkill(i)
+        local level = player:getPerkLevel(skill:getPerk())
+        if level < skill:getLevel() then
+            return tostring(skill:getPerk()) .. " at " .. level .. ", under " .. skill:getLevel()
+        end
+    end
+    if player:tooDarkToRead() then
+        return "the dark"
+    end
+    return "its inputs among what the character carries"
+end
+
 --- The build menu entry of `entity` (a game entity script's full name), or nil.
 function T.buildEntry(entity)
     local script = getScriptManager():getGameEntityScript(entity)
@@ -100,7 +121,8 @@ function T.build(self, entity, square, prefer, arrived, what)
         -- The build panel's own picking of the recipe's inputs from what is carried.
         build.buildPanelLogic:refresh()
         build.buildPanelLogic:autoPopulateInputs()
-        if T.need(self, build.buildPanelLogic:canPerformCurrentRecipe(), "the build menu building " .. entity .. " from its inputs")
+        local refused = not build.buildPanelLogic:canPerformCurrentRecipe() and refusal(recipe)
+        if T.need(self, not refused, "the build menu building " .. entity .. (refused and ", refused for " .. refused or ""))
             and T.need(self, build:isValid(square), "the build menu taking " .. entity .. "'s square") then
             result.face = string.upper(build:getFace():getFaceName())
             build:tryBuild(square:getX(), square:getY(), square:getZ())
