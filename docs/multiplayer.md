@@ -5,12 +5,14 @@ How `--test --mp` runs a mod's tests against a dedicated server, and what a test
 `--test --mp` takes the lock once, then:
 
 1. Prepares two cache dirs, `$TMPDIR/<CACHE_NAME>-mpserver` and `-mpclient`, each with a copy of
-   the mod and links to the harness mod and the dev mod.
-2. Writes the server's `harness.ini` (the three mods, ports 16361 and 16362, `Open`, `PauseEmpty`
-   off) and runs the conf's `harness_server_setup`, then appends `Zombies = 6` to its sandbox, so
-   the world has no zombies, as the runner gives a single player scenario's world, and the
-   `QUIET_WORLD` options the hook didn't set ([a quiet world](running.md#a-quiet-world)). Every
-   cold run starts a new world.
+   the mod and of each library in the conf's `LIBRARY_MODS`, and links to the harness mod and the
+   dev mod.
+2. Writes the server's `harness.ini` (`Mods=` the libraries in the conf's order, the mod, the
+   harness mod and the dev mod, as the client enables them; ports 16361 and 16362, `Open`,
+   `PauseEmpty` off) and runs the conf's `harness_server_setup`, then appends `Zombies = 6` to its
+   sandbox, so the world has no zombies, as the runner gives a single player scenario's world, and
+   the `QUIET_WORLD` options the hook didn't set ([a quiet world](running.md#a-quiet-world)).
+   Every cold run starts a new world.
 3. Starts the server with FastServer, through `start_server` in `lib/harness.sh` as
    `validate-server.sh` does, and the client with ClickToStart at the same time. The client waits
    at the main menu until the script writes `<client cache>/Lua/PZHarnessConnect.txt`, once the
@@ -22,8 +24,9 @@ How `--test --mp` runs a mod's tests against a dedicated server, and what a test
    mod's on the client, and runs the tests as in single player.
 5. After `DONE` the server gets `quit` on its console and saves while the client quits; the script
    scans the client's log as in single player and the server's up to its exit as
-   `validate-server.sh` does, plus stack traces through the dev mod and the harness mod and
-   `SERVER FAIL` lines. Both processes stop on any exit of the script.
+   `validate-server.sh` does (stack traces through the mod and its libraries), plus stack traces
+   through the dev mod and the harness mod and `SERVER FAIL` lines. Both processes stop on any
+   exit of the script.
 
 A cold run takes about 44 seconds on an M3 Max: 18 for the server to start (the client boots
 meanwhile), 7 to join, 11 to load the world and reach the start, then the tests, then 7 for the

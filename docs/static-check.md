@@ -30,12 +30,15 @@ second.
 | --- | --- |
 | `PRECHECK` | `PRECHECK=(dev/static-check.sh)` runs it before every game of the harness, so a typo costs seconds rather than a game start ([running.md](running.md#checks-before-a-run)). |
 | `CHECK_PLUGINS` | Optional: a bash array of Python files, relative to the repository, with the mod's own checks ([Plugins](#plugins)). |
+| `LIBRARY_MODS` | Optional: the library mods the published mod requires ([adopting.md](adopting.md#devharnessconf)). Their Lua, scripts, translations and packs are read with the mod's, so its requires of their modules and its getText keys resolve, and checked as published code, since they ship too; `library-require` holds the published `mod.info`'s `require=` to them. |
 | `CHECK_ALL_LANGUAGES` | Optional: when set, every language the game offers (but `STREW`, its placeholder) must have every translation file and key English has (`translation-missing`); otherwise a language the mod has that lacks keys is only a note. |
 | `WORKSHOP_REPO` | Optional: when set, the check also fails while `workshop.txt` isn't what `dev/workshop-txt.sh` makes of the README, or the description is over Steam's limit ([workshop-page.md](workshop-page.md)). |
 
-It checks `MOD_DIR`'s `42` and `common`, the dev mod's `42` and the harness mod. Translations are
-read from their `media/lua/shared/Translate`, and tiles from the `.tiles` files the published
-mod's `mod.info` names with `tiledef=`.
+It checks each library's `42` and `common`, `MOD_DIR`'s `42` and `common`, the dev mod's `42` and
+the harness mod. Translations are read from their `media/lua/shared/Translate` and merged by key
+in load order, libraries first, as the game merges them, and tiles from the `.tiles` files the
+published mod's `mod.info` names with `tiledef=`. Errors in a library's files name them from the
+folder the library sits in (`MyLib/42/...` from the compiler, `../MyLib/...` from the rest).
 
 ## How it works
 
@@ -98,8 +101,9 @@ mistake, never report a correct name. Run over the game's own 1,400 Lua files, `
 | `global-member` | `Class.x` on an exposed class that is none of its static members or nested classes, or `string.x`/`table.x`/`math.x` that the library lacks. |
 | `event-name` | `Events.X` that no engine or Lua code registers. |
 | `texture-path` | A literal `getTexture`/`tryGetTexture` path that resolves to no packed sprite or file, following `Texture.getSharedTexture`'s order. |
-| `require-path` | A `require` naming no Lua file of the mod or game, or differing in case (Linux servers match exactly). |
-| `unpublished-lua` | A `require` in the published mod of a module only the dev mod or the harness mod has, or a read of a global only their Lua defines: the Workshop gets the published mod alone. |
+| `require-path` | A `require` naming no Lua file of the mod, its libraries or the game, or differing in case (Linux servers match exactly). |
+| `unpublished-lua` | A `require` in the published mod or a library of a module only the dev mod or the harness mod has, or a read of a global only their Lua defines: the Workshop gets the published mod and its libraries alone. |
+| `library-require` | A published `mod.info` whose `require=` (read as `ChooseGameInfo` does: the last such line, backslashes dropped, split on commas) lacks a library of `LIBRARY_MODS`, which every harness run and check loads but a player's game then doesn't, or names a mod `LIBRARY_MODS` lacks, which no run or check loads. And a library's `require` of a module of another mod, the published one or a library, that the library's own `mod.info` doesn't require: a library loads for other mods too, without this one. |
 | `timedaction-complete` | A client-only timed action with `complete()`, which never runs on a multiplayer client. |
 | `pack-format` | A mod `.pack` the game could not read. |
 | `pack-clash` | A mod sprite named like a vanilla one, which it replaces everywhere. |
@@ -135,10 +139,12 @@ def widget_labels(mod, game, report):
 
 - `@check` registers `function(mod, game, report)`.
 - `mod` (`rules.Mod`) holds what was read: `lua` (one `luasource` file each, with its tokens,
-  names, strings and tables, its `module` name and whether it is `published`, the Workshop's
-  rather than the dev mod's or the harness mod's), `scripts`, `items`, `recipes`,
-  `entity_recipes`, `models`, `translations` and `translation_paths`, `sandbox`, `info` (the
-  published mod's `mod.info` lines), `sprites`, `tilesets` (its `tiledef=` files, read with
+  names, strings and tables, its `module` name, whether it is `published`, the Workshop's (the
+  mod's or a library's) rather than the dev mod's or the harness mod's, and its `owner`, the id
+  of the published mod or library it ships in), `scripts`, `items`, `recipes`, `entity_recipes`,
+  `models`, `translations` (merged over the mods) and `translation_files` (each file's own),
+  `sandbox`, `info` (the published mod's `mod.info` lines) and `id`, `libraries` (each library's
+  `folder`, `id`, `info` and `roots`), `sprites`, `tilesets` (its `tiledef=` files, read with
   `tiledefs`), `tile(sprite)` (a mod tile's file and properties), and `media_file(path)`. `game`
   (`gamedata.Game`) holds the game's side, and `file(path)` finds a game file.
 - `report.fail(rule, path, line, message)` fails the run, `report.note(message)` only prints,

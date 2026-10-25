@@ -42,7 +42,7 @@ The script exits 0 only when every test passed and no Lua error was logged, so i
 
 ### It plays the game for you
 
-Zomboid already ships a test runner, in its debug menu: you launch the game, load a world, click through **Debug** > **Dev** > **Unit Tests** > **Timed Actions** > **Run All Tests**, and watch your character perform each test. The harness runs the same kind of test with no hands. It starts the game in debug mode without Steam, in a throwaway folder of its own, so your saves, settings and mod list are never touched. It loads three mods: your published mod, a dev mod that holds your tests, and the harness itself. The dev mod is never uploaded, so the mod your players download holds only game code.
+Zomboid already ships a test runner, in its debug menu: you launch the game, load a world, click through **Debug** > **Dev** > **Unit Tests** > **Timed Actions** > **Run All Tests**, and watch your character perform each test. The harness runs the same kind of test with no hands. It starts the game in debug mode without Steam, in a throwaway folder of its own, so your saves, settings and mod list are never touched. It loads three mods: your published mod, a dev mod that holds your tests, and the harness itself, with any library mods yours requires before them. The dev mod is never uploaded, so the mod your players download holds only game code.
 
 Runs are silent, since the harness turns every volume down in its own folder. Only one game runs at a time across every mod that uses the harness; a second run waits its turn instead of fighting the first over ports and your keyboard.
 

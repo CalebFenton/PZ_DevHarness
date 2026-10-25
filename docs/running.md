@@ -14,7 +14,7 @@ What `dev/run-debug-client.sh` does with each flag, why a run is fast, and the r
 | `--test --mp` | The same in multiplayer: a dedicated server and a client that joins it; see [multiplayer.md](multiplayer.md). |
 | `--test --mp --stay` | Both stay open; the next `--test --mp --stay` reruns the tests in them. |
 | `--test --failed` | Runs only the tests that failed in the last `--test` run of the same kind (with or without `--mp`), and the one a stopped run was in. |
-| `--test --changed` | Runs the tests the conf's `TEST_MAP` gives for the files the batch changed: since the branch left its upstream, committed or not, untracked files included ([choosing tests](#choosing-tests)). Prints the base and each file's share and why. A changed file under the mods that no glob covers runs every test; with nothing changed under the mods, nothing runs. |
+| `--test --changed` | Runs the tests the conf's `TEST_MAP` gives for the files the batch changed: since the branch left its upstream, committed or not, untracked files included ([choosing tests](#choosing-tests)). Prints the base and each file's share and why. A changed file under the mods that no glob covers runs every test; with nothing changed under the mods, nothing runs. A library's changes are never in the batch: after one, run every test. |
 | `--<mode>` | Runs the mod's handler for the mode and quits. A capture mode with `MODE_CAPTURES_<mode>` then crops its shots into the mod's captures ([adopting.md](adopting.md#capture-modes)); one with `MODE_GROUPS_<mode>` shoots only the groups its selection variable names, every group if it names none, and refuses an unknown name before the game starts. |
 
 `--failed` and `--changed` combine with `--mp` and `--stay`, not with each other or with `TESTS`.
@@ -66,7 +66,7 @@ sandbox file wherever the conf's `harness_server_setup` set nothing. A conf that
 `QUIET_WORLD` itself replaces the list. Other modes (`--promo`, `--art`, a mod's reports) and
 `validate-server.sh` keep the world's own population.
 
-In every mode, and when you start the scenario by hand, the runner also records the three mods
+In every mode, and when you start the scenario by hand, the runner also records the run's mods
 for the new save, which the scenario panel doesn't, and turns zombies off, before the scenario's
 own `setSandbox`; a [QA scenario](adopting.md#qa-scenarios) does the same.
 
@@ -131,6 +131,13 @@ recorded at the base. The script prints `--changed: base <hash> (<why>)`, a
 `--changed: <file>: <prefixes>` line per file, and `--changed: running <prefixes>`. It refuses to
 run while a `TEST_MAP` glob matches no file in the repository.
 
+A library of the conf's `LIBRARY_MODS` lives in a repository of its own, whose commits the mod's
+repository doesn't record as it does the harness submodule's, so a batch has no base to count a
+library's changes from: they are never in it, and `TEST_MAP` can't name a library's files. With
+libraries the script says so in a `--changed:` line; after a change to one, run every test, in
+each mod that uses it. The conf's paths to them are relative to the repository, so a git worktree
+of the mod needs each library beside it too, or every script stops at once and says so.
+
 ### Suspects
 
 After a `--test` run with failures, full or not, the script prints which of the batch's changes
@@ -152,14 +159,14 @@ map misses it.
 
 A `--test` run's verdict depends on the kind of run (`--mp`, `--stay`), the selection, `LEAKS`,
 `ORDER` and `REPEAT`, the game (where it is installed and its `projectzomboid.jar`, which a game
-update replaces) and the files the game loads: the three mods, the harness's scripts and the
-conf. `dev/.runs.log` keeps a fingerprint of those with each run, and a run whose fingerprint
-already has a verdict there doesn't start a game: the script prints that verdict and exits with
-that run's status. The fingerprint names the files relative to the repository, so a run in a git
-worktree with the same files, which logs to the same `dev/.runs.log`, counts as the same run. A
-run that never got its verdict, such as one a Lua error stopped, doesn't count. `RERUN=1` runs it
-anyway, for when the game rather than a test failed. A `TRACE=1` run always runs: its timings
-differ from run to run.
+update replaces) and the files the game loads: the mods (libraries included), the harness's
+scripts and the conf. `dev/.runs.log` keeps a fingerprint of those with each run, and a run
+whose fingerprint already has a verdict there doesn't start a game: the script prints that
+verdict and exits with that run's status. The fingerprint names the files relative to the
+repository, a library's by the conf's path, so a run in a git worktree with the same files, which
+logs to the same `dev/.runs.log`, counts as the same run. A run that never got its verdict, such
+as one a Lua error stopped, doesn't count. `RERUN=1` runs it anyway, for when the game rather
+than a test failed. A `TRACE=1` run always runs: its timings differ from run to run.
 
 ### Checks before a run
 
@@ -256,15 +263,16 @@ the worktree; `dev/.runs-failed` stays with each checkout. The mod should gitign
   tests in a second or two plus their own time: the runner unregisters the mod's tests, runs
   `RELOAD_FILES` again with `reloadLuaFile` and reruns. `reloadLuaFile` ignores a file's
   `Events.*.Add` calls (`LuaCompiler.rewriteEvents`), so only files that just register tests or
-  server handlers reload safely; a change to anything else in the dev mod, to the harness mod, or
-  to the published mod restarts the game. What earlier runs left in the kept world stays there, so
-  finish with a plain `--test`. The kept game shows and logs `<TAG> IDLE`, draws 24 frames a second
-  while it waits, and quits after 30 minutes without a run or when another run needs the game.
+  server handlers reload safely; a change to anything else in the dev mod, to the harness mod, to
+  the published mod or to a library restarts the game. What earlier runs left in the kept world
+  stays there, so finish with a plain `--test`. The kept game shows and logs `<TAG> IDLE`, draws
+  24 frames a second while it waits, and quits after 30 minutes without a run or when another run
+  needs the game.
 - Early stop. In debug mode a Lua error stops the game in its error handler, so it never quits on
-  its own. A Lua stack trace through any of the three mods, or any Lua failure once the harness
-  has started, ends the run at once and prints the trace. An exception the game logs and goes on
-  from (its frames indented twice), and anything on a server, which never stops at an error, fail
-  the run in the scan after it instead.
+  its own. A Lua stack trace through any of the run's mods, a library's included, or any
+  Lua failure once the harness has started, ends the run at once and prints the trace. An
+  exception the game logs and goes on from (its frames indented twice), and anything on a server,
+  which never stops at an error, fail the run in the scan after it instead.
 - Silent. Harness runs set every volume in the cache's `options.ini` to 0; the sound engine still
   runs. Playing by hand keeps your volumes.
 
@@ -276,10 +284,11 @@ the worktree; `dev/.runs-failed` stays with each checkout. The mod should gitign
   and the next run that needs the game stops it, unless that run is a `--stay` run of the same
   cache dir that can rerun in it. A game that hasn't exited 30 seconds after it was asked to is
   killed, so a hung game never holds the lock for good.
-- The published mod is copied into the cache's `mods` folder, not linked, and the cache dir is
-  under the real path of `$TMPDIR`: the game reads tile depth maps by absolute path and refuses
-  paths through a symlink (`ZomboidFileSystem.validatePrefix`). The dev mod and the harness mod
-  have no tiles and are linked.
+- The published mod and its libraries are copied into the cache's `mods` folder, not linked, and
+  the cache dir is under the real path of `$TMPDIR`: the game reads tile depth maps by absolute
+  path and refuses paths through a symlink (`ZomboidFileSystem.validatePrefix`). The dev mod and
+  the harness mod have no tiles and are linked. A client run enables the libraries first, in the
+  conf's order, then the mod, the harness mod and the dev mod; a server, the same in its `Mods=`.
 - Every run in a mode starts a new world, and its save stays in `<cache>/Saves/Sandbox`; a run
   deletes all but the three newest before it starts. A plain run keeps them.
 - The launchers (`java/`) compile into `<cache>/launcher`, which a mod's checkouts share. A build

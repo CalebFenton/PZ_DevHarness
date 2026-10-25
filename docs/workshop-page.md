@@ -39,9 +39,14 @@ description, and the README the description comes from.
      spawn table is anywhere.
    - Nothing is about the mod's code or tests.
 7. **Publish.** Push the art and make the repository public first, or the description goes up
-   without its images. Upload from the game's Workshop screen with `visibility=private`, then run
-   `dev/workshop-gallery.sh --upload`, read the item's real page, and make it public. Keep
-   `mod.info`'s description, and its translations if the mod has them, in step with the pitch.
+   without its images. A mod with `LIBRARY_MODS` needs each library on the Workshop first, as an
+   item of its own, uploaded the same way and public: the mod's item names it as a Required Item
+   and a player's game needs it before the mod. Upload from the game's Workshop screen with
+   `visibility=private`, then run `dev/workshop-gallery.sh --upload`; with libraries, add each on
+   the item's page under **Add/Remove Required Items**: `mod.info`'s `require=` makes the game
+   load a library, but tells Steam nothing, and a Required Item is what Steam has a subscriber get
+   too. Read the item's real page, and make it public. Keep `mod.info`'s description, and its
+   translations if the mod has them, in step with the pitch.
 
 ## Who reads it
 
@@ -98,9 +103,10 @@ Each section answers one of the questions above. Leave out a section the mod has
 2. **Pitch.** Two to four sentences. The first says what the player gets to do, with the problem
    it solves at most a clause; the rest give the arc from the first step to the payoff.
    `mod.info`'s description says the same in a sentence.
-3. **Status line.** The build, single player and multiplayer, existing saves, and any mod it needs
-   or is known to conflict with: `**Build 42.21 or newer.** Single player and multiplayer. Fine to
-   add to a save in progress.` Claim multiplayer once the mod's tests pass on a dedicated server.
+3. **Status line.** The build, single player and multiplayer, existing saves, and any mod it needs,
+   its libraries included, or is known to conflict with: `**Build 42.21 or newer.** Single player
+   and multiplayer. Fine to add to a save in progress.` Claim multiplayer once the mod's tests pass
+   on a dedicated server.
 4. **How it plays.** The progression, as an image of a start against an endgame, or three to five
    stages: what the player is after, and what it takes. Every part a stage needs is in its row; a
    cheap-looking endgame misleads.

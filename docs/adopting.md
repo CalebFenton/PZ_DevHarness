@@ -38,6 +38,7 @@ Sourced bash. Paths are relative to the repository. The mod's id and name come f
 | --- | --- |
 | `MOD_DIR` | The published mod's folder, such as `Contents/mods/MyMod`. It is copied into the cache. |
 | `DEV_MOD_DIR` | The dev mod's folder, such as `dev/MyModDevHarness`. It is linked into the cache. |
+| `LIBRARY_MODS` | Optional: a bash array of the library mods the published mod requires, in load order, such as `(../MyLib/Contents/mods/MyLib)`: each a mod folder with a `42/mod.info`, in a repository of its own checked out beside the mod's, so the path leaves this one. Every client and server run copies each one into the cache as it does the published mod and enables them first, a Lua stack trace through one fails the run as one through the mod does, and the static check reads and checks them as published code, failing unless the published `mod.info`'s `require=` names exactly their ids ([static-check.md](static-check.md#the-checks)). A script fails at once if one is missing. Their changes are not in `--changed`'s batch ([running.md](running.md#choosing-tests)). The Workshop page lists each as a Required Item ([workshop-page.md](workshop-page.md#the-process)). |
 | `CACHE_NAME` | Cache dirs go to `$TMPDIR/<name>-client`, `-server`, `-mpclient`, `-mpserver` and `-check` (the static check). |
 | `TAG` | The console tag of the tests' lines, such as `MyModTest`. |
 | `RELOAD_FILES` | A bash array of globs, relative to the dev mod, of the files a kept game loads again for a rerun, in load order (the mod's test library first). With `--mp` the server loads those under `media/lua/server` and `media/lua/shared` again too, so list the dev mod's server handler files here. |
@@ -201,9 +202,9 @@ debugScenarios.MyModScenario = {
 }
 ```
 
-The runner records the three mods for the scenario's new save and turns zombies off
-(`PZHarness.wrapSetSandbox(scenario)`), so a scenario's own `setSandbox`, which runs after, only
-sets what the mod needs.
+The runner records the run's mods (the libraries, the mod, the harness mod and the dev mod) for
+the scenario's new save and turns zombies off (`PZHarness.wrapSetSandbox(scenario)`), so a
+scenario's own `setSandbox`, which runs after, only sets what the mod needs.
 
 The mod's test library inherits the shared one and adds its fixtures:
 
