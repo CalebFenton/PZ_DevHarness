@@ -2,7 +2,7 @@
 
 ## Commands
 
-- The harness has no suite of its own; a mod that uses it is the test. From that mod's repository, run `dev/run-debug-client.sh --test` and `dev/run-debug-client.sh --test --mp`, plus `dev/validate-server.sh` after a change to the server's start, `dev/static-check.sh` after a change under `check/`, and `art/models/make.sh` in every mod that has one after a change under `lib/art/` or to `lib/blender.sh`: `git status` must then show no changed model, texture, tile, pack or depth map.
+- The harness has no suite of its own; the mods that use it are the test. After a batch of changes, in each mod that uses it: `dev/static-check.sh`, then `dev/run-debug-client.sh --test --changed`, and `--test --mp` too after a change to the runner, the server channel or a multiplayer start. Also `dev/validate-server.sh` after a change to the server's start, and `art/models/make.sh` in every mod that has one after a change under `lib/art/` or to `lib/blender.sh`: the rebuild writes the same bytes from unchanged sources, so `git status` must show only the art changes you meant.
 
 ## Rules
 
