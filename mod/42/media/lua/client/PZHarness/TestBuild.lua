@@ -33,10 +33,17 @@ end
 
 -- A build cursor of the entry `info` for this client's character, as the build panel makes one
 -- before the cursor can build (ISBuildPanel): with the player number the drag sets
--- (IsoCell.setDrag).
+-- (IsoCell.setDrag), and offered only the containers the character carries, those its inventory
+-- window shows. A test gives the character what it builds from, and a container in the world that
+-- is in reach when the cursor is made can be out of it once the build has walked the character
+-- beside the site, which refuses the whole build (BaseCraftingLogic.isContainersAccessible).
 local function newBuild(info)
     local player = T.player()
-    local build = ISBuildIsoEntity:new(player, info, 1, ISInventoryPaneContextMenu.getContainers(player))
+    local carried = ArrayList.new()
+    for _, button in ipairs(getPlayerInventory(player:getPlayerNum()).inventoryPane.inventoryPage.backpacks) do
+        carried:add(button.inventory)
+    end
+    local build = ISBuildIsoEntity:new(player, info, 1, carried)
     build.player = player:getPlayerNum()
     return build
 end
@@ -55,8 +62,9 @@ end
 --- the character knows the recipe and has its skill levels (both until the test ends), carries
 --- exactly its inputs (T.recipeInputs with `prefer`: enough full drainables for an input's
 --- uses), stands next to the square on both sides (T.goNextTo) once it is light there
---- (T.waitForLight), and builds; then the build waits until `arrived()` holds on this client,
---- else misses `what`. A build the menu refuses, for its inputs or its square, is missing at once.
+--- (T.waitForLight), and builds from what it carries alone; then the build waits until
+--- `arrived()` holds on this client, else misses `what`. A build the menu refuses, for its inputs
+--- or its square, is missing at once.
 --- A mod that tracks what the build leaves, for removal when the test ends, queues its handler
 --- before this. Returns the build, or nil: `types` the full types of its inputs, `expected` what it
 --- should leave carried of them (T.expectBuildUsed), and once it has run `face` the face it built
