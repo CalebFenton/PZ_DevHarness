@@ -34,7 +34,8 @@ second.
 | `WORKSHOP_REPO` | Optional: when set, the check also fails while `workshop.txt` isn't what `dev/workshop-txt.sh` makes of the README, or the description is over Steam's limit ([workshop-page.md](workshop-page.md)). |
 
 It checks `MOD_DIR`'s `42` and `common`, the dev mod's `42` and the harness mod. Translations are
-read from their `media/lua/shared/Translate`.
+read from their `media/lua/shared/Translate`, and tiles from the `.tiles` files the published
+mod's `mod.info` names with `tiledef=`.
 
 ## How it works
 
@@ -50,8 +51,8 @@ read from their `media/lua/shared/Translate`.
   source.
 - `check/luasource.py` tokenises Lua (comments and strings never look like code), `check/scripts.py`
   parses scripts the way `ScriptParser` does, `check/packs.py` and `check/tiledefs.py` read and
-  write `.pack` and `.tiles` files, and `check/rules.py` holds the checks, one function each.
-  `check/check.py` runs them.
+  write `.pack` and `.tiles` files, and `check/rules.py` holds the checks, one function each, with
+  the tile checks in `check/tiles.py`. `check/check.py` runs them.
 
 Without a type checker, Lua names are checked by name: a call site does not say what it calls on,
 and a name declared local anywhere in a file counts as local in all of it. Both can hide a
@@ -80,7 +81,7 @@ mistake, never report a correct name. Run over the game's own 1,400 Lua files, `
 | `item-name` | An item without an `ItemName.json` entry. |
 | `item-tooltip` | A `Tooltip` key no translation answers. |
 | `item-model` | A `WorldStaticModel`/`StaticModel` naming no model script. |
-| `item-sprite` | A `WorldObjectSprite` past the tileset's tiles, without a packed sprite, or in no tileset (the mod's tilesets come from a plugin that fills `Mod.tilesets`). |
+| `item-sprite` | A `WorldObjectSprite` past the tileset's tiles, without a packed sprite, or in no tileset of the mod's or the game's. |
 | `learned-recipe` | `LearnedRecipes` or `ResearchableRecipes` naming no craftRecipe, and no build-menu entity with a `CraftRecipe` component (whose recipe goes by the entity's name). |
 | `model-texture` | A model texture that is packed (a model samples its whole texture, so it would draw a slice of the page) or missing. |
 | `recipe-module` | A craftRecipe with `NeedToBeLearn = true` outside module Base: research and magazines look recipes up by bare name, which resolves only in Base. |
@@ -98,16 +99,23 @@ mistake, never report a correct name. Run over the game's own 1,400 Lua files, `
 | `event-name` | `Events.X` that no engine or Lua code registers. |
 | `texture-path` | A literal `getTexture`/`tryGetTexture` path that resolves to no packed sprite or file, following `Texture.getSharedTexture`'s order. |
 | `require-path` | A `require` naming no Lua file of the mod or game, or differing in case (Linux servers match exactly). |
+| `unpublished-lua` | A `require` in the published mod of a module only the dev mod or the harness mod has, or a read of a global only their Lua defines: the Workshop gets the published mod alone. |
 | `timedaction-complete` | A client-only timed action with `complete()`, which never runs on a multiplayer client. |
 | `pack-format` | A mod `.pack` the game could not read. |
 | `pack-clash` | A mod sprite named like a vanilla one, which it replaces everywhere. |
+| `tile-format` | A `tiledef=` or `pack=` line in `mod.info` naming no file or a file number the game rejects, or a `.tiles` file that does not read and write back byte for byte. |
+| `tile-sprite` | A tile with properties but no packed sprite. |
+| `tile-item` | A tile's `CustomItem` that is no item. |
+| `tile-item-pair` | An item whose `WorldObjectSprite` is a tile of the mod that does not pick up as that item (its `CustomItem`), or a tile whose `CustomItem` is a mod item that places no tile of the mod. |
+| `tile-name` | A tile's `GroupName CustomName` without its `Moveables.json` key. |
+| `tile-container` | A tile container without `IGUI_ContainerTitle_<type>`. |
 | `no-input` | No Lua files found, so a wrong path cannot pass as a clean mod. |
 
 ## Plugins
 
-A mod's own rules, such as ones about its tiles or its map coordinates, live in the mod's
-repository as Python files that `CHECK_PLUGINS` names. The checker loads each after its own
-checks, in the order given, and runs their checks after its own. A plugin imports `rules`, which
+A mod's own rules, such as ones about its map coordinates, live in the mod's repository as Python
+files that `CHECK_PLUGINS` names. The checker loads each after its own checks, in the order given,
+and runs their checks after its own. A plugin imports `rules`, which
 `check/check.py` puts on the path along with `gamedata`, `luasource`, `scripts`, `packs` and
 `tiledefs`:
 
@@ -125,15 +133,14 @@ def widget_labels(mod, game, report):
                 report.fail("widget-label", lua.path, lua.line(at), "widget %s has no label" % key)
 ```
 
-- `@check` registers `function(mod, game, report)`. `@read` registers `function(mod, report)`,
-  run once the mod's files are read and before any check, to read more of the mod: a plugin that
-  reads the mod's `.tiles` files fills `mod.tilesets` there, which `item-sprite` looks sprites up
-  in.
+- `@check` registers `function(mod, game, report)`.
 - `mod` (`rules.Mod`) holds what was read: `lua` (one `luasource` file each, with its tokens,
-  names, strings and tables), `scripts`, `items`, `recipes`, `entity_recipes`, `models`,
-  `translations` and `translation_paths`, `sandbox`, `info` (the published mod's `mod.info` lines), `sprites`,
-  `tilesets`, and `media_file(path)`. `game` (`gamedata.Game`) holds the game's side, and
-  `file(path)` finds a game file.
+  names, strings and tables, its `module` name and whether it is `published`, the Workshop's
+  rather than the dev mod's or the harness mod's), `scripts`, `items`, `recipes`,
+  `entity_recipes`, `models`, `translations` and `translation_paths`, `sandbox`, `info` (the
+  published mod's `mod.info` lines), `sprites`, `tilesets` (its `tiledef=` files, read with
+  `tiledefs`), `tile(sprite)` (a mod tile's file and properties), and `media_file(path)`. `game`
+  (`gamedata.Game`) holds the game's side, and `file(path)` finds a game file.
 - `report.fail(rule, path, line, message)` fails the run, `report.note(message)` only prints,
   and `report.saw(what)` counts for the summary line.
 - `rules` has the lookups the built-in checks use, such as `has_entry`, `has_text`,

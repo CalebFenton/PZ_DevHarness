@@ -4,7 +4,9 @@
                      --name <mod folder name> [--plugin <file>]... [--all-languages] <mod root>...
 
 bin/static-check.sh runs it after GameProbe has compiled every Lua file, with what the mod's
-dev/harness.conf says. The checks are rules.py's, then each plugin's in the order given.
+dev/harness.conf says. The roots are the published mod's version folders, its mod.info's first,
+then the dev mod's and the harness mod's (rules.Mod). The checks are rules.py's, then tiles.py's,
+then each plugin's in the order given.
 """
 import argparse
 import importlib.util
@@ -13,6 +15,7 @@ import sys
 
 import gamedata
 import rules
+import tiles  # noqa: F401  registers the tile checks
 
 
 def main(argv):
@@ -36,8 +39,6 @@ def main(argv):
     # Messages name files from the folder every root is in.
     report = rules.Report(os.path.commonpath(roots) if len(roots) > 1 else os.path.dirname(roots[0]))
     mod = rules.Mod(roots, args.name, report, args.all_languages)
-    for reader in rules.READERS:
-        reader(mod, report)
     # An empty scan means the paths are wrong, not that the mod is clean.
     if not mod.lua:
         report.fail("no-input", roots[0], None, "found no Lua files under %s" % ", ".join(roots))

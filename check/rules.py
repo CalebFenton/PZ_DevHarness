@@ -6,7 +6,7 @@ report: a missing translation shows its key, a wrong texture draws nothing, a sc
 its comma is dropped, and a Lua name that does not exist fails only when its line runs.
 
 A plugin is a Python file a mod's dev/harness.conf names in CHECK_PLUGINS. It imports this module,
-registers its own readers and checks with @read and @check, and may use the lookups below.
+registers its own checks with @check, and may use the lookups below.
 """
 import json
 import os
@@ -16,6 +16,7 @@ from collections import Counter, namedtuple
 import luasource
 import packs
 import scripts
+import tiledefs
 
 
 # ---------------------------------------------------------------------------------------------
@@ -55,20 +56,12 @@ class Report:
 
 
 CHECKS = []
-READERS = []
 
 
 def check(function):
     """A check, function(mod, game, report). Checks run in the order they register, the mod's
     plugins' after these."""
     CHECKS.append(function)
-    return function
-
-
-def read(function):
-    """A reader, function(mod, report), which a plugin uses to read more of the mod once Mod has
-    read its files and before any check runs, as a tile plugin fills Mod.tilesets."""
-    READERS.append(function)
     return function
 
 
@@ -80,10 +73,14 @@ Recipe = namedtuple("Recipe", "block module path")
 
 
 class Mod:
-    """Every file of the mod the checks read, parsed once. Unreadable files are reported here."""
+    """Every file of the mod the checks read, parsed once. Unreadable files are reported here.
+
+    roots are the published mod's version folders, the first holding its mod.info, then the dev
+    mod's and the harness mod's. The published mod's are those in the first one's mod folder."""
 
     def __init__(self, roots, name, report, all_languages=False):
         self.roots = roots
+        published = [r for r in roots if os.path.dirname(r) == os.path.dirname(roots[0])]
         # Translation keys carry it, so translation-key can tell a string shaped like one.
         self.name = name
         self.report = report
@@ -91,10 +88,13 @@ class Mod:
         self.all_languages = all_languages
 
         self.lua = []
-        for path in self._files("media/lua", ".lua"):
-            lua = luasource.read(path)
-            lua.module = _require_path(path)
-            self.lua.append(lua)
+        for root in roots:
+            for path in self._files("media/lua", ".lua", [root]):
+                lua = luasource.read(path)
+                lua.module = _require_path(path)
+                # The Workshop gets only these; the dev mod and the harness mod stay home.
+                lua.published = root in published
+                self.lua.append(lua)
 
         self.scripts = []
         self.items, self.recipes, self.models = {}, {}, set()
@@ -155,12 +155,50 @@ class Mod:
                 for sprite in page.sprites:
                     self.sprites.setdefault(sprite.name, path)
 
-        # (file, Tileset) for each tileset the mod defines, which item-sprite looks sprites up in.
-        # Reading the mod's .tiles files is a plugin's: a reader fills this.
+        # (file, Tileset) for each tileset the published mod's tiledef= lines name.
         self.tilesets = []
+        self._read_tilesets(report)
 
-    def _files(self, under, suffix):
-        for root in self.roots:
+    def _read_tilesets(self, report):
+        for value in self.info.get("tiledef", []):
+            words = value.split()
+            path = self.media_file("media/%s.tiles" % words[0]) if words else None
+            if len(words) != 2 or not words[1].isdigit() or not 100 <= int(words[1]) <= 8189:
+                # ChooseGameInfo.readModInfo drops the line without these.
+                report.fail("tile-format", self.info_path, None, "tiledef=%s needs a file name and a "
+                            "file number from 100 to 8189" % value)
+            if path is None:
+                report.fail("tile-format", self.info_path, None, "tiledef=%s names no media/%s.tiles"
+                            % (value, words[0] if words else ""))
+                continue
+            with open(path, "rb") as f:
+                data = f.read()
+            try:
+                tilesets = tiledefs.loads(data)
+            except ValueError as e:
+                report.fail("tile-format", path, None, "the game could not read it: %s" % e)
+                continue
+            if tiledefs.dumps(tilesets) != data:
+                report.fail("tile-format", path, None, "reads, but does not write back the same, so "
+                            "check/tiledefs.py misreads something in it")
+            self.tilesets.extend((path, tileset) for tileset in tilesets)
+        for value in self.info.get("pack", []):
+            if not self.media_file("media/texturepacks/%s.pack" % value):
+                report.fail("tile-format", self.info_path, None, "pack=%s names no media/texturepacks/%s.pack"
+                            % (value, value))
+
+    def tile(self, sprite):
+        """(file, properties as a dict) of a tile of the mod's tilesets by sprite name, or None."""
+        tileset_name, _, index = sprite.rpartition("_")
+        if not index.isdigit():
+            return None
+        for path, tileset in self.tilesets:
+            if tileset.name == tileset_name and int(index) < len(tileset.tiles):
+                return path, dict(tileset.tiles[int(index)])
+        return None
+
+    def _files(self, under, suffix, roots=None):
+        for root in self.roots if roots is None else roots:
             top = os.path.join(root, *under.split("/"))
             for base, _dirs, names in os.walk(top):
                 for name in sorted(names):
@@ -912,6 +950,38 @@ def require_path(mod, game, report):
             else:
                 report.fail("require-path", lua.path, lua.line(at), "require \"%s\" names no Lua file of the "
                             "mod or the game" % name)
+
+
+@check
+def unpublished_lua(mod, game, report):
+    # The Workshop gets the published mod alone, so a require or a global it finds only in the
+    # dev mod's or the harness mod's Lua passes every harness run and fails for players.
+    published = [lua for lua in mod.lua if lua.published]
+    modules = game.lua_modules | {lua.module for lua in published if lua.module}
+    dev_modules = {lua.module for lua in mod.lua if lua.module and not lua.published} - modules
+    known = set(game.globals) | set(game.classes) | game.lua_globals | game.lua_members.get("_G", set())
+    dev_globals = set()
+    for lua in mod.lua:
+        names = lua.globals | {key for table, key in lua.members if table == "_G"}
+        if lua.published:
+            known |= names
+        else:
+            dev_globals |= names
+    dev_globals -= known
+    for lua in published:
+        for name, at in lua.calls_with_literal("require"):
+            name = name[:-len(".lua")] if name.endswith(".lua") else name
+            if name in dev_modules:
+                report.fail("unpublished-lua", lua.path, lua.line(at), "require \"%s\" is a dev-mod or harness "
+                            "module, which the published mod lacks; move the code that needs it into the dev mod"
+                            % name)
+        reported = set()
+        for chain in lua.chains:
+            name = chain.names[0]
+            if name in dev_globals and name not in lua.locals and name not in reported:
+                reported.add(name)
+                report.fail("unpublished-lua", lua.path, lua.line(chain.at), "%s is a global only the dev mod's "
+                            "or the harness mod's Lua defines, which the published mod lacks" % name)
 
 
 @check
