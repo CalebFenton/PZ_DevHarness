@@ -229,6 +229,12 @@ function T.describeAction(action)
         return "nothing queued"
     end
     if action.Type ~= Wait.Type then
+        -- A walk stops when its path fails (ISWalkToTimedAction.update), so where it went says why.
+        if action.Type == "ISWalkToTimedAction" then
+            local from, to = action.character, action.location
+            return string.format("ISWalkToTimedAction from %.1f,%.1f,%d to %d,%d,%d", from:getX(), from:getY(),
+                from:getZ(), to:getX(), to:getY(), to:getZ())
+        end
         return tostring(action.Type)
     end
     if action.what then
@@ -251,18 +257,34 @@ local function lit()
     return not T.player():tooDarkToRead()
 end
 
--- Queues a wait until it is light (`wantLit`) or dark where the character stands, or LIGHT_MS
--- pass.
+-- A condition that holds once it has been light (`wantLit`) or dark where the character stands
+-- for two of the lighting thread's updates (LightingThread, PerformanceSettings.lightingFps). A
+-- single reading can be a square's light from before a clock change, which the next update
+-- replaces: a build has been seen refused in the dark one tick after a wait read it light.
+local function steadyLight(wantLit)
+    local sinceMs
+    return function()
+        if lit() ~= wantLit then
+            sinceMs = nil
+            return false
+        end
+        sinceMs = sinceMs or getTimestampMs()
+        return getTimestampMs() - sinceMs >= 2000 / getPerformance():getLightingFPS()
+    end
+end
+
+-- Queues a wait until it is steadily light (`wantLit`) or dark where the character stands, or
+-- LIGHT_MS pass.
 local function waitForLight(wantLit)
-    queueUntil(function() return lit() == wantLit end, LIGHT_MS,
+    queueUntil(steadyLight(wantLit), LIGHT_MS,
         wantLit and "light where the character stands" or "dark where the character stands")
 end
 
---- Queues a wait until it is light where the character stands, failing the test if it never is:
---- the game refuses a craft or a build in the dark (CraftRecipeData.canPerform), and the light
---- lags the clock the test before put back.
+--- Queues a wait until it is steadily light where the character stands, failing the test if it
+--- never is: the game refuses a craft or a build in the dark (CraftRecipeData.canPerform), and the
+--- light lags the clock the test before put back.
 function T.waitForLight(self)
-    T.waitFor(self, lit, "light where the character stands", LIGHT_MS)
+    T.waitFor(self, steadyLight(true), "light where the character stands", LIGHT_MS)
 end
 
 -- Server
@@ -1067,12 +1089,12 @@ end
 
 -- Queues the moveables action `mode` ("place" or "pickup") of `sprite` on `square` the way the
 -- moveables cursor does (ISMoveableCursor.create): the character walks next to the square and the
--- action does the job, in multiplayer in its complete() on the server. The character first stands
--- next to the square (T.standNextTo), in the middle of a square, as vanilla's walkAdj misjudges the
--- reach from a square's edge. Returns false if the character can't get there.
+-- action does the job, in multiplayer in its complete() on the server. The caller has queued
+-- T.goNextTo first, as vanilla's walkAdj misjudges the reach from a square's edge, and judged from
+-- a square a teleport hasn't yet updated it queues a walk to where the character already stands,
+-- whose path can fail and clear the queue. Returns false if the character can't get there.
 local function moveablesAction(square, mode, sprite, item, object)
     local p = T.player()
-    T.standNextTo(square)
     local props = object and ISMoveableSpriteProps.fromObject(object) or ISMoveableSpriteProps.new(sprite)
     if not props:walkToAndEquip(p, square, mode, sprite) then
         return false
@@ -1092,6 +1114,7 @@ function T.placeAsPlayer(self, square, itemType, sprite, modData)
     local key = "PZHarness.placeAsPlayer" .. self.placedAsPlayer
     local handle = { x = square:getX(), y = square:getY(), z = square:getZ(), square = square }
     T.give(self, key, { { type = itemType, modData = modData } })
+    T.goNextTo(self, square)
     queueWait(1, function()
         if not T.need(self, moveablesAction(square, "place", sprite, self.items[key][1], nil), "a way to place a " .. itemType) then
             return
@@ -1110,6 +1133,7 @@ end
 --- it.
 function T.pickUpAsPlayer(self, at, sprite)
     local square = type(at) == "table" and at.square or at
+    T.goNextTo(self, square)
     queueWait(1, function()
         local object = T.objectWithSprite(square, sprite)
         if not T.need(self, object and moveablesAction(square, "pickup", sprite, nil, object), "a way to pick up the " .. sprite) then
