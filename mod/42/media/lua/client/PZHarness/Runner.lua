@@ -675,20 +675,6 @@ local function done()
     quit()
 end
 
--- A clear, still day at once: no cloud, fog or rain however the weather turns during the run.
--- Stopping the weather alone leaves its fog to fade out over seconds; the admin values hold until
--- switched off.
-local function clearWeather()
-    local climate = getClimateManager()
-    climate:stopWeatherAndThunder()
-    for _, id in ipairs({ ClimateManager.FLOAT_CLOUD_INTENSITY, ClimateManager.FLOAT_FOG_INTENSITY,
-        ClimateManager.FLOAT_PRECIPITATION_INTENSITY }) do
-        local float = climate:getClimateFloat(id)
-        float:setEnableAdmin(true)
-        float:setAdminValue(0)
-    end
-end
-
 -- The UI draws at its own rate (Core.StartFrameUI) and the frames in between show its last
 -- drawing, so a mode that waits for the UI to draw waits less at the highest rate.
 local function fastUI()
@@ -728,6 +714,11 @@ end
 
 local function startMode()
     if run.mode == "test" then
+        -- Tests run under a clear sky, which a new world's weather would otherwise vary from run to
+        -- run; a multiplayer client gets the server's (copySetupToServer).
+        if not isClient() then
+            PZHarness.Fixtures.clearWeather()
+        end
         setFilters(run.selection)
         runTests(run.stay and serveReruns or quit)
         return
@@ -739,7 +730,7 @@ local function startMode()
         return
     end
     if mode.clearWeather then
-        clearWeather()
+        PZHarness.Fixtures.clearWeather()
     end
     if mode.fastUI then
         fastUI()
@@ -811,15 +802,17 @@ local function hasPerkLevels(player, levels)
 end
 
 -- Copies onStart's perk levels and recipes to the server's copy of the character, which crafts
--- and actions check, and calls `start` once both sides have them. The server overwrites the
--- client's perk list periodically (PlayerXpPacket), and one sent before it had the levels can land
--- after its answer, so this waits for a later sync (new PerkInfo objects) to show the levels, up to
--- SETUP_SYNC_MS. Synced recipes are only ever added, so they can't regress.
+-- and actions check, clears the server's sky (Fixtures.clearWeather), and calls `start` once both
+-- sides have them. The server overwrites the client's perk list periodically (PlayerXpPacket), and
+-- one sent before it had the levels can land after its answer, so this waits for a later sync (new
+-- PerkInfo objects) to show the levels, up to SETUP_SYNC_MS. Synced recipes are only ever added,
+-- so they can't regress.
 local function copySetupToServer(start)
     local player = getSpecificPlayer(0)
     local levels = PZHarness.Fixtures.perkLevels(player)
     PZHarness.ServerCalls.callOutsideTest("PZHarness.setPerkLevels", { levels = levels })
     PZHarness.ServerCalls.callOutsideTest("PZHarness.learnRecipes", { names = PZHarness.Fixtures.knownRecipes(player) })
+    PZHarness.ServerCalls.callOutsideTest("PZHarness.clearWeather", {})
     local perkList = player:getPerkList()
     local answeredMs, before
     local function onTick()

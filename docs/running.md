@@ -66,6 +66,10 @@ sandbox file wherever the conf's `harness_server_setup` set nothing. A conf that
 `QUIET_WORLD` itself replaces the list. Other modes (`--promo`, `--art`, a mod's reports) and
 `validate-server.sh` keep the world's own population.
 
+A `--test` run is also held under a clear sky from its start: no cloud, fog or rain, as the
+`clearWeather` flag of a [capture mode](adopting.md#capture-settings) holds it. On the `--mp`
+server the runner clears the server's, which it sends to its client.
+
 In every mode, and when you start the scenario by hand, the runner also records the run's mods
 for the new save, which the scenario panel doesn't, and turns zombies off, before the scenario's
 own `setSandbox`; a [QA scenario](adopting.md#qa-scenarios) does the same.

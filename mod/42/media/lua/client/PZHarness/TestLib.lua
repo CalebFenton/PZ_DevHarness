@@ -873,7 +873,8 @@ local function freeSquares(self, count, opts)
             local square = getSquare(x, y, z)
             if square and not self.used[square]
                 and isFreeSquare(square, opts.indoors == true)
-                and (not opts.bare or square:getObjects():size() == 1) then
+                and (not opts.bare or square:getObjects():size() == 1)
+                and (not opts.accept or opts.accept(square)) then
                 self.used[square] = true
                 table.insert(found, square)
                 if #found == count then
@@ -887,8 +888,9 @@ end
 
 --- `count` free squares (the `isFreeSquare` setting) around `opts.near` (a square or object; the
 --- character's square by default), nearest first and at least `opts.minDistance` tiles away:
---- indoors when `opts.indoors`, else outdoors; holding only their floor when `opts.bare`. Each
---- square goes to one fixture per test. Nil unless all are found.
+--- indoors when `opts.indoors`, else outdoors; holding only their floor when `opts.bare`; and
+--- those `opts.accept(square)` takes, if given. Each square goes to one fixture per test. Nil
+--- unless all are found.
 function T.squares(self, count, opts)
     local found = freeSquares(self, count, opts or {})
     return #found == count and found or nil

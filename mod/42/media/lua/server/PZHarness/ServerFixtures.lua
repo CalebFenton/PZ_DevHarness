@@ -154,6 +154,12 @@ handler("PZHarness.setTime", function(_, args, defer)
     return {}
 end)
 
+-- The runner's clear sky for a multiplayer run, which the server sends to its clients.
+handler("PZHarness.clearWeather", function()
+    Fixtures.clearWeather()
+    return {}
+end)
+
 handler("PZHarness.setMultiplier", function(_, args, defer)
     defer(Fixtures.setMultiplier(args.multiplier))
     return {}

@@ -1,11 +1,36 @@
 require "PZHarness/TestLib"
 require "PZHarness/TestLearning"
+require "PZHarness/StageLots"
+local Stage = require "PZHarness/Stage"
 
 -- Building from the build menu in a test: the entry of a game entity, its cursor's test of a
 -- square, and a build through the menu's own path (ISBuildIsoEntity, ISBuildAction). The build
 -- objects are server Lua, which loads after client Lua, so they are reached at call time.
 
 local T = PZHarness.Test
+
+-- How far round a build site T.buildSite keeps open ground: the character stands beside the site,
+-- and the containers the build menu offers reach one square further (ISInventoryPage's loot
+-- window, 3 by 3 round the character).
+local SITE_CLEARANCE = 2
+
+-- Whether `square` and every square within SITE_CLEARANCE of it are open ground.
+local function isClearAround(square)
+    local corner = getSquare(square:getX() - SITE_CLEARANCE, square:getY() - SITE_CLEARANCE, square:getZ())
+    local side = 2 * SITE_CLEARANCE + 1
+    return Stage.isAreaOpen(corner, side, side, Stage.isOpenGround)
+end
+
+--- A square for T.build, nearest the character, or nil and missing one: bare outdoor ground
+--- (T.squares), as grass and the like block placing anything built (BlocksPlacement), with open
+--- ground all round it (Stage.isOpenGround) as far as the build menu reaches. No container but
+--- what the character carries is then in the build's reach, and no wall shades the site or turns
+--- the walk beside it.
+function T.buildSite(self)
+    local found = T.squares(self, 1, { bare = true, accept = isClearAround })
+    T.need(self, found, "a build site: bare outdoor ground with open ground round it")
+    return found and found[1]
+end
 
 --- Sets the character's skills to the levels `recipe` requires, until the test ends (T.setPerk).
 function T.setRecipeSkills(self, recipe)
@@ -33,7 +58,7 @@ local function refusal(recipe)
     if player:tooDarkToRead() then
         return "the dark"
     end
-    return "its inputs among what the character carries"
+    return "its inputs"
 end
 
 --- The build menu entry of `entity` (a game entity script's full name), or nil.
@@ -53,18 +78,11 @@ function T.buildEntry(entity)
 end
 
 -- A build cursor of the entry `info` for this client's character, as the build panel makes one
--- before the cursor can build (ISBuildPanel): with the player number the drag sets
--- (IsoCell.setDrag), and offered only the containers the character carries, those its inventory
--- window shows. A test gives the character what it builds from, and a container in the world that
--- is in reach when the cursor is made can be out of it once the build has walked the character
--- beside the site, which refuses the whole build (BaseCraftingLogic.isContainersAccessible).
+-- before the cursor can build (ISBuildPanel): with the containers the build menu offers, and the
+-- player number the drag sets (IsoCell.setDrag).
 local function newBuild(info)
     local player = T.player()
-    local carried = ArrayList.new()
-    for _, button in ipairs(getPlayerInventory(player:getPlayerNum()).inventoryPane.inventoryPage.backpacks) do
-        carried:add(button.inventory)
-    end
-    local build = ISBuildIsoEntity:new(player, info, 1, carried)
+    local build = ISBuildIsoEntity:new(player, info, 1, ISInventoryPaneContextMenu.getContainers(player))
     build.player = player:getPlayerNum()
     return build
 end
@@ -79,13 +97,12 @@ function T.placeable(entity, square)
     return newBuild(info):isValid(square)
 end
 
---- Queues building the build menu's entry of `entity` on `square` through the menu's own path:
---- the character knows the recipe and has its skill levels (both until the test ends), carries
---- exactly its inputs (T.recipeInputs with `prefer`: enough full drainables for an input's
---- uses), stands next to the square on both sides (T.goNextTo) once it is light there
---- (T.waitForLight), and builds from what it carries alone; then the build waits until
---- `arrived()` holds on this client, else misses `what`. A build the menu refuses, for its inputs
---- or its square, is missing at once.
+--- Queues building the build menu's entry of `entity` on `square`, a T.buildSite, through the
+--- menu's own path: the character knows the recipe and has its skill levels (both until the test
+--- ends), carries exactly its inputs (T.recipeInputs with `prefer`: enough full drainables for an
+--- input's uses), stands next to the square on both sides (T.goNextTo) once it is light there
+--- (T.waitForLight), and builds; then the build waits until `arrived()` holds on this client, else
+--- misses `what`. A build the menu refuses, for its inputs or its square, is missing at once.
 --- A mod that tracks what the build leaves, for removal when the test ends, queues its handler
 --- before this. Returns the build, or nil: `types` the full types of its inputs, `expected` what it
 --- should leave carried of them (T.expectBuildUsed), and once it has run `face` the face it built

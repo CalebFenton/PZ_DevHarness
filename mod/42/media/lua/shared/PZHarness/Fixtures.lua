@@ -113,14 +113,41 @@ local function sendDaylight()
     end
 end
 
+--- Sets the clock to `hour` and returns the undo, which puts back the date too: a test that runs
+--- the clock past midnight moves the world to the next day (GameTime.advanceOneDay), and the world's
+--- age counts the nights survived.
 function Fixtures.setTime(hour)
     local time = getGameTime()
-    local saved = time:getTimeOfDay()
+    local timeOfDay, day, month, year, nights = time:getTimeOfDay(), time:getDay(), time:getMonth(),
+        time:getYear(), time:getNightsSurvived()
     time:setTimeOfDay(hour)
     sendDaylight()
     return function()
-        time:setTimeOfDay(saved)
+        time:setTimeOfDay(timeOfDay)
+        time:setDay(day)
+        time:setMonth(month)
+        time:setYear(year)
+        time:setNightsSurvived(nights)
+        time:updateCalendar(year, month, day, math.floor(timeOfDay), time:getMinutes())
         sendDaylight()
+    end
+end
+
+--- A clear, still day at once: no cloud, fog or rain however the weather turns from then on. The
+--- admin values hold until switched off; stopping the weather alone leaves its fog to fade out over
+--- seconds. A server sends the sky to its clients (ClimateManager.transmitServerStopWeather).
+function Fixtures.clearWeather()
+    local climate = getClimateManager()
+    for _, id in ipairs({ ClimateManager.FLOAT_CLOUD_INTENSITY, ClimateManager.FLOAT_FOG_INTENSITY,
+        ClimateManager.FLOAT_PRECIPITATION_INTENSITY }) do
+        local float = climate:getClimateFloat(id)
+        float:setEnableAdmin(true)
+        float:setAdminValue(0)
+    end
+    if isServer() then
+        climate:transmitServerStopWeather()
+    else
+        climate:stopWeatherAndThunder()
     end
 end
 
