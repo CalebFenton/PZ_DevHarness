@@ -1,12 +1,14 @@
 """Cross-checks a mod against the installed game, without running it.
 
     python3 check.py --game <game Java folder> --api <GameProbe API file> --cache <folder>
-                     --name <mod folder name> [--plugin <file>]... [--all-languages] <mod root>...
+                     --name <mod folder name> [--library <mod folder>]... [--plugin <file>]...
+                     [--all-languages] <mod root>...
 
 bin/static-check.sh runs it after GameProbe has compiled every Lua file, with what the mod's
 dev/harness.conf says. The roots are the published mod's version folders, its mod.info's first,
-then the dev mod's and the harness mod's (rules.Mod). The checks are rules.py's, then tiles.py's,
-then each plugin's in the order given.
+then the dev mod's and the harness mod's (rules.Mod); each --library is a library mod's folder,
+from the conf's LIBRARY_MODS in load order. The checks are rules.py's, then tiles.py's, then each
+plugin's in the order given.
 """
 import argparse
 import importlib.util
@@ -24,6 +26,7 @@ def main(argv):
     parser.add_argument("--api", required=True)
     parser.add_argument("--cache", required=True)
     parser.add_argument("--name", required=True)
+    parser.add_argument("--library", action="append", default=[])
     parser.add_argument("--plugin", action="append", default=[])
     parser.add_argument("--all-languages", action="store_true")
     parser.add_argument("roots", nargs="+")
@@ -36,9 +39,10 @@ def main(argv):
         spec.loader.exec_module(plugin)
 
     roots = [os.path.abspath(r) for r in args.roots]
-    # Messages name files from the folder every root is in.
+    # Messages name files from the folder every root is in; a library's from there too, by a path
+    # out of it.
     report = rules.Report(os.path.commonpath(roots) if len(roots) > 1 else os.path.dirname(roots[0]))
-    mod = rules.Mod(roots, args.name, report, args.all_languages)
+    mod = rules.Mod(roots, args.name, report, args.all_languages, [os.path.abspath(f) for f in args.library])
     # An empty scan means the paths are wrong, not that the mod is clean.
     if not mod.lua:
         report.fail("no-input", roots[0], None, "found no Lua files under %s" % ", ".join(roots))

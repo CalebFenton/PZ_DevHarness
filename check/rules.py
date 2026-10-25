@@ -70,30 +70,60 @@ def check(function):
 
 Item = namedtuple("Item", "block module imports path")
 Recipe = namedtuple("Recipe", "block module path")
+# A library mod the published mod requires: its folder, the id and the mod.info by key (_mod_info)
+# of its 42 folder, and its version folders.
+Library = namedtuple("Library", "folder id info info_path roots")
 
 
 class Mod:
     """Every file of the mod the checks read, parsed once. Unreadable files are reported here.
 
     roots are the published mod's version folders, the first holding its mod.info, then the dev
-    mod's and the harness mod's. The published mod's are those in the first one's mod folder."""
+    mod's and the harness mod's. The published mod's are those in the first one's mod folder.
+    libraries are the folders of the library mods the published mod requires, in load order; they
+    ship too, so their files are read and checked as the published mod's are."""
 
-    def __init__(self, roots, name, report, all_languages=False):
-        self.roots = roots
+    def __init__(self, roots, name, report, all_languages=False, libraries=()):
         published = [r for r in roots if os.path.dirname(r) == os.path.dirname(roots[0])]
+        self.libraries = []
+        for folder in libraries:
+            info_path = os.path.join(folder, "42", "mod.info")
+            info = _mod_info(info_path)
+            self.libraries.append(Library(folder, (info.get("id") or [None])[0], info, info_path,
+                                          [os.path.join(folder, part) for part in ("42", "common")
+                                           if os.path.isdir(os.path.join(folder, part))]))
+        library_roots = [r for library in self.libraries for r in library.roots]
+        # The mod's files are looked up before a library's: the mod loads after its libraries, and
+        # the game takes a file from the mod that loads last.
+        self.roots = published + library_roots + [r for r in roots if r not in published]
         # Translation keys carry it, so translation-key can tell a string shaped like one.
         self.name = name
         self.report = report
         # Whether every language the game offers must have every translation English has.
         self.all_languages = all_languages
 
+        # The published mod's mod.info, in the first root; the dev mod's and the harness mod's
+        # describe other mods.
+        path = os.path.join(roots[0], "mod.info")
+        self.info_path = path if os.path.exists(path) else None
+        self.info = _mod_info(path)
+        self.id = (self.info.get("id") or [None])[0]
+
+        # The id of the published mod or library each root ships in.
+        owners = dict.fromkeys(published, self.id)
+        for library in self.libraries:
+            owners.update(dict.fromkeys(library.roots, library.id))
         self.lua = []
-        for root in roots:
+        for root in self.roots:
             for path in self._files("media/lua", ".lua", [root]):
                 lua = luasource.read(path)
                 lua.module = _require_path(path)
-                # The Workshop gets only these; the dev mod and the harness mod stay home.
-                lua.published = root in published
+                # The Workshop gets these, with the mod or as its libraries; the dev mod and the
+                # harness mod stay home.
+                lua.published = root in owners
+                # Whose mod.info's require= the file's requires go by; None for the dev mod's and
+                # the harness mod's.
+                lua.owner = owners.get(root)
                 self.lua.append(lua)
 
         self.scripts = []
@@ -119,30 +149,25 @@ class Mod:
                     elif child.type == "entity" and any(c.id == "CraftRecipe" for c in child.blocks("component")):
                         self.entity_recipes.add(child.id)
 
-        # Language -> translation file name -> {key: text}, and where each file is.
-        self.translations, self.translation_paths = {}, {}
-        for path in self._files("media/lua/shared/Translate", ".json"):
+        # Language -> translation file name -> {key: text}, merged over the mods in load order, the
+        # libraries first, as Translator.tryFillMapFromMods merges them: a later mod's text wins
+        # unless it is empty. And each file as (language, name, path, its own {key: text}), for the
+        # checks that go file by file.
+        self.translations, self.translation_files = {}, []
+        load_order = library_roots + [r for r in self.roots if r not in library_roots]
+        for path in self._files("media/lua/shared/Translate", ".json", load_order):
             language = os.path.basename(os.path.dirname(path))
             name = os.path.basename(path)[:-len(".json")]
-            self.translation_paths[language, name] = path
-            self.translations.setdefault(language, {})[name] = self._json(path)
+            table = self._json(path)
+            self.translation_files.append((language, name, path, table))
+            merged = self.translations.setdefault(language, {}).setdefault(name, {})
+            merged.update((key, text) for key, text in table.items() if text or key not in merged)
 
         self.sandbox = None
         for root in roots:
             path = os.path.join(root, "media", "sandbox-options.txt")
             if os.path.exists(path):
                 self.sandbox = (path, scripts.parse(_read(path)))
-
-        # The published mod's mod.info, in the first root; the dev mod's and the harness mod's
-        # describe other mods.
-        self.info_path, self.info = None, {}
-        path = os.path.join(roots[0], "mod.info")
-        if os.path.exists(path):
-            self.info_path = path
-            for line in _read(path).splitlines():
-                key, equals, value = line.partition("=")
-                if equals:
-                    self.info.setdefault(key.strip(), []).append(value.strip())
 
         self.sprites = {}           # packed sprite name -> pack file
         for path in self._files("media/texturepacks", ".pack"):
@@ -248,6 +273,25 @@ class Mod:
 def _read(path):
     with open(path, encoding="utf-8", errors="replace") as f:
         return f.read()
+
+
+def _mod_info(path):
+    """A mod.info's values by key, each key's in file order; {} if there is no such file."""
+    info = {}
+    if os.path.exists(path):
+        for line in _read(path).splitlines():
+            key, equals, value = line.partition("=")
+            if equals:
+                info.setdefault(key.strip(), []).append(value.strip())
+    return info
+
+
+def required_ids(info):
+    """The mod ids a mod.info (_mod_info) requires. ChooseGameInfo.readModInfo keeps the last
+    require= line, drops its backslashes and splits it on commas, and isAvailableRequired trims
+    each id."""
+    lines = info.get("require")
+    return [i.strip() for i in lines[-1].replace("\\", "").split(",") if i.strip()] if lines else []
 
 
 def _require_path(path):
@@ -379,7 +423,7 @@ def translation_file(mod, game, report):
     # Translator.loadFiles fills each table from one file name; a file by any other name is
     # never opened. Languages.init offers only folders with a language.json, the game's or a mod's
     # own, so a folder named for no such language is never read either.
-    for (language, name), path in sorted(mod.translation_paths.items()):
+    for language, name, path, _ in sorted(mod.translation_files):
         report.saw("translation files")
         if name not in game.translation_files:
             report.fail("translation-file", path, None, "the game loads no translation file called %s.json "
@@ -387,25 +431,27 @@ def translation_file(mod, game, report):
     for language in sorted(mod.translations):
         if language not in game.languages and \
                 not mod.media_file("media/lua/shared/Translate/%s/language.json" % language):
-            path = os.path.dirname(next(p for (lang, _), p in mod.translation_paths.items() if lang == language))
+            path = os.path.dirname(next(p for lang, _, p, _ in mod.translation_files if lang == language))
             report.fail("translation-file", path, None, "the game offers no language %s, so it never reads "
                         "this folder (its languages are %s)" % (language, ", ".join(sorted(game.languages))))
 
 
 @check
 def translation_key(mod, game, report):
-    # A literal getText key, and any string literal shaped like one of the mod's own keys, so
-    # keys kept in tables and looked up later are checked too. Strings joined with .. are built
-    # at runtime and skipped.
+    # A literal getText key, and any string literal shaped like one of the mod's own keys or a
+    # library's, so keys kept in tables and looked up later are checked too. Strings joined with ..
+    # are built at runtime and skipped.
     shapes = set()
     getText_files = {file_name for _, file_name in TEXT_TABLES}
+    names = [mod.name] + [os.path.basename(library.folder) for library in mod.libraries]
     for name in mod.translations.get("EN", {}):
         if name not in getText_files:
             continue
         for key in mod.english(name):
-            at = key.find(mod.name)
-            if at > 0:
-                shapes.add(key[:at + len(mod.name)])
+            for owner in names:
+                at = key.find(owner)
+                if at > 0:
+                    shapes.add(key[:at + len(owner)])
     for lua in mod.lua:
         checked = set()
         for function in ("getText", "getTextOrNull"):
@@ -428,7 +474,8 @@ def translation_key(mod, game, report):
 @check
 def translation_languages(mod, game, report):
     # Translator loads English and the chosen language over it, so a key the language lacks shows
-    # in English, and a key English lacks is read by nothing.
+    # in English, and a key English lacks is read by nothing. Every mod's files fill the same
+    # tables, so a file is held to them all.
     english = mod.translations.get("EN", {})
     languages = set(mod.translations)
     if mod.all_languages:
@@ -436,25 +483,25 @@ def translation_languages(mod, game, report):
     for language in sorted(languages - {"EN"}):
         files = mod.translations.get(language, {})
         missing = 0
-        for name, table in sorted(files.items()):
+        for _, name, path, table in sorted(f for f in mod.translation_files if f[0] == language):
             extra = sorted(set(table) - set(english.get(name, {})))
             if extra:
-                report.fail("translation-extra", mod.translation_paths[language, name], None,
+                report.fail("translation-extra", path, None,
                             "%d key(s) English does not have, which nothing reads: %s"
                             % (len(extra), ", ".join(extra[:5])))
-        for name, source in sorted(english.items()):
+        for _, name, english_path, source in sorted(f for f in mod.translation_files if f[0] == "EN"):
             lacking = sorted(set(source) - set(files.get(name, {})))
             missing += len(lacking)
             if not mod.all_languages or not lacking:
                 continue
-            if name in files:
-                report.fail("translation-missing", mod.translation_paths[language, name], None,
+            # The file beside this English one, in the same mod.
+            path = os.path.join(os.path.dirname(os.path.dirname(english_path)), language,
+                                os.path.basename(english_path))
+            if os.path.exists(path):
+                report.fail("translation-missing", path, None,
                             "lacks %d key(s) English has, which show in English: %s"
                             % (len(lacking), ", ".join(lacking[:5])))
             else:
-                english_path = mod.translation_paths["EN", name]
-                path = os.path.join(os.path.dirname(os.path.dirname(english_path)), language,
-                                    os.path.basename(english_path))
                 report.fail("translation-missing", path, None, "missing, so all of %s.json shows in English"
                             % name)
         if missing and not mod.all_languages:
@@ -466,26 +513,24 @@ def translation_placeholder(mod, game, report):
     # Translator.formatFixer turns %1..%9 into String.format arguments and keeps %%. Any other %
     # is malformed (the game's own dev build refuses to start over one). A placeholder a
     # translation adds is filled by nothing, and one it drops hides the value English shows.
-    for language, files in sorted(mod.translations.items()):
-        for name, table in files.items():
-            path = mod.translation_paths[language, name]
-            for key, text in table.items():
-                used = set(re.findall(r"%.?", text, re.S))
-                bad = sorted(p for p in used if not re.fullmatch(r"%[1-9%]", p))
-                if bad:
-                    report.fail("translation-placeholder", path, None, "%s has %s, where only %%1 to %%9 and %%%% "
-                                "are understood" % (key, " ".join(repr(p) for p in bad)))
-                source = mod.english(name).get(key)
-                if language == "EN" or source is None:
-                    continue
-                english = {p for p in re.findall(r"%.?", source, re.S) if re.fullmatch(r"%[1-9]", p)}
-                ours = {p for p in used if re.fullmatch(r"%[1-9]", p)}
-                if ours - english:
-                    report.fail("translation-placeholder", path, None, "%s uses %s, which English does not "
-                                "pass" % (key, " ".join(sorted(ours - english))))
-                if english - ours:
-                    report.fail("translation-placeholder", path, None, "%s drops %s, so the value English "
-                                "shows there is missing" % (key, " ".join(sorted(english - ours))))
+    for language, name, path, table in sorted(mod.translation_files):
+        for key, text in table.items():
+            used = set(re.findall(r"%.?", text, re.S))
+            bad = sorted(p for p in used if not re.fullmatch(r"%[1-9%]", p))
+            if bad:
+                report.fail("translation-placeholder", path, None, "%s has %s, where only %%1 to %%9 and %%%% "
+                            "are understood" % (key, " ".join(repr(p) for p in bad)))
+            source = mod.english(name).get(key)
+            if language == "EN" or source is None:
+                continue
+            english = {p for p in re.findall(r"%.?", source, re.S) if re.fullmatch(r"%[1-9]", p)}
+            ours = {p for p in used if re.fullmatch(r"%[1-9]", p)}
+            if ours - english:
+                report.fail("translation-placeholder", path, None, "%s uses %s, which English does not "
+                            "pass" % (key, " ".join(sorted(ours - english))))
+            if english - ours:
+                report.fail("translation-placeholder", path, None, "%s drops %s, so the value English "
+                            "shows there is missing" % (key, " ".join(sorted(english - ours))))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -949,13 +994,14 @@ def require_path(mod, game, report):
                             "which a Linux server does not find" % (name, lowered[name.lower()]))
             else:
                 report.fail("require-path", lua.path, lua.line(at), "require \"%s\" names no Lua file of the "
-                            "mod or the game" % name)
+                            "mod, its libraries or the game" % name)
 
 
 @check
 def unpublished_lua(mod, game, report):
-    # The Workshop gets the published mod alone, so a require or a global it finds only in the
-    # dev mod's or the harness mod's Lua passes every harness run and fails for players.
+    # The Workshop gets the published mod and its libraries alone, so a require or a global it
+    # finds only in the dev mod's or the harness mod's Lua passes every harness run and fails for
+    # players.
     published = [lua for lua in mod.lua if lua.published]
     modules = game.lua_modules | {lua.module for lua in published if lua.module}
     dev_modules = {lua.module for lua in mod.lua if lua.module and not lua.published} - modules
@@ -982,6 +1028,49 @@ def unpublished_lua(mod, game, report):
                 reported.add(name)
                 report.fail("unpublished-lua", lua.path, lua.line(chain.at), "%s is a global only the dev mod's "
                             "or the harness mod's Lua defines, which the published mod lacks" % name)
+
+
+@check
+def library_require(mod, game, report):
+    # A player's game loads the mods a mod.info requires, before the mod, and of the mods a harness
+    # run loads has only those. So the published mod.info must require exactly the conf's
+    # LIBRARY_MODS: a library it leaves out is there in every harness run and check but not for
+    # players, and a mod it adds is in none of them. A library also loads for mods other than this
+    # one, so a module its Lua requires must be its own, or a mod's its own mod.info requires.
+    path = mod.info_path or os.path.join(mod.roots[0], "mod.info")
+    line = None
+    if mod.info_path:
+        lines = [n for n, text in enumerate(_read(path).splitlines(), 1) if text.strip().startswith("require=")]
+        line = lines[-1] if lines else None
+    listed = required_ids(mod.info)
+    loaded = [library.id for library in mod.libraries]
+    for library in loaded:
+        if library not in listed:
+            report.fail("library-require", path, line, "require= lacks %s, which dev/harness.conf's LIBRARY_MODS "
+                        "loads in every harness run and check, so a player's game would run the mod without it"
+                        % library)
+    for other in listed:
+        if other not in loaded:
+            report.fail("library-require", path, line, "require= names %s, which dev/harness.conf's LIBRARY_MODS "
+                        "lacks, so no harness run or check loads it" % other)
+    owners = {}
+    for lua in mod.lua:
+        if lua.owner and lua.module:
+            owners.setdefault(lua.module, set()).add(lua.owner)
+    requires = {library.id: set(required_ids(library.info)) for library in mod.libraries}
+    for lua in mod.lua:
+        # The mod's own require= is held to LIBRARY_MODS above.
+        if lua.owner not in requires:
+            continue
+        for name, at in lua.calls_with_literal("require"):
+            name = name[:-len(".lua")] if name.endswith(".lua") else name
+            found = owners.get(name, set())
+            if not found or lua.owner in found or found & requires[lua.owner] or name in game.lua_modules:
+                continue
+            owner = " and ".join(sorted(found))
+            report.fail("library-require", lua.path, lua.line(at), "require \"%s\" is a module of %s, which %s's "
+                        "mod.info doesn't require, so the library fails in a game without %s"
+                        % (name, owner, lua.owner, owner))
 
 
 @check
