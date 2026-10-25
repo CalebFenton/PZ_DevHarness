@@ -719,19 +719,19 @@ def recipes(mod, game, report):
             report.fail("recipe-name", path, block.line, "craftRecipe %s has no Recipes.json entry" % name)
 
         for part in block.blocks("inputs") + block.blocks("outputs"):
-            owner = None
+            previous = None
             for value in part.values:
-                # A `-fluid` or `+fluid` line takes from or fills the item of the line before it,
-                # which must ask exactly one item (InputScript.OnPostWorldDictionaryInit), or the
-                # world refuses to load.
-                if value.key is None and value.value[:1] in ("-", "+") and owner is not None \
-                        and not re.match(r"item\s+1\s", owner.value):
-                    report.fail("recipe-fluid-owner", path, value.line, "%s takes from the line before it, which "
-                                "must ask exactly one item: %s" % (value.value.split()[0], owner.value))
+                # A `-` or `+` line takes from or fills the item of the line before it, which must
+                # ask exactly one item (InputScript.OnPostWorldDictionaryInit), or the world refuses
+                # to load.
+                if value.key is None and value.value[:1] in ("-", "+") and previous is not None \
+                        and not re.match(r"item\s+1\s", previous.value):
+                    report.fail("recipe-fluid-owner", path, value.line, "%s works on the line before it, which "
+                                "must ask exactly one item: %s" % (value.value.split()[0], previous.value))
+                if value.key is None:
+                    previous = value
                 if value.key is not None or not re.match(r"-?item\b", value.value):
                     continue
-                if value.value.startswith("item"):
-                    owner = value
                 for prefix, listed in re.findall(r"(\w*)\[([^\]]*)\]", value.value):
                     entries = [e.strip() for e in listed.split(";") if e.strip()]
                     if prefix == "tags":
