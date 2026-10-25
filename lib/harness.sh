@@ -32,10 +32,38 @@ HARNESS_MOD_DIR="$HARNESS/mod"
 HARNESS_MOD_FOLDER=PZTestHarness
 HARNESS_MOD_ID="$(mod_info "$HARNESS_MOD_DIR" id)"
 
-# Lua stack traces name a mod as "(MOD:<name in mod.info>)". MOD_ERROR matches the published mod,
-# OUR_LUA_ERROR any of the three mods a harness run loads.
-MOD_ERROR="\\(MOD:$(literal_regex "$(mod_info "$MOD_DIR" name)")\\)"
-OUR_LUA_ERROR="\\(MOD:($(literal_regex "$(mod_info "$MOD_DIR" name)")|$(literal_regex "$(mod_info "$DEV_MOD_DIR" name)")|$(literal_regex "$(mod_info "$HARNESS_MOD_DIR" name)"))\\)"
+# The library mods the published mod requires, in the conf's LIBRARY_MODS order, which is their
+# load order: each one's absolute folder, its folder name in the cache's mods, and the id and name
+# of its mod.info. They live in repositories of their own, beside the mod's. PUBLISHED_MODS holds
+# the ids of every mod a player's game loads for this one, in load order, joined by ";" as a
+# server's Mods= line takes them.
+LIBRARY_DIRS=() LIBRARY_FOLDERS=() LIBRARY_IDS=() LIBRARY_NAMES=() PUBLISHED_MODS=
+for library in ${LIBRARY_MODS[@]+"${LIBRARY_MODS[@]}"}; do
+    if [ ! -f "$REPO/$library/42/mod.info" ]; then
+        echo "dev/harness.conf's LIBRARY_MODS names $library, but $REPO/$library/42/mod.info doesn't exist: check out the library's repository next to the mod's, so that $library is its mod folder" >&2
+        exit 2
+    fi
+    library="$(cd "$REPO/$library" && pwd)"
+    LIBRARY_DIRS+=("$library")
+    LIBRARY_FOLDERS+=("$(basename "$library")")
+    LIBRARY_IDS+=("$(mod_info "$library" id)")
+    LIBRARY_NAMES+=("$(mod_info "$library" name)")
+    PUBLISHED_MODS="$PUBLISHED_MODS$(mod_info "$library" id);"
+done
+unset library
+PUBLISHED_MODS="$PUBLISHED_MODS$MOD_ID"
+
+# Lua stack traces name a mod as "(MOD:<name in mod.info>)". MOD_ERROR matches the published mod
+# and its libraries, and OUR_LUA_ERROR any mod a harness run loads but vanilla. A library's error is
+# ours too: its code ships for the mod and runs in every player's game the mod is in.
+published_names=$(literal_regex "$(mod_info "$MOD_DIR" name)")
+for name in ${LIBRARY_NAMES[@]+"${LIBRARY_NAMES[@]}"}; do
+    published_names="$(literal_regex "$name")|$published_names"
+done
+unset name
+MOD_ERROR="\\(MOD:($published_names)\\)"
+OUR_LUA_ERROR="\\(MOD:($published_names|$(literal_regex "$(mod_info "$DEV_MOD_DIR" name)")|$(literal_regex "$(mod_info "$HARNESS_MOD_DIR" name)"))\\)"
+unset published_names
 
 # JVM arguments shared by the client and the dedicated server. Both run from "$PZ/Java", which
 # GAME_CLASSPATH is relative to.
@@ -92,13 +120,24 @@ compile_java() {
     fi
 }
 
-install_mod() {
+# Copies mod folder $1 into the cache's mods as $2.
+copy_mod() {
     mkdir -p "$CACHE/mods"
     # rsync copies only what changed; an old symlink in its place has to go first.
-    if [ -L "$CACHE/mods/$MOD_FOLDER" ]; then
-        rm "$CACHE/mods/$MOD_FOLDER"
+    if [ -L "$CACHE/mods/$2" ]; then
+        rm "$CACHE/mods/$2"
     fi
-    rsync -a --delete "$MOD_DIR/" "$CACHE/mods/$MOD_FOLDER/"
+    rsync -a --delete "$1/" "$CACHE/mods/$2/"
+}
+
+# The published mod and its libraries, for a client or a server of a harness run: real copies, as
+# the Workshop installs them.
+install_mod() {
+    local i
+    for ((i = 0; i < ${#LIBRARY_DIRS[@]}; i++)); do
+        copy_mod "${LIBRARY_DIRS[$i]}" "${LIBRARY_FOLDERS[$i]}"
+    done
+    copy_mod "$MOD_DIR" "$MOD_FOLDER"
 }
 
 # The harness mod and the dev mod, for a client or a server of a harness run. Symlinks are enough
@@ -382,9 +421,10 @@ SERVER_NAME=harness
 SERVER_ADMIN=admin
 SERVER_ADMIN_PASSWORD=admin
 
-# A fresh world for the dedicated server of $CACHE: the published mod copied in, Server/
-# $SERVER_NAME.ini with Mods=$1 (mod ids joined by ";") and the further ini lines given, then the
-# conf's harness_server_setup hook, which can add files such as ${SERVER_NAME}_SandboxVars.lua.
+# A fresh world for the dedicated server of $CACHE: the published mod and its libraries copied in
+# (install_mod), Server/$SERVER_NAME.ini with Mods=$1 (mod ids joined by ";", PUBLISHED_MODS's
+# first) and the further ini lines given, then the conf's harness_server_setup hook, which can add
+# files such as ${SERVER_NAME}_SandboxVars.lua.
 prepare_server() {
     local mods=$1
     shift
@@ -458,8 +498,9 @@ stop_server() {
 }
 
 # Prints, with line numbers, the lines of server log $1 that are the mod's problems: a Lua stack
-# trace through the mod, or a line matching the conf's SERVER_PROBLEMS that doesn't match
-# SERVER_IGNORE, or one matching the extended regex $2 if given. Fails if there are none.
+# trace through the mod or a library of it, or a line matching the conf's SERVER_PROBLEMS that
+# doesn't match SERVER_IGNORE, or one matching the extended regex $2 if given. Fails if there are
+# none.
 server_problems() {
     grep -n -E "$MOD_ERROR${SERVER_PROBLEMS:+|$SERVER_PROBLEMS}${2:+|$2}" "$1" \
         | { if [ -n "${SERVER_IGNORE:-}" ]; then grep -v -E "$SERVER_IGNORE"; else cat; fi; }

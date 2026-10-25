@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Boots a throwaway dedicated server (no Steam, isolated cache dir) with only the mod enabled,
-# waits for it to finish loading, stops it, and fails if the mod logged a problem: a Lua stack
-# trace through the mod, or a line matching the conf's SERVER_PROBLEMS that doesn't match
-# SERVER_IGNORE. The server loads the mod's tiles, scripts, sandbox options, shared and server
-# Lua, and loot tables. The conf's harness_server_setup hook can add files to the server's config,
-# such as its sandbox options, in "$CACHE/Server/$SERVER_NAME"*.
+# Boots a throwaway dedicated server (no Steam, isolated cache dir) with only the mod and its
+# libraries (the conf's LIBRARY_MODS) enabled, waits for it to finish loading, stops it, and fails
+# if the mod logged a problem: a Lua stack trace through the mod or a library, or a line matching
+# the conf's SERVER_PROBLEMS that doesn't match SERVER_IGNORE. The server loads the mod's tiles,
+# scripts, sandbox options, shared and server Lua, and loot tables. The conf's harness_server_setup
+# hook can add files to the server's config, such as its sandbox options, in
+# "$CACHE/Server/$SERVER_NAME"*.
 #
 # CACHE overrides the cache dir (default: $TMPDIR/<CACHE_NAME>-server), and TIMEOUT the seconds
 # the server may take to start.
@@ -28,7 +29,7 @@ run_precheck
 acquire_game_lock
 # The phases are timed from here, after any wait for another script's game.
 timing_mark start
-prepare_server "$MOD_ID"
+prepare_server "$PUBLISHED_MODS"
 stop_games_on_exit
 timing_mark launch
 start_server

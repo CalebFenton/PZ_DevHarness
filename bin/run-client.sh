@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Starts the game client in debug mode (no Steam) with its own cache dir, the mod, its dev mod and
-# the harness mod enabled. A mod's dev/run-debug-client.sh runs this; docs/running.md describes the
-# modes and the environment variables, and docs/adopting.md dev/harness.conf.
+# Starts the game client in debug mode (no Steam) with its own cache dir, the mod's libraries (the
+# conf's LIBRARY_MODS), the mod, its dev mod and the harness mod enabled. A mod's
+# dev/run-debug-client.sh runs this; docs/running.md describes the modes and the environment
+# variables, and docs/adopting.md dev/harness.conf.
 #
 #   (no flag)        play by hand: the main menu, with the mod's debug scenario under Scenarios
 #                    and its tests in the debug menu's timed action tests
@@ -14,7 +15,7 @@
 #                    change to the mods restarts the game. While it waits it shows and logs
 #                    "<TAG> IDLE"; it quits after its idle time without a run, or when another run
 #                    needs the game.
-#   --test --mp      the same in multiplayer: starts a dedicated server with the three mods and a
+#   --test --mp      the same in multiplayer: starts a dedicated server with the same mods and a
 #                    client that joins it as the admin, runs the tests on the client, and fails on
 #                    a problem in either log. With --stay both stay open, and the next
 #                    --test --mp --stay reruns the tests, the server loading its share of the
@@ -231,11 +232,15 @@ file_reach() {
 }
 
 # The test prefixes the conf's TEST_MAP gives for the batch's changed files, saying why for each
-# file (file_reach).
+# file (file_reach). A library's repository records no batch base for this one, so its changes
+# are not in the batch.
 select_changed() {
     local file picked= everything= relevant=
     check_test_map
     echo "--changed: base $BATCH_BASE_SAID"
+    if [ ${#LIBRARY_IDS[@]} -gt 0 ]; then
+        echo "--changed: changes to the libraries (${LIBRARY_IDS[*]}) are not in the batch; after one, run every test"
+    fi
     while read -r file; do
         [ -n "$file" ] || continue
         file_reach "$file"
@@ -374,14 +379,15 @@ fi
 
 # What a --test run's verdict depends on: the kind of run, the selection and settings, the game
 # install and its code, which a Steam update changes, and the contents of the files the game loads
-# from the three mods, the harness and the conf. RUNS_LOG keeps it with each run. The files are
-# named relative to the repository, so a worktree of it with the same files has the same
-# fingerprint, as its runs go to the same RUNS_LOG.
+# from the mods, the harness and the conf. RUNS_LOG keeps it with each run. The files are named
+# relative to the repository, so a worktree of it with the same files has the same fingerprint, as
+# its runs go to the same RUNS_LOG; the libraries by the conf's paths, which are relative to it too.
 run_fingerprint() {
     {
         printf '%s\n' "$MP" "$STAY" "$SELECTION" "$LEAKS" "$ORDER" "$ROUNDS" "$PZ"
         md5 -r "$PZ/Java/projectzomboid.jar"
-        (cd "$REPO" && find "${MOD_DIR#"$REPO/"}" "${DEV_MOD_DIR#"$REPO/"}" "${HARNESS_MOD_DIR#"$REPO/"}" \
+        (cd "$REPO" && find ${LIBRARY_MODS[@]+"${LIBRARY_MODS[@]}"} "${MOD_DIR#"$REPO/"}" \
+            "${DEV_MOD_DIR#"$REPO/"}" "${HARNESS_MOD_DIR#"$REPO/"}" \
             "${HARNESS#"$REPO/"}/bin" "${HARNESS#"$REPO/"}/lib" "${HARNESS#"$REPO/"}/java" dev/harness.conf \
             -type f -print0 | sort -z | xargs -0 md5 -r)
     } | md5 -q
@@ -445,7 +451,14 @@ session_stale() {
         fi
     done < <(find "$DEV_MOD_DIR" "$HARNESS_MOD_DIR" -newer "$HARNESS_FILE" -type f)
     # "Files <ours> and <copy> differ" or "Only in <folder>: <name>", for every changed file.
-    local changed
+    local changed i
+    for ((i = 0; i < ${#LIBRARY_DIRS[@]}; i++)); do
+        changed=$(diff -rq "${LIBRARY_DIRS[$i]}" "$CACHE/mods/${LIBRARY_FOLDERS[$i]}" | head -1 || true)
+        if [ -n "$changed" ]; then
+            echo "the library ${LIBRARY_IDS[$i]} changed: $changed"
+            return
+        fi
+    done
     changed=$(diff -rq "$MOD_DIR" "$CACHE/mods/$MOD_FOLDER" | head -1 || true)
     if [ -n "$changed" ]; then
         echo "the mod changed: $changed"
@@ -526,20 +539,12 @@ prepare_cache() {
     fi
     printf 'mode=%s\nselection=%s\nstay=%s\nmp=%s\nmark=%s\ntag=%s\nleaks=%s\norder=%s\nrounds=%s\ntrace=%s\nquiet=%s\n' \
         "$MODE" "$SELECTION" "$STAY" "$MP" "$MARK" "$TAG" "$LEAKS" "$ORDER" "$ROUNDS" "$TRACE" "$quiet" > "$HARNESS_FILE"
-    cat > "$CACHE/mods/default.txt" <<EOF
-VERSION = 1,
-
-mods
-{
-    mod = $MOD_ID,
-    mod = $HARNESS_MOD_ID,
-    mod = $DEV_MOD_ID,
-}
-
-maps
-{
-}
-EOF
+    # Libraries first, in their load order, as a player's game loads a mod's require= mods first.
+    {
+        printf 'VERSION = 1,\n\nmods\n{\n'
+        printf '    mod = %s,\n' ${LIBRARY_IDS[@]+"${LIBRARY_IDS[@]}"} "$MOD_ID" "$HARNESS_MOD_ID" "$DEV_MOD_ID"
+        printf '}\n\nmaps\n{\n}\n'
+    } > "$CACHE/mods/default.txt"
     # The harness sets the scenario's forceLaunch; this debug option lets it start from the main
     # menu. A multiplayer client joins the server instead.
     printf 'Version=1\nDebugScenario.ForceLaunch=%s\n' "$([ -n "$MODE" ] && [ -z "$MP" ] && echo true || echo false)" > "$CACHE/debug-options.ini"
@@ -556,7 +561,7 @@ EOF
     fi
 }
 
-# The server of --mp: the three mods, no zombies, a quiet world, not paused while nobody plays,
+# The server of --mp: the client's mods, no zombies, a quiet world, not paused while nobody plays,
 # open to the client without a whitelist, on its own ports. Every harness test world has no
 # zombies, so nothing attacks the character during the tests. The server runs its sandbox file as
 # Lua, so the lines go after the conf's options, and the quiet ones (QUIET_WORLD) only where the
@@ -565,7 +570,7 @@ prepare_mp_server() {
     local client_cache=$CACHE sandbox option
     CACHE=$SERVER_CACHE
     link_dev_mods
-    prepare_server "$MOD_ID;$HARNESS_MOD_ID;$DEV_MOD_ID" "DefaultPort=$SERVER_PORT" \
+    prepare_server "$PUBLISHED_MODS;$HARNESS_MOD_ID;$DEV_MOD_ID" "DefaultPort=$SERVER_PORT" \
         "UDPPort=$((SERVER_PORT + 1))" Open=true PauseEmpty=false
     sandbox="$CACHE/Server/${SERVER_NAME}_SandboxVars.lua"
     if [ -f "$sandbox" ]; then
@@ -869,10 +874,10 @@ if [ "$MODE" = test ] && [ -n "$TRACE" ]; then
         echo "trace: the runner wrote no $TRACE_FILE"
     fi
 fi
-# Anything the mod logs counts, from loading on. A mod mistake can also surface as an error in
-# vanilla Lua, such as a crafting window drawing an item the mod defined badly, so every Lua error
-# counts once the harness has started, and so does any exception logged through the three mods'
-# Lua; before that, vanilla logs errors of its own.
+# Anything the mod or its libraries log counts, from loading on. A mod mistake can also surface as
+# an error in vanilla Lua, such as a crafting window drawing an item the mod defined badly, so
+# every Lua error counts once the harness has started, and so does any exception logged through
+# the run's mods' Lua; before that, vanilla logs errors of its own.
 if grep -n -E "$MOD_ERROR" "$RUN_LOG" \
     || sed -n "/> $MARK /,\$p" "$RUN_LOG" | grep -n -E "^ERROR: Lua|LuaManager.*Exception|-- file: |$OUR_LUA_ERROR"; then
     echo "FAIL: Lua errors were logged"
