@@ -16,7 +16,8 @@ PZHarness.testSettings = PZHarness.testSettings or {}
 --- - `hour`: the hour every test runs at unless its spec gives one. A test that runs at an hour
 ---   first waits for the light, which lags the clock.
 --- - `perks`: perks restored after every test, however a test changed them.
---- - `sandbox`: the mod's table in SandboxVars, which T.setSandbox tries before the game's options.
+--- - `sandbox`: the mod's table in SandboxVars, which T.setSandbox tries before the game's options
+---   and Fixtures.saveOptions saves from.
 --- - `sandboxChanged()`: called on each side after its copy of a sandbox option is set or
 ---   restored, for state the mod derives from its options.
 --- - `setup(self, spec)`: called before every test's spec.run, after its hour and sandbox options;
@@ -65,6 +66,42 @@ function Fixtures.setSandbox(options, name, key, value, changed)
         if option then option:setValueFromObject(savedOption) end
         if changed then changed() end
     end
+end
+
+--- Defers `undo` for a server handler that changes shared state, and returns the function that
+--- runs it now, which the handler calls when done. Being deferred too, it still runs when the
+--- handler throws first (the harness unwinds a failed call at once). It runs once either way.
+function Fixtures.deferOnce(defer, undo)
+    local done = false
+    local function once()
+        if done then
+            return
+        end
+        done = true
+        undo()
+    end
+    defer(once)
+    return once
+end
+
+--- Saves the options `names` of the mod's table in SandboxVars (the `sandbox` test setting) for a
+--- server handler that changes them, and returns the function that puts them back and then calls
+--- `reapply`, if given, to rebuild what the mod made from them; Fixtures.deferOnce says when it
+--- runs. Unlike setSandbox it leaves the game's SandboxOptions alone, for a handler that changes
+--- the options many times and reapplies them itself.
+function Fixtures.saveOptions(defer, names, reapply)
+    local options, saved = SandboxVars[PZHarness.testSettings.sandbox], {}
+    for _, name in ipairs(names) do
+        saved[name] = options[name]
+    end
+    return Fixtures.deferOnce(defer, function()
+        for _, name in ipairs(names) do
+            options[name] = saved[name]
+        end
+        if reapply then
+            reapply()
+        end
+    end)
 end
 
 -- A server computes daylight on its next climate tick but only sends it to clients on periodic
@@ -172,6 +209,76 @@ function Fixtures.knownRecipes(player)
         table.insert(names, known:get(i))
     end
     return names
+end
+
+--- The character knows (`known`) or forgets `names`; returns the undo, after which it knows
+--- exactly the recipes it knew before, those learned meanwhile (a level up's AutoLearn) included,
+--- which the leak check would count.
+function Fixtures.knowRecipes(player, names, known)
+    local saved = Fixtures.knownRecipes(player)
+    if known then
+        Fixtures.learnRecipes(player, names)
+    else
+        Fixtures.forgetRecipes(player, names)
+    end
+    return function()
+        local list = player:getKnownRecipes()
+        list:clear()
+        for _, name in ipairs(saved) do
+            list:add(name)
+        end
+    end
+end
+
+--- Whether the character knows each of `names`, by name, judged as the crafting menus judge it:
+--- by the recipe, which counts its MetaRecipe, where a name alone does not (IsoGameCharacter). A
+--- name with no recipe script is judged by name.
+function Fixtures.knows(player, names)
+    local known, scripts = {}, getScriptManager()
+    for _, name in ipairs(names) do
+        known[name] = player:isRecipeActuallyKnown(scripts:getCraftRecipe(name) or name)
+    end
+    return known
+end
+
+--- The square at `at` ({ x, y, z }, a handler's args or a handle), or nil when `at` has no x or
+--- the square isn't loaded on this side.
+function Fixtures.squareAt(at)
+    return at and at.x and getSquare(at.x, at.y, at.z) or nil
+end
+
+--- The names of the overlays `object`'s tile shows (its attached sprites), in drawing order; none
+--- for nil.
+function Fixtures.overlaysOf(object)
+    local names = {}
+    local attached = object and object:getAttachedAnimSprite()
+    for i = 0, (attached and attached:size() or 0) - 1 do
+        table.insert(names, attached:get(i):getName())
+    end
+    return names
+end
+
+local function copyOf(value)
+    if type(value) ~= "table" then
+        return value
+    end
+    local copy = {}
+    for key, field in pairs(value) do
+        copy[key] = copyOf(field)
+    end
+    return copy
+end
+
+--- The fields `keys` of `source` (a record's SAVED_FIELDS, say), for a handler's answer. Tables are
+--- copied through, so single player, where the answer never crosses the network, gets what the
+--- fields held at the read, as a multiplayer client does, and not the live tables a later change
+--- would rewrite. Only for plain values, as saved fields are: a table holding itself never ends.
+function Fixtures.fieldsOf(source, keys)
+    local fields = {}
+    for _, key in ipairs(keys) do
+        fields[key] = copyOf(source[key])
+    end
+    return fields
 end
 
 --- The first object on `square` drawn as `sprite`, or nil. Takes a nil square.

@@ -886,15 +886,17 @@ if run.mp then
     Events.OnGameStart.Add(startMultiplayer)
 end
 
--- Every world from the mod's scenario records the active mods, which DebugScenarios doesn't do
--- (see MainScreen.resetLuaIfNeeded), and has no zombies. A --test world also gets the `quiet`
--- options from run-client.sh. The scenario's own setSandbox runs after, so the mod's settings win.
-local function wrapSetSandbox(scenario, quiet)
+--- Gives `scenario`, a debugScenarios entry, a new save that records the active mods, which
+--- DebugScenarios doesn't do (see MainScreen.resetLuaIfNeeded), and has no zombies; with `quiet`
+--- (run-client.sh's "Key=value,..." for a --test world) those options too. The scenario's own
+--- setSandbox runs after, so the mod's settings win. The runner does it for the mod's scenario,
+--- PZHarness.QA.scenario for a QA scenario.
+function PZHarness.wrapSetSandbox(scenario, quiet)
     local originalSetSandbox = scenario.setSandbox
     scenario.setSandbox = function()
         ActiveMods.getById("currentGame"):copyFrom(ActiveMods.getById("default"))
         SandboxVars.Zombies = 6 -- none
-        for key, value in string.gmatch(quiet, "([%w_]+)=([^,]+)") do
+        for key, value in string.gmatch(quiet or "", "([%w_]+)=([^,]+)") do
             if value == "true" or value == "false" then
                 SandboxVars[key] = value == "true"
             else
@@ -929,7 +931,7 @@ function PZHarness.register(config)
     }
     local scenario = debugScenarios[config.scenario]
     if run.mode == "" then
-        wrapSetSandbox(scenario, "")
+        PZHarness.wrapSetSandbox(scenario, "")
         return
     end
     -- run-client.sh times the game's boot up to the first of these; --mp prints one again after
@@ -952,7 +954,7 @@ function PZHarness.register(config)
     end
 
     scenario.forceLaunch = true
-    wrapSetSandbox(scenario, run.mode == "test" and run.quiet or "")
+    PZHarness.wrapSetSandbox(scenario, run.mode == "test" and run.quiet or "")
 
     local originalOnStart = scenario.onStart
     scenario.onStart = function()

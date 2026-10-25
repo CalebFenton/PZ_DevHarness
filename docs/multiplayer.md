@@ -116,6 +116,12 @@ player behaves as before:
   `T.placeWorkTable`, `T.learnRecipes` and `T.forgetRecipes` work outside tests too, as in a
   scenario's onStart; `PZHarness.ServerCalls.callOutsideTest(name, args, onReply)` calls any
   handler there.
+- Learning (`TestLearning.lua`, its handlers in `ServerLearning.lua`): `knowRecipes` changes this
+  client's copy in its turn and then the server's, and each side puts back its own list when the
+  test ends, since the server never sends a client what it forgets. `levelUp` and
+  `setLevelsQuietly` change the server's copy only, as a level up happens there in play, and this
+  client takes the levels at its next perk sync; when the test ends both sides go back to the
+  levels the server had before, the client not waiting on a sync.
 - The runner resets the server's copy of the character before every test too, and after the
   scenario's and the mod's onStart copies the client's perk levels and known recipes to it. The
   first test starts once the server has them and this client shows the levels again: the server

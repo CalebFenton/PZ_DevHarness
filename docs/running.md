@@ -68,7 +68,7 @@ sandbox file wherever the conf's `harness_server_setup` set nothing. A conf that
 
 In every mode, and when you start the scenario by hand, the runner also records the three mods
 for the new save, which the scenario panel doesn't, and turns zombies off, before the scenario's
-own `setSandbox`.
+own `setSandbox`; a [QA scenario](adopting.md#qa-scenarios) does the same.
 
 ## Leaks and desyncs
 

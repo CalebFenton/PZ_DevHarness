@@ -36,6 +36,10 @@ local T = PZHarness.Test
 -- lighting catches up at its own pace in real time, whatever the frame rate, and on a multiplayer
 -- client only after the server's clock has come back to it.
 local LIGHT_MS = 10000
+-- The longest T.waitFor waits unless told otherwise, in real milliseconds: how long this client may
+-- take to show what the server changed. Waits count real time, since frames come faster or slower
+-- with the uncapped frame rate.
+local SYNC_MS = 10000
 -- Squares searched around a fixture's centre, in tiles. The runner's leak check looks a little
 -- further by default.
 local SEARCH_RADIUS = 30
@@ -185,11 +189,37 @@ function T.wait(ticks, onTick)
     queueWait(ticks, onTick).crossable = batching
 end
 
---- Queues a wait that ends as soon as `condition()` holds, or after `maxFrames` ticks; the
+-- Queues a wait that ends as soon as `condition()` holds, or once `maxMs` real milliseconds have
+-- passed since its first tick. `source`, the caller's function, is where T.describeAction says the
+-- wait was written.
+local function queueUntil(condition, maxMs, what, source)
+    local sinceMs
+    local wait = queueWait(math.huge, nil, function()
+        sinceMs = sinceMs or getTimestampMs()
+        return condition() or getTimestampMs() - sinceMs > maxMs
+    end, what)
+    wait.source = source or condition
+    return wait
+end
+
+--- Queues a wait that ends as soon as `condition()` holds, or after `maxMs` real milliseconds; the
 --- following validate checks what it waited for. `what`, if given, says what it waits for when
 --- the runner's per-test limit stops it (T.describeAction).
-function T.waitUntil(condition, maxFrames, what)
-    queueWait(maxFrames, nil, condition, what).crossable = batching
+function T.waitUntil(condition, maxMs, what)
+    queueUntil(condition, maxMs, what).crossable = batching
+end
+
+--- Queues a wait until `condition()` holds or `ms` real milliseconds pass (SYNC_MS unless given),
+--- then fails the test as missing `what` (T.need) if it never held, so a copy that never came
+--- can't pass where T.waitUntil just ends. The verdict is the condition's last answer: it isn't
+--- called again, so what it noted when it held stays.
+function T.waitFor(self, condition, what, ms)
+    local held = false
+    queueUntil(function()
+        held = condition() and true or false
+        return held
+    end, ms or SYNC_MS, what, condition).crossable = batching
+    T.step(function() T.need(self, held, what) end)
 end
 
 --- What a queued action is, for the runner's message when a test overruns its limit: a harness
@@ -204,7 +234,7 @@ function T.describeAction(action)
     if action.what then
         return action.what
     end
-    local fn = action.step or action.done or action.onTick
+    local fn = action.step or action.source or action.done or action.onTick
     local file = fn and tostring(getFilenameOfClosure(fn)):match("[^/]*$")
     return (action.step and "the step at " or "a wait queued at ") .. tostring(file) .. ":"
         .. tostring(fn and getFirstLineOfClosure(fn))
@@ -224,11 +254,15 @@ end
 -- Queues a wait until it is light (`wantLit`) or dark where the character stands, or LIGHT_MS
 -- pass.
 local function waitForLight(wantLit)
-    local sinceMs
-    queueWait(math.huge, nil, function()
-        sinceMs = sinceMs or getTimestampMs()
-        return lit() == wantLit or getTimestampMs() - sinceMs > LIGHT_MS
-    end, wantLit and "light where the character stands" or "dark where the character stands")
+    queueUntil(function() return lit() == wantLit end, LIGHT_MS,
+        wantLit and "light where the character stands" or "dark where the character stands")
+end
+
+--- Queues a wait until it is light where the character stands, failing the test if it never is:
+--- the game refuses a craft or a build in the dark (CraftRecipeData.canPerform), and the light
+--- lags the clock the test before put back.
+function T.waitForLight(self)
+    T.waitFor(self, lit, "light where the character stands", LIGHT_MS)
 end
 
 -- Server
@@ -1246,9 +1280,21 @@ function T.inputItem(input, prefer)
     return possible:size() > 0 and possible:get(0) or nil
 end
 
+--- How many of the script Item `item` (T.inputItem's pick) cover one craft's `input`: a drainable
+--- input that counts uses takes as many full items as its uses need, two sand bags for eight uses;
+--- any other input its amount.
+function T.inputCount(input, item)
+    if item:isItemType(ItemType.DRAINABLE) and not input:isItemCount() then
+        -- The nudge keeps a use delta stored a hair over 1/n from losing its last use to rounding.
+        local perItem = math.floor(1 / item:getUseDelta() + 0.0001)
+        return math.ceil(input:getIntAmount() / perItem)
+    end
+    return input:getIntAmount()
+end
+
 --- What one craft of `recipe` takes, tools included, as T.give items: each input gets
---- T.inputItem's choice; a drainable input that counts uses gets one full item. Also returns the
---- inputs that had no possible item at all.
+--- T.inputItem's choice, T.inputCount of it. Also returns the inputs that had no possible item at
+--- all.
 function T.recipeInputs(recipe, prefer)
     local items, unmatched = {}, {}
     local inputs = recipe:getInputs()
@@ -1256,11 +1302,7 @@ function T.recipeInputs(recipe, prefer)
         local input = inputs:get(i)
         local item = T.inputItem(input, prefer)
         if item then
-            local count = input:getIntAmount()
-            if item:isItemType(ItemType.DRAINABLE) and not input:isItemCount() then
-                count = 1
-            end
-            table.insert(items, { type = item:getFullName(), count = count })
+            table.insert(items, { type = item:getFullName(), count = T.inputCount(input, item) })
         else
             table.insert(unmatched, input:getOriginalLine())
         end

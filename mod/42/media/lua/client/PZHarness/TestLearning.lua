@@ -1,0 +1,189 @@
+require "PZHarness/TestLib"
+
+-- Development only, not published. Recipe learning for tests: what the character knows, on both
+-- sides, and levels set or levelled up the way the game does, each put back when the test ends.
+-- The authority's half is server/PZHarness/ServerLearning.lua; single player runs it on its one
+-- copy of the character.
+
+local T = PZHarness.Test
+
+--- Queues making this client's and the server's copy of the character know (`known`, true when
+--- nil) or forget the recipes `names`. When the test ends each side knows exactly the recipes it
+--- knew before, including those a level up taught meanwhile, which the leak check counts. Queued
+--- again with other names or to forget, it changes only those, and the end still puts back what
+--- was known before the first.
+function T.knowRecipes(self, names, known)
+    known = known ~= false
+    if isClient() then
+        T.step(function() T.defer(self, PZHarness.Fixtures.knowRecipes(T.player(), names, known)) end)
+    end
+    T.server(self, "PZHarness.knowRecipes", { names = names, known = known })
+end
+
+--- Every craftRecipe and build menu recipe whose name starts with `prefix` (the `recipePrefix`
+--- setting by default) that a character has to learn (NeedToBeLearn), each once.
+function T.learnableRecipeNames(prefix)
+    prefix = prefix or PZHarness.testSettings.recipePrefix or ""
+    local names, seen, scripts = {}, {}, getScriptManager()
+    for _, recipes in ipairs({ scripts:getAllCraftRecipes(), scripts:getAllBuildableRecipes() }) do
+        for i = 0, recipes:size() - 1 do
+            local recipe = recipes:get(i)
+            local name = recipe:getName()
+            if PZHarness.startsWith(name, prefix) and recipe:needToBeLearn() and not seen[name] then
+                seen[name] = true
+                table.insert(names, name)
+            end
+        end
+    end
+    return names
+end
+
+--- Which of `names` this client's copy of the character knows, by name (Fixtures.knows: by the
+--- recipe, as the crafting menus judge it).
+function T.recipesKnown(names)
+    return PZHarness.Fixtures.knows(T.player(), names)
+end
+
+--- Queues waits until the authority's and then this client's copy of the character know each of
+--- `names` that `expected` marks true (a multiplayer server sends a client what it taught), and
+--- leaves what each side knows of `names` in self.known, { server, client }, for T.expectKnown.
+--- Running out of time just ends the server's wait; this client's fails the test as missing.
+function T.waitForKnown(self, names, expected)
+    local function knowsAll(known)
+        for name, want in pairs(expected) do
+            if want and not (known and known[name]) then
+                return false
+            end
+        end
+        return true
+    end
+    T.serverUntil(self, "PZHarness.recipesKnown", { names = names }, function(reply) return knowsAll(reply and reply.known) end)
+    for name, want in pairs(expected) do
+        if want then
+            T.waitFor(self, function() return T.recipesKnown({ name })[name] end,
+                "this client's copy of the character knowing " .. name)
+        end
+    end
+    T.step(function()
+        local reply = self.server["PZHarness.recipesKnown"]
+        self.known = { server = reply and reply.known or {}, client = T.recipesKnown(names) }
+    end)
+end
+
+--- Expects each side of self.known (T.waitForKnown) to know exactly the recipes of `names` that
+--- `expected` marks true after `what`.
+function T.expectKnown(self, names, what, expected)
+    for side, known in pairs(self.known or {}) do
+        for _, name in ipairs(names) do
+            local want = expected[name] == true
+            T.expect(known[name] == want, what .. (want and " did not teach " or " taught ") .. name .. " on the " .. side)
+        end
+    end
+end
+
+-- On a multiplayer client, queues putting this client's copy of the character back at the levels
+-- the server's handler `name` answered it replaced, when the test ends: the server puts its own
+-- back, but this copy only catches up at its next perk sync (PlayerXpPacket), which the leak check
+-- may beat.
+local function restoreLevelsHere(self, name)
+    if not isClient() then
+        return
+    end
+    T.step(function()
+        local saved, p = self.server[name] and self.server[name].saved, T.player()
+        if saved then
+            T.defer(self, function() PZHarness.Fixtures.setPerkLevels(p, saved) end)
+        end
+    end)
+end
+
+--- Queues setting the authority's levels `levels` (perk id -> level), each at the XP that starts
+--- it, then awarding the XP that takes the perk `perk` (an id) one level up, as the authority awards
+--- a timed action's XP: the game levels the perk up and fires LevelPerk, so learning on a level up
+--- runs as in play. The answer, { before, after } the perk's level, lands in
+--- self.server["PZHarness.levelUp"]. The levels go back on both sides when the test ends.
+function T.levelUp(self, perk, levels)
+    T.server(self, "PZHarness.levelUp", { perk = perk, levels = levels })
+    restoreLevelsHere(self, "PZHarness.levelUp")
+end
+
+--- Queues setting the authority's levels `levels` (perk id -> level) with no level up, so no
+--- LevelPerk teaches anything: a character who earned them before a mod, or its learning, was
+--- added. What it knows of `names` right after lands in self.server["PZHarness.setLevelsQuietly"]
+--- as `known`, by name. The levels go back on both sides when the test ends.
+function T.setLevelsQuietly(self, levels, names)
+    T.server(self, "PZHarness.setLevelsQuietly", { levels = levels, names = names })
+    restoreLevelsHere(self, "PZHarness.setLevelsQuietly")
+end
+
+-- The AutoLearn skills of the recipe `name` as { perk = perk id, level }, in `any` and `all`.
+local function autoLearnOf(name)
+    local recipe = getScriptManager():getCraftRecipe(name)
+    local skills = { any = {}, all = {} }
+    if not recipe then return skills end
+    for i = 0, recipe:getAutoLearnAnySkillCount() - 1 do
+        local skill = recipe:getAutoLearnAnySkill(i)
+        table.insert(skills.any, { perk = skill:getPerk():getId(), level = skill:getLevel() })
+    end
+    for i = 0, recipe:getAutoLearnAllSkillCount() - 1 do
+        local skill = recipe:getAutoLearnAllSkill(i)
+        table.insert(skills.all, { perk = skill:getPerk():getId(), level = skill:getLevel() })
+    end
+    return skills
+end
+
+--- Every perk and level the AutoLearn skills of the recipes `names` name, once each, as
+--- { perk = perk id, level }, and the one with the highest level.
+function T.autoLearnLevels(names)
+    local rows, seen, highest = {}, {}, nil
+    for _, name in ipairs(names) do
+        local skills = autoLearnOf(name)
+        for _, list in ipairs({ skills.any, skills.all }) do
+            for _, skill in ipairs(list) do
+                local key = skill.perk .. skill.level
+                if not seen[key] then
+                    seen[key] = true
+                    table.insert(rows, skill)
+                    if not highest or skill.level > highest.level then
+                        highest = skill
+                    end
+                end
+            end
+        end
+    end
+    return rows, highest
+end
+
+--- Which of the recipes `names` a character with `perk` (an id) at `level` and every other perk at
+--- 0 has the AutoLearn skills of, as their scripts state them, marked true by name.
+function T.autoLearnedAt(names, perk, level)
+    local function meets(skill)
+        return skill.level <= (skill.perk == perk and level or 0)
+    end
+    local earned = {}
+    for _, name in ipairs(names) do
+        local skills = autoLearnOf(name)
+        for _, skill in ipairs(skills.any) do
+            earned[name] = earned[name] or meets(skill)
+        end
+        if #skills.all > 0 then
+            local all = true
+            for _, skill in ipairs(skills.all) do
+                all = all and meets(skill)
+            end
+            earned[name] = earned[name] or all
+        end
+    end
+    return earned
+end
+
+--- Levels for T.levelUp and T.setLevelsQuietly: each perk of `rows` (T.autoLearnLevels) at 0 but
+--- `perk`, which is at `level`.
+function T.autoLearnLevelsWith(rows, perk, level)
+    local levels = {}
+    for _, row in ipairs(rows) do
+        levels[row.perk] = 0
+    end
+    levels[perk] = level
+    return levels
+end

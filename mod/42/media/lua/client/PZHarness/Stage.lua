@@ -1,8 +1,8 @@
 -- Development only, not published. Staging for capture modes (docs/adopting.md, "Staging"):
 -- finding a place near the character and clearing it, walking the character to a shot and
 -- letting the lighting settle, framing what a shot shows, the world every shot is taken in, the
--- window and menu shots, and the driver that runs a mode's groups. PZHarness/Capture.lua runs the
--- steps.
+-- window and menu shots, and the driver that runs a mode's groups. PZHarness/StageLots.lua adds
+-- open ground and lots; PZHarness/Capture.lua runs the steps.
 
 require "PZHarness/Fixtures"
 require "ISUI/ISWorldObjectContextMenu"
@@ -233,6 +233,27 @@ function Stage.zoomOut(stepsOut)
         getCore():doZoomScroll(0, 1)
     end
     return Capture.zoomSettled()
+end
+
+-- The squares the character has looked around from, by run, as Stage.addGoTo adds them: what it
+-- saw stays seen. A capture mode makes one run a session.
+local lookedFrom = {}
+
+--- Adds to `run` the steps that have the character look around (Stage.addLookAround) from each of
+--- `squares` it hasn't looked around from yet in the run, then from the last, where it stays, and
+--- set the zoom `stepsOut` steps out from the closest.
+function Stage.addGoTo(run, player, squares, stepsOut)
+    lookedFrom[run] = lookedFrom[run] or {}
+    local seen = lookedFrom[run]
+    for i, square in ipairs(squares) do
+        if i == #squares or not seen[square] then
+            Stage.addLookAround(run.steps, player, square)
+            seen[square] = true
+        end
+    end
+    run:add(function()
+        return Stage.zoomOut(stepsOut)
+    end)
 end
 
 local savedZoomLevels
@@ -487,6 +508,18 @@ local function addTimer(run, label)
             print(string.format("%s TIME %s %.1f s", run.mark, label, (getTimestampMs() - started) / 1000))
         end)
     end
+end
+
+--- The set of what `chosen` groups need, for a runGroups prepare to find only that: every name in
+--- the `key` list of each chosen group's entry in `groups`, as a key mapped to true.
+function Stage.groupNeeds(groups, chosen, key)
+    local needs = {}
+    for _, name in ipairs(chosen) do
+        for _, need in ipairs(groups[name][key]) do
+            needs[need] = true
+        end
+    end
+    return needs
 end
 
 --- Shoots the groups named in `selection` (comma-separated, in the order to shoot them, as the
