@@ -33,6 +33,7 @@ second.
 | `LIBRARY_MODS` | Optional: the library mods the published mod requires ([adopting.md](adopting.md#devharnessconf)). Their Lua, scripts, translations and packs are read with the mod's, so its requires of their modules and its getText keys resolve, and checked as published code, since they ship too; `library-require` holds the published `mod.info`'s `require=` to them. |
 | `CHECK_ALL_LANGUAGES` | Optional: when set, every language the game offers (but `STREW`, its placeholder) must have every translation file and key English has (`translation-missing`); otherwise a language the mod has that lacks keys is only a note. |
 | `WORKSHOP_REPO` | Optional: when set, the check also fails while `workshop.txt` isn't what `dev/workshop-txt.sh` makes of the README, or the description is over Steam's limit ([workshop-page.md](workshop-page.md)). |
+| `TEST_MAP` | Optional: when set, the check also fails while it misses a file of the mod, the dev mod or the harness mod, tracked or untracked, or has a glob that matches none of them, with a line for each that says what to fix: `TEST_MAP: <file> has no line in dev/harness.conf; ...` or `TEST_MAP: <glob> matches no file; ...` ([adopting.md](adopting.md#devharnessconf)). `run-client.sh --changed` runs the same check first. |
 
 It checks each library's `42` and `common`, `MOD_DIR`'s `42` and `common`, the dev mod's `42` and
 the harness mod. Translations are read from their `media/lua/shared/Translate` and merged by key

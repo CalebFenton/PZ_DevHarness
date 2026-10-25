@@ -168,75 +168,12 @@ file_history() {
     fi
 }
 
-# Every file of the repository and the harness submodule, tracked or untracked, relative to the
-# repository.
-repo_files() {
-    local submodule=${HARNESS#"$REPO/"}
-    git -C "$REPO" ls-files --cached --others --exclude-standard
-    git -C "$HARNESS" ls-files --cached --others --exclude-standard | sed "s|^|$submodule/|"
-}
-
-# Fails the run on a TEST_MAP glob that matches no file, such as one for a file since renamed,
-# whose new name then runs every test until the conf says what covers it.
-check_test_map() {
-    local files entry glob file found stale=
-    files=$(repo_files)
-    for entry in ${TEST_MAP[@]+"${TEST_MAP[@]}"}; do
-        glob=${entry%%=*}
-        found=
-        while read -r file; do
-            # shellcheck disable=SC2053 # the glob is a pattern
-            if [[ $file == $glob ]]; then
-                found=1
-                break
-            fi
-        done <<< "$files"
-        if [ -z "$found" ]; then
-            echo "--changed: TEST_MAP's $glob matches no file" >&2
-            stale=1
-        fi
-    done
-    if [ -n "$stale" ]; then
-        echo "--changed: fix TEST_MAP in dev/harness.conf" >&2
-        exit 2
-    fi
-}
-
-# What file $1 reaches, in REACH: "-" for none, as for a file outside the mod, the dev mod and
-# the harness mod, such as docs and art; "*" for every test, as for a file there that no TEST_MAP
-# glob covers; else the test prefixes of every glob that matches it, comma-separated, empty for a
-# file no test exercises.
-file_reach() {
-    local roots=("${MOD_DIR#"$REPO/"}/" "${DEV_MOD_DIR#"$REPO/"}/" "${HARNESS_MOD_DIR#"$REPO/"}/")
-    local root under= matched= entry glob prefixes=
-    for root in "${roots[@]}"; do
-        [[ $1 == "$root"* ]] && under=1
-    done
-    if [ -z "$under" ]; then
-        REACH=-
-        return
-    fi
-    for entry in ${TEST_MAP[@]+"${TEST_MAP[@]}"}; do
-        glob=${entry%%=*}
-        # shellcheck disable=SC2053 # the glob is a pattern
-        if [[ $1 == $glob ]]; then
-            matched=1
-            prefixes="$prefixes,${entry#*=}"
-        fi
-    done
-    if [ -z "$matched" ]; then
-        REACH='*'
-        return
-    fi
-    REACH=$(tr ',' '\n' <<< "$prefixes" | sed '/^$/d' | sort -u | paste -sd, -)
-}
-
 # The test prefixes the conf's TEST_MAP gives for the batch's changed files, saying why for each
-# file (file_reach). A library's repository records no batch base for this one, so its changes
-# are not in the batch.
+# file (file_reach), once check_test_map has passed. A library's repository records no batch base
+# for this one, so its changes are not in the batch.
 select_changed() {
     local file picked= everything= relevant=
-    check_test_map
+    check_test_map || exit 2
     echo "--changed: base $BATCH_BASE_SAID"
     if [ ${#LIBRARY_IDS[@]} -gt 0 ]; then
         echo "--changed: changes to the libraries (${LIBRARY_IDS[*]}) are not in the batch; after one, run every test"

@@ -329,6 +329,96 @@ run_precheck() {
     fi
 }
 
+# TEST_MAP ----------------------------------------------------------------------------------------
+
+# The conf's TEST_MAP maps each file of the mods to the tests that reach it (docs/adopting.md), for
+# run-client.sh --changed and the suspects of a failure; static-check.sh and --changed fail while it
+# misses a file (check_test_map). TEST_MAP_GLOBS holds each entry's glob, at the entry's index.
+TEST_MAP_GLOBS=()
+for entry in ${TEST_MAP[@]+"${TEST_MAP[@]}"}; do
+    TEST_MAP_GLOBS+=("${entry%%=*}")
+done
+
+# Every file of the repository and the harness submodule, tracked or untracked, relative to the
+# repository.
+repo_files() {
+    local submodule=${HARNESS#"$REPO/"}
+    git -C "$REPO" ls-files --cached --others --exclude-standard
+    git -C "$HARNESS" ls-files --cached --others --exclude-standard | sed "s|^|$submodule/|"
+}
+
+# Whether file $1, relative to the repository, is one TEST_MAP maps: under the mod, the dev mod or
+# the harness mod. Files elsewhere, such as docs and art, reach no test.
+test_mapped() {
+    local root
+    for root in "${MOD_DIR#"$REPO/"}/" "${DEV_MOD_DIR#"$REPO/"}/" "${HARNESS_MOD_DIR#"$REPO/"}/"; do
+        if [[ $1 == "$root"* ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# The indexes of the TEST_MAP entries whose glob matches file $1, relative to the repository, in
+# MATCHES. A glob is matched with bash's [[ == ]], where * crosses /.
+test_map_matches() {
+    local i
+    MATCHES=()
+    for ((i = 0; i < ${#TEST_MAP_GLOBS[@]}; i++)); do
+        # shellcheck disable=SC2053 # the glob is a pattern
+        if [[ $1 == ${TEST_MAP_GLOBS[i]} ]]; then
+            MATCHES+=("$i")
+        fi
+    done
+}
+
+# What file $1 reaches, in REACH: "-" for none, as for a file TEST_MAP doesn't map (test_mapped);
+# "*" for every test, as for a mapped file that no glob covers; else the test prefixes of every
+# glob that matches it, comma-separated, empty for a file no test exercises.
+file_reach() {
+    local i prefixes=
+    if ! test_mapped "$1"; then
+        REACH=-
+        return
+    fi
+    test_map_matches "$1"
+    if [ ${#MATCHES[@]} -eq 0 ]; then
+        REACH='*'
+        return
+    fi
+    for i in "${MATCHES[@]}"; do
+        prefixes="$prefixes,${TEST_MAP[i]#*=}"
+    done
+    REACH=$(tr ',' '\n' <<< "$prefixes" | sed '/^$/d' | sort -u | paste -sd, -)
+}
+
+# Fails, saying how to fix each, while TEST_MAP misses a file of the repository it maps
+# (test_mapped), whose change would run every test, or has a glob that matches none of those files,
+# such as one for a file since renamed, whose new name then has no line. A conf without TEST_MAP
+# runs every test for any change, so has nothing to miss.
+check_test_map() {
+    local file i status=0 used=()
+    declare -p TEST_MAP > /dev/null 2>&1 || return 0
+    while read -r file; do
+        test_mapped "$file" || continue
+        test_map_matches "$file"
+        if [ ${#MATCHES[@]} -eq 0 ]; then
+            echo "TEST_MAP: $file has no line in dev/harness.conf; add one naming the tests that reach it (nothing after = for none)" >&2
+            status=1
+        fi
+        for i in ${MATCHES[@]+"${MATCHES[@]}"}; do
+            used[i]=1
+        done
+    done < <(repo_files)
+    for ((i = 0; i < ${#TEST_MAP_GLOBS[@]}; i++)); do
+        if [ -z "${used[i]:-}" ]; then
+            echo "TEST_MAP: ${TEST_MAP_GLOBS[i]} matches no file; fix or remove its line in dev/harness.conf" >&2
+            status=1
+        fi
+    done
+    return $status
+}
+
 # Run timing --------------------------------------------------------------------------------------
 
 # One line per run of the client and server scripts, for a look at where the time goes across many

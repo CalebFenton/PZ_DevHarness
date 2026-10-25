@@ -14,7 +14,7 @@ What `dev/run-debug-client.sh` does with each flag, why a run is fast, and the r
 | `--test --mp` | The same in multiplayer: a dedicated server and a client that joins it; see [multiplayer.md](multiplayer.md). |
 | `--test --mp --stay` | Both stay open; the next `--test --mp --stay` reruns the tests in them. |
 | `--test --failed` | Runs only the tests that failed in the last `--test` run of the same kind (with or without `--mp`), and the one a stopped run was in. |
-| `--test --changed` | Runs the tests the conf's `TEST_MAP` gives for the files the batch changed: since the branch left its upstream, committed or not, untracked files included ([choosing tests](#choosing-tests)). Prints the base and each file's share and why. A changed file under the mods that no glob covers runs every test; with nothing changed under the mods, nothing runs. A library's changes are never in the batch: after one, run every test. |
+| `--test --changed` | Runs the tests the conf's `TEST_MAP` gives for the files the batch changed: since the branch left its upstream, committed or not, untracked files included ([choosing tests](#choosing-tests)). Prints the base and each file's share and why. A deleted file under the mods that no glob covers any more runs every test; with nothing changed under the mods, nothing runs. A library's changes are never in the batch: after one, run every test. |
 | `--<mode>` | Runs the mod's handler for the mode and quits. A capture mode with `MODE_CAPTURES_<mode>` then crops its shots into the mod's captures ([adopting.md](adopting.md#capture-modes)); one with `MODE_GROUPS_<mode>` shoots only the groups its selection variable names, every group if it names none, and refuses an unknown name before the game starts. |
 
 `--failed` and `--changed` combine with `--mp` and `--stay`, not with each other or with `TESTS`.
@@ -128,8 +128,9 @@ unstaged or untracked, of the repository and of the harness submodule, mapped th
 agent's worktree branch, counts from where it left `origin/HEAD`, and without that from `HEAD`,
 which leaves out the branch's commits. The harness's own changes count from the harness commit the repository
 recorded at the base. The script prints `--changed: base <hash> (<why>)`, a
-`--changed: <file>: <prefixes>` line per file, and `--changed: running <prefixes>`. It refuses to
-run while a `TEST_MAP` glob matches no file in the repository.
+`--changed: <file>: <prefixes>` line per file, and `--changed: running <prefixes>`. Like
+`dev/static-check.sh`, it refuses to run while `TEST_MAP` misses a file of the mods or has a glob
+that matches none, and says which ([adopting.md](adopting.md#devharnessconf)).
 
 A library of the conf's `LIBRARY_MODS` lives in a repository of its own, whose commits the mod's
 repository doesn't record as it does the harness submodule's, so a batch has no base to count a
