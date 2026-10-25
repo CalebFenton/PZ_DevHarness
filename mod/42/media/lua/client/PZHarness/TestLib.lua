@@ -1308,14 +1308,17 @@ end
 
 --- How many of the script Item `item` (T.inputItem's pick) cover one craft's `input`: a drainable
 --- input that counts uses takes as many full items as its uses need, two sand bags for eight uses;
---- any other input its amount.
+--- any other input its amount. A line naming its own amount for some items (`item 10 [2:Base.Scrap;
+--- Base.Nails]`) asks that many of each and reads 1 as a whole (InputScript.Load); an item the
+--- line doesn't list reads 1 alone (InputScript.getAmount), so the larger of the two is the count.
 function T.inputCount(input, item)
+    local amount = math.max(input:getIntAmount(item:getFullName()), input:getIntAmount())
     if item:isItemType(ItemType.DRAINABLE) and not input:isItemCount() then
         -- The nudge keeps a use delta stored a hair over 1/n from losing its last use to rounding.
         local perItem = math.floor(1 / item:getUseDelta() + 0.0001)
-        return math.ceil(input:getIntAmount() / perItem)
+        return math.ceil(amount / perItem)
     end
-    return input:getIntAmount()
+    return amount
 end
 
 --- What one craft of `recipe` takes, tools included, as T.give items: each input gets
