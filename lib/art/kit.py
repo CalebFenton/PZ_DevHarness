@@ -12,7 +12,7 @@ import random
 import bmesh
 import bpy
 import numpy as np
-from mathutils import Matrix, Vector
+from mathutils import Matrix, Quaternion, Vector
 
 # Directions ---------------------------------------------------------------------------------------
 
@@ -156,23 +156,45 @@ def cylinder(collection, name, mat, radius, height, at=(0, 0, 0), rotate=None, s
 
 
 def tube(collection, name, mat, points, radius, sides=6, up=None):
-    """A cable or pipe along `points`, with closed ends. `up` holds one side of every ring toward it,
-    so a pipe bent in a plane square to `up` doesn't twist round its bends, and two pipes meeting
-    end to end on neighbouring tiles have the same rings. Without it each ring takes a side of its
-    own, which twists round a bend."""
+    """A cable or pipe along `points`, its rings carried along the path without twist: each ring
+    turns from the last only as far as the path bends, so a hose keeps its sides round every bend.
+    `up` turns the first ring to hold a side toward it; a pipe bent in a plane square to `up` keeps
+    that side toward it all along, so pipes meeting end to end on neighbouring tiles have the same
+    rings where they meet. Without `up` the first ring takes a fixed side of its own. A path that
+    ends where it starts closes into a seamless loop with no ends."""
     points = [Vector(p) for p in points]
+    closed = len(points) > 2 and (points[-1] - points[0]).length < 1e-6
+    if closed:
+        points.pop()
+    n = len(points)
+    if closed:
+        tangents = [(points[(i + 1) % n] - points[i - 1]).normalized() for i in range(n)]
+    else:
+        tangents = [(points[min(i + 1, n - 1)] - points[max(i - 1, 0)]).normalized() for i in range(n)]
+    first = tangents[0]
+    across = (Vector(up) - first * first.dot(Vector(up))).normalized() if up else first.orthogonal().normalized()
+    frames = [across]
+    for last, tangent in zip(tangents, tangents[1:]):
+        across = last.rotation_difference(tangent) @ across
+        frames.append(across)
+    if closed:
+        # Carried round a loop that isn't flat, the ring comes back turned about the path; spread
+        # that turn along the loop by length so the last ring meets the first square.
+        back = tangents[-1].rotation_difference(first) @ across
+        turn = math.atan2(first.dot(back.cross(frames[0])), back.dot(frames[0]))
+        steps = [(b - a).length for a, b in zip(points, points[1:] + points[:1])]
+        total, done = sum(steps), 0.0
+        for i in range(1, n):
+            done += steps[i - 1]
+            frames[i] = Quaternion(tangents[i], turn * done / total) @ frames[i]
     bm = bmesh.new()
-    rings = []
-    for i, point in enumerate(points):
-        tangent = (points[min(i + 1, len(points) - 1)] - points[max(i - 1, 0)]).normalized()
-        across = (Vector(up) - tangent * tangent.dot(Vector(up))).normalized() if up else tangent.orthogonal().normalized()
-        other = tangent.cross(across)
-        rings.append([bm.verts.new(point + (across * math.cos(a) + other * math.sin(a)) * radius)
-                      for a in (2 * math.pi * k / sides for k in range(sides))])
-    for a, b in zip(rings, rings[1:]):
+    rings = [[bm.verts.new(point + (across * math.cos(a) + tangent.cross(across) * math.sin(a)) * radius)
+              for a in (2 * math.pi * k / sides for k in range(sides))]
+             for point, tangent, across in zip(points, tangents, frames)]
+    for a, b in zip(rings, rings[1:] + rings[:1] if closed else rings[1:]):
         for k in range(sides):
             bm.faces.new((a[k], a[(k + 1) % sides], b[(k + 1) % sides], b[k]))
-    ends = {bm.faces.new(list(reversed(rings[0]))), bm.faces.new(rings[-1])}
+    ends = set() if closed else {bm.faces.new(list(reversed(rings[0]))), bm.faces.new(rings[-1])}
     _round_sides(bm, ends)
     return _object(name, bm, mat, collection)
 
