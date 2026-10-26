@@ -69,8 +69,8 @@ mistake, never report a correct name. Run over the game's own 1,400 Lua files, `
 | Check | What it catches |
 | --- | --- |
 | `lua-syntax` | A file the game's compiler refuses. |
-| `translation-file` | A `Translate/<LANG>/<Name>.json` whose name `Translator` never loads, or a `<LANG>` folder that is no language of the game's and has no `language.json` of its own. |
-| `translation-json` | Invalid JSON, a non-string value, or a key given twice (only the last counts). |
+| `translation-file` | A `Translate/<LANG>/<Name>.json` whose name `Translator` never loads, or a `<LANG>` folder that is no language of the game's and has no `language.json` of its own. `language.json` declares a language; it is not a translation table. |
+| `translation-json` | Invalid JSON, a non-object file, or a key given twice (only the last counts). Translation tables also reject non-string values; language metadata permits the game's numeric and boolean fields. |
 | `translation-key` | A literal `getText`/`getTextOrNull` key, or a string literal shaped like one of the mod's keys (one with the mod's folder name in it), that no translation answers. `getTextInternal` picks the file by the key's prefix, so an `IGUI_` key in `Tooltip.json` is reported as being in the wrong file. |
 | `translation-extra` | A language with keys English lacks. |
 | `translation-missing` | With `CHECK_ALL_LANGUAGES`, a language of the game's without a translation file or key English has. Without it, missing keys are a note. |
@@ -140,8 +140,9 @@ def widget_labels(mod, game, report):
 
 - `@check` registers `function(mod, game, report)`.
 - `mod` (`rules.Mod`) holds what was read: `lua` (one `luasource` file each, with its tokens,
-  names, strings and tables, its `module` name, whether it is `published`, the Workshop's (the
-  mod's or a library's) rather than the dev mod's or the harness mod's, and its `owner`, the id
+  names, strings and tables, its `module` name, `requires` (literal module names with an optional
+  `.lua` suffix removed, paired with source offsets), whether it is `published`, the Workshop's
+  (the mod's or a library's) rather than the dev mod's or the harness mod's, and its `owner`, the id
   of the published mod or library it ships in), `scripts`, `items`, `recipes`, `entity_recipes`,
   `models`, `translations` (merged over the mods) and `translation_files` (each file's own),
   `sandbox`, `info` (the published mod's `mod.info` lines) and `id`, `libraries` (each library's
@@ -152,6 +153,8 @@ def widget_labels(mod, game, report):
   and `report.saw(what)` counts for the summary line.
 - `rules` has the lookups the built-in checks use, such as `has_entry`, `has_text`,
   `text_problem`, `item_exists`, `recipe_exists`, `packed`, `lua_globals` and `lua_defined`.
+  `lua_globals(mod, game, published=True)` restricts the mod-side definitions to Lua that ships;
+  publication checks use this same lookup rather than a separate definition of a Lua global.
 
 A plugin's rule names and what they catch go in its docstring, as this page lists the built-in
 ones.

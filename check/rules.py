@@ -118,6 +118,8 @@ class Mod:
             for path in self._files("media/lua", ".lua", [root]):
                 lua = luasource.read(path)
                 lua.module = _require_path(path)
+                lua.requires = [(name[:-4] if name.endswith(".lua") else name, at)
+                                for name, at in lua.calls_with_literal("require")]
                 # The Workshop gets these, with the mod or as its libraries; the dev mod and the
                 # harness mod stay home.
                 lua.published = root in owners
@@ -158,7 +160,9 @@ class Mod:
         for path in self._files("media/lua/shared/Translate", ".json", load_order):
             language = os.path.basename(os.path.dirname(path))
             name = os.path.basename(path)[:-len(".json")]
-            table = self._json(path)
+            table = self._json(path, strings=name != "language")
+            if name == "language":     # Languages metadata, not a Translator string table.
+                continue
             self.translation_files.append((language, name, path, table))
             merged = self.translations.setdefault(language, {}).setdefault(name, {})
             merged.update((key, text) for key, text in table.items() if text or key not in merged)
@@ -230,9 +234,8 @@ class Mod:
                     if name.endswith(suffix):
                         yield os.path.join(base, name)
 
-    def _json(self, path):
-        """A translation file's {key: text}, reporting what the game's JSON reader would trip on
-        or quietly lose."""
+    def _json(self, path, strings=True):
+        """A JSON object's fields, rejecting non-string values only for translation tables."""
         duplicates = []
 
         def pairs(items):
@@ -254,9 +257,9 @@ class Mod:
         for key in duplicates:
             self.report.fail("translation-json", path, None, "%s is given twice, and only the last one counts" % key)
         for key, value in data.items():
-            if not isinstance(value, str):
+            if strings and not isinstance(value, str):
                 self.report.fail("translation-json", path, None, "%s is not a string" % key)
-        return {key: value for key, value in data.items() if isinstance(value, str)}
+        return {key: value for key, value in data.items() if isinstance(value, str)} if strings else data
 
     def english(self, file_name):
         return self.translations.get("EN", {}).get(file_name, {})
@@ -389,18 +392,17 @@ def lua_defined(mod, game):
     return mod._functions
 
 
-def lua_globals(mod, game):
-    """Every global some Lua or the engine defines."""
-    if not hasattr(mod, "_globals"):
-        known = set(game.globals) | set(game.classes) | game.lua_globals
+def lua_globals(mod, game, published=False):
+    """Every global some Lua or the engine defines; optionally only the Lua that ships."""
+    cache = "_published_globals" if published else "_globals"
+    if not hasattr(mod, cache):
+        known = set(game.globals) | set(game.classes) | game.lua_globals | game.lua_members.get("_G", set())
         for lua in mod.lua:
-            known |= lua.globals
-        # _G.name = ... defines a global too.
-        known |= game.lua_members.get("_G", set())
-        for lua in mod.lua:
-            known |= {key for table, key in lua.members if table == "_G"}
-        mod._globals = known
-    return mod._globals
+            if not published or lua.published:
+                # _G.name = ... defines a global too.
+                known |= lua.globals | {key for table, key in lua.members if table == "_G"}
+        setattr(mod, cache, known)
+    return getattr(mod, cache)
 
 
 def lua_members(mod, game, table):
@@ -705,6 +707,8 @@ def model_texture(mod, game, report):
 
 @check
 def recipes(mod, game, report):
+    tags = game.tags | {tag.strip().lower() for item in mod.items.values()
+                        for value in item.block.all("Tags") for tag in value.value.split(";")}
     for name, (block, module, path) in sorted(mod.recipes.items()):
         report.saw("craft recipes")
         learned = block.get("NeedToBeLearn")
@@ -737,7 +741,7 @@ def recipes(mod, game, report):
                     if prefix == "tags":
                         for tag in entries:
                             report.saw("recipe tags")
-                            if tag.lower() not in game.tags and not _mod_tag(mod, tag):
+                            if tag.lower() not in tags:
                                 report.fail("recipe-tag", path, value.line, "no item carries tag %s, so this "
                                             "input can never be met" % tag)
                     elif prefix == "":
@@ -766,12 +770,6 @@ def recipes(mod, game, report):
                             "looks up a plain global name" % menu.value)
             elif menu.value not in lua_globals(mod, game):
                 report.fail("recipe-hook", path, menu.line, "OnAddToMenu = %s is no global function" % menu.value)
-
-
-def _mod_tag(mod, tag):
-    tag = tag.lower()
-    return any(tag in (t.strip().lower() for v in item.block.all("Tags") for t in v.value.split(";"))
-               for item in mod.items.values())
 
 
 def _lua_path_defined(mod, game, target):
@@ -852,14 +850,8 @@ def sandbox_options(mod, game, report):
 
 @check
 def sandbox_vars(mod, game, report):
-    declared = set()
-    groups = set()
-    if mod.sandbox:
-        for block in mod.sandbox[1].children:
-            if block.id:
-                declared.add(block.id)
-                if "." in block.id:
-                    groups.add(block.id.split(".")[0])
+    declared = {block.id for block in mod.sandbox[1].children if block.id} if mod.sandbox else set()
+    groups = {name.split(".")[0] for name in declared if "." in name}
     for lua in mod.lua:
         aliases = _sandbox_aliases(lua, groups)
         for chain in lua.chains:
@@ -994,9 +986,8 @@ def require_path(mod, game, report):
     modules = game.lua_modules | {lua.module for lua in mod.lua if lua.module}
     lowered = {m.lower(): m for m in modules}
     for lua in mod.lua:
-        for name, at in lua.calls_with_literal("require"):
+        for name, at in lua.requires:
             report.saw("requires")
-            name = name[:-len(".lua")] if name.endswith(".lua") else name
             if name in modules:
                 continue
             if name.lower() in lowered:
@@ -1015,18 +1006,9 @@ def unpublished_lua(mod, game, report):
     published = [lua for lua in mod.lua if lua.published]
     modules = game.lua_modules | {lua.module for lua in published if lua.module}
     dev_modules = {lua.module for lua in mod.lua if lua.module and not lua.published} - modules
-    known = set(game.globals) | set(game.classes) | game.lua_globals | game.lua_members.get("_G", set())
-    dev_globals = set()
-    for lua in mod.lua:
-        names = lua.globals | {key for table, key in lua.members if table == "_G"}
-        if lua.published:
-            known |= names
-        else:
-            dev_globals |= names
-    dev_globals -= known
+    dev_globals = lua_globals(mod, game) - lua_globals(mod, game, published=True)
     for lua in published:
-        for name, at in lua.calls_with_literal("require"):
-            name = name[:-len(".lua")] if name.endswith(".lua") else name
+        for name, at in lua.requires:
             if name in dev_modules:
                 report.fail("unpublished-lua", lua.path, lua.line(at), "require \"%s\" is a dev-mod or harness "
                             "module, which the published mod lacks; move the code that needs it into the dev mod"
@@ -1072,8 +1054,7 @@ def library_require(mod, game, report):
         # The mod's own require= is held to LIBRARY_MODS above.
         if lua.owner not in requires:
             continue
-        for name, at in lua.calls_with_literal("require"):
-            name = name[:-len(".lua")] if name.endswith(".lua") else name
+        for name, at in lua.requires:
             found = owners.get(name, set())
             if not found or lua.owner in found or found & requires[lua.owner] or name in game.lua_modules:
                 continue
