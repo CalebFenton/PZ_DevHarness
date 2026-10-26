@@ -397,6 +397,7 @@ end
 -- in the action queue if not the current action. Returns the condition a queued wait polls.
 local function call(self, name, args, itemsKey, onReply, index)
     local phase, given, sinceMs, asked, answer, onAnswer = "asking", nil, nil, nil, nil, nil
+    local items
     local function fail(what)
         T.need(self, nil, what)
         dropQueuedSteps()
@@ -436,7 +437,7 @@ local function call(self, name, args, itemsKey, onReply, index)
             end
         end
         if phase == "receiving" or phase == "dressing" then
-            local items = clientCopies(given)
+            items = items or clientCopies(given)
             if items and phase == "receiving" and needsDressing(given) then
                 ask("PZHarness.dress", { given = given }, function()
                     phase, sinceMs = "dressing", getTimestampMs()
@@ -516,7 +517,7 @@ function T.serverUntil(self, name, args, done, maxMs)
             if not poll() then
                 return false
             end
-            if done(self.server[name]) or getTimestampMs() - sinceMs > (maxMs or RECEIVE_MS) then
+            if #self.missing > 0 or done(self.server[name]) or getTimestampMs() - sinceMs > (maxMs or RECEIVE_MS) then
                 return true
             end
         end

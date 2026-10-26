@@ -78,6 +78,11 @@ early when `isClient()`) is empty, so what only the authority can do goes throug
   between tests. An undo the server reports failed after the verdict prints its own `FAIL` line
   and counts in `DONE`.
 
+A failed `serverUntil` call stops polling without invoking its success predicate: the handler's
+error or missing fixture is already the failure, and there is no successful reply to inspect.
+Item reception retains the client's copies once all arrive, rather than searching the inventory
+again on every tick while waiting for equipment synchronization.
+
 A test that can't run in one mode says why: `spOnly = "<why>"` or `mpOnly = "<why>"` in its spec.
 The runner skips it in the other mode and prints `<TAG> SKIP <name>: single player only: <why>`
 (or `multiplayer only`). A missing reason, or both fields, fails the test in every mode.
