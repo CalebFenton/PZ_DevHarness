@@ -71,13 +71,11 @@ if { [ -n "$FAILED" ] || [ -n "$CHANGED" ]; } && [ -n "${TESTS:-}" ]; then
     echo "TESTS picks the tests itself; leave it out with --failed or --changed" >&2
     exit 2
 fi
+CACHE="${CACHE:-$TMP_REAL/$CACHE_NAME-${MP:+mp}client}"
 if [ -n "$MP" ]; then
-    CACHE="${CACHE:-$TMP_REAL/$CACHE_NAME-mpclient}"
     SERVER_CACHE="${SERVER_CACHE:-$TMP_REAL/$CACHE_NAME-mpserver}"
     # Off the default 16261, so a real server can keep running.
     SERVER_PORT=${SERVER_PORT:-16361}
-else
-    CACHE="${CACHE:-$TMP_REAL/$CACHE_NAME-client}"
 fi
 # What the run does, comma-separated: for --test TESTS name prefixes or exact "=<name>" names
 # (from --failed or --changed when given), else the variable the conf names in
@@ -544,7 +542,7 @@ if [ -n "$SESSION_PID" ]; then
     timing_mark launch
     RUN_LOG="$CACHE/console-rerun.txt"
     echo "rerunning the tests in the game kept open by --stay (pid $SESSION_GAMES)"
-    keep_games_on_exit "$SESSION_PID"
+    LOCK_OWNER=$SESSION_PID
 else
     prepare_cache
     GAME=("$JAVA" "${JVM_COMMON[@]}" -XstartOnFirstThread -Xmx3072m -XX:+UseZGC)
@@ -556,9 +554,7 @@ else
     LAUNCHER="$CACHE/launcher"
     compile_java "$HARNESS/java/ClickToStart.java" "$LAUNCHER"
 
-    # Whatever fails from here on, the games started so far stop with the script; only a --stay run
-    # that launched its client hands them on instead, below.
-    stop_games_on_exit
+    # The lock's EXIT trap stops every game started here unless --stay sets LOCK_OWNER below.
     if [ -n "$MP" ]; then
         prepare_mp_server
         SERVER_RUN_LOG=$SERVER_LOG
@@ -588,11 +584,11 @@ else
         # client runs, stops the server once the client has quit (it does after its idle time),
         # and exits once both are gone, so the lock is free only then.
         (caffeinate -d -i -w "$GAME_PID"; stop_pid "$SERVER_PID") < /dev/null > /dev/null 2>&1 &
-        keep_games_on_exit $!
+        LOCK_OWNER=$!
     elif [ -n "$STAY" ]; then
         # Keeps the display awake for the kept game, after this script exits.
         caffeinate -d -i -w "$GAME_PID" < /dev/null > /dev/null 2>&1 &
-        keep_games_on_exit
+        LOCK_OWNER=$GAME_PID
     fi
 fi
 

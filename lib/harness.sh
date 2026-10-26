@@ -189,7 +189,8 @@ acquire_game_lock() {
         sleep 2
     done
     echo $$ > "$GAME_LOCK/pid"
-    trap 'exit_report $?; release_game_lock' EXIT
+    GAME_PID= SERVER_PID= LOCK_OWNER=
+    trap 'exit_report $?; finish_games' EXIT
     if [ -n "$SESSION_PID" ] && [ "${1:-}" != reuse ]; then
         echo "stopping the game kept open by --stay"
         stop_session
@@ -291,32 +292,21 @@ stop_games() {
     fi
 }
 
-# Background jobs of a script ignore Ctrl-C, so a game started in the background would outlive the
-# script. Stops the games when the script exits, and releases the lock only once they have exited.
-stop_games_on_exit() {
-    trap 'exit_report $?; stop_games; release_game_lock' EXIT
-}
-
-# For --stay: when the script exits, hands the lock to the kept game if all of it still runs, with
-# $1 as the lock's owner (the client by default).
-keep_games_on_exit() {
-    LOCK_OWNER=${1:-$GAME_PID}
-    trap 'exit_report $?; hand_lock_to_game' EXIT
-}
-
-hand_lock_to_game() {
-    local games="$GAME_PID${SERVER_PID:+ $SERVER_PID}" pid running=1
-    for pid in $games $LOCK_OWNER; do
+# Finishes the lock's lifecycle in one EXIT trap. LOCK_OWNER keeps a --stay session alive;
+# otherwise all games stop before the lock is released.
+finish_games() {
+    local games="${GAME_PID:-}${SERVER_PID:+ $SERVER_PID}" pid running=${LOCK_OWNER:-}
+    for pid in $games ${LOCK_OWNER:-}; do
         kill -0 "$pid" 2>/dev/null || running=
     done
     if [ -n "$running" ] && [ "$(cat "$GAME_LOCK/pid" 2>/dev/null)" = "$$" ]; then
         printf '%s\n%s\n%s\n' "$LOCK_OWNER" "$CACHE" "$games" > "$GAME_LOCK/session"
         echo "$LOCK_OWNER" > "$GAME_LOCK/pid"
         echo "the game stays open (pid $games); the next --stay run of the same kind reruns the tests in it"
-    else
-        stop_games
-        release_game_lock
+        return
     fi
+    stop_games
+    release_game_lock
 }
 
 # Runs the conf's PRECHECK, normally the mod's dev/static-check.sh, from the repository, and fails
@@ -331,13 +321,9 @@ run_precheck() {
 
 # TEST_MAP ----------------------------------------------------------------------------------------
 
-# The conf's TEST_MAP maps each file of the mods to the tests that reach it (docs/adopting.md), for
-# run-client.sh --changed and the suspects of a failure; static-check.sh and --changed fail while it
-# misses a file (check_test_map). TEST_MAP_GLOBS holds each entry's glob, at the entry's index.
-TEST_MAP_GLOBS=()
-for entry in ${TEST_MAP[@]+"${TEST_MAP[@]}"}; do
-    TEST_MAP_GLOBS+=("${entry%%=*}")
-done
+# The conf's TEST_MAP maps each file of the mods to the tests that reach it (docs/adopting.md),
+# for run-client.sh --changed and the suspects of a failure. static-check.sh and --changed fail
+# while it misses a file (check_test_map).
 
 # Every file of the repository and the harness submodule, tracked or untracked, relative to the
 # repository.
@@ -347,41 +333,32 @@ repo_files() {
     git -C "$HARNESS" ls-files --cached --others --exclude-standard | sed "s|^|$submodule/|"
 }
 
-# Whether file $1, relative to the repository, is one TEST_MAP maps: under the mod, the dev mod or
-# the harness mod. Files elsewhere, such as docs and art, reach no test.
-test_mapped() {
-    local root
-    for root in "${MOD_DIR#"$REPO/"}/" "${DEV_MOD_DIR#"$REPO/"}/" "${HARNESS_MOD_DIR#"$REPO/"}/"; do
-        if [[ $1 == "$root"* ]]; then
-            return 0
-        fi
-    done
-    return 1
-}
-
-# The indexes of the TEST_MAP entries whose glob matches file $1, relative to the repository, in
-# MATCHES. A glob is matched with bash's [[ == ]], where * crosses /.
+# Sets MATCHES to TEST_MAP's entry indexes for file $1, relative to the repository. Fails only
+# outside the mods TEST_MAP covers; a mapped file with no matching glob has an empty MATCHES.
 test_map_matches() {
-    local i
+    local entry i=0
     MATCHES=()
-    for ((i = 0; i < ${#TEST_MAP_GLOBS[@]}; i++)); do
+    case $1 in
+        "${MOD_DIR#"$REPO/"}/"* | "${DEV_MOD_DIR#"$REPO/"}/"* | "${HARNESS_MOD_DIR#"$REPO/"}/"*) ;;
+        *) return 1 ;;
+    esac
+    for entry in ${TEST_MAP[@]+"${TEST_MAP[@]}"}; do
         # shellcheck disable=SC2053 # the glob is a pattern
-        if [[ $1 == ${TEST_MAP_GLOBS[i]} ]]; then
-            MATCHES+=("$i")
-        fi
+        [[ $1 != ${entry%%=*} ]] || MATCHES+=("$i")
+        i=$((i + 1))
     done
+    return 0
 }
 
-# What file $1 reaches, in REACH: "-" for none, as for a file TEST_MAP doesn't map (test_mapped);
+# What file $1 reaches, in REACH: "-" for none, as for a file outside the mods TEST_MAP covers;
 # "*" for every test, as for a mapped file that no glob covers; else the test prefixes of every
 # glob that matches it, comma-separated, empty for a file no test exercises.
 file_reach() {
     local i prefixes=
-    if ! test_mapped "$1"; then
+    if ! test_map_matches "$1"; then
         REACH=-
         return
     fi
-    test_map_matches "$1"
     if [ ${#MATCHES[@]} -eq 0 ]; then
         REACH='*'
         return
@@ -392,16 +369,14 @@ file_reach() {
     REACH=$(tr ',' '\n' <<< "$prefixes" | sed '/^$/d' | sort -u | paste -sd, -)
 }
 
-# Fails, saying how to fix each, while TEST_MAP misses a file of the repository it maps
-# (test_mapped), whose change would run every test, or has a glob that matches none of those files,
-# such as one for a file since renamed, whose new name then has no line. A conf without TEST_MAP
-# runs every test for any change, so has nothing to miss.
+# Fails, saying how to fix each, while TEST_MAP misses a mapped file, whose change would run every
+# test, or has a glob that matches none of those files, such as one for a file since renamed.
+# A conf without TEST_MAP runs every test for any change, so has nothing to miss.
 check_test_map() {
     local file i status=0 used=()
     declare -p TEST_MAP > /dev/null 2>&1 || return 0
     while read -r file; do
-        test_mapped "$file" || continue
-        test_map_matches "$file"
+        test_map_matches "$file" || continue
         if [ ${#MATCHES[@]} -eq 0 ]; then
             echo "TEST_MAP: $file has no line in dev/harness.conf; add one naming the tests that reach it (nothing after = for none)" >&2
             status=1
@@ -410,9 +385,9 @@ check_test_map() {
             used[i]=1
         done
     done < <(repo_files)
-    for ((i = 0; i < ${#TEST_MAP_GLOBS[@]}; i++)); do
+    for ((i = 0; i < ${#TEST_MAP[@]}; i++)); do
         if [ -z "${used[i]:-}" ]; then
-            echo "TEST_MAP: ${TEST_MAP_GLOBS[i]} matches no file; fix or remove its line in dev/harness.conf" >&2
+            echo "TEST_MAP: ${TEST_MAP[i]%%=*} matches no file; fix or remove its line in dev/harness.conf" >&2
             status=1
         fi
     done
@@ -592,6 +567,10 @@ stop_server() {
 # doesn't match SERVER_IGNORE, or one matching the extended regex $2 if given. Fails if there are
 # none.
 server_problems() {
-    grep -n -E "$MOD_ERROR${SERVER_PROBLEMS:+|$SERVER_PROBLEMS}${2:+|$2}" "$1" \
-        | { if [ -n "${SERVER_IGNORE:-}" ]; then grep -v -E "$SERVER_IGNORE"; else cat; fi; }
+    PROBLEMS="$MOD_ERROR${SERVER_PROBLEMS:+|$SERVER_PROBLEMS}${2:+|$2}" IGNORE="${SERVER_IGNORE:-}" awk '
+        $0 ~ ENVIRON["PROBLEMS"] && (ENVIRON["IGNORE"] == "" || $0 !~ ENVIRON["IGNORE"]) {
+            print NR ":" $0
+            found = 1
+        }
+        END { exit !found }' "$1"
 }

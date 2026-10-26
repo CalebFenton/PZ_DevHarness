@@ -287,13 +287,17 @@ the worktree; `dev/.runs-failed` stays with each checkout. The mod should gitign
   `$TMPDIR/PZ_DevHarness-game.lock` and waits while another holds it; a lock whose owner died
   is taken over. A kept `--stay` game (with `--mp` its client and server) holds the lock itself,
   and the next run that needs the game stops it, unless that run is a `--stay` run of the same
-  cache dir that can rerun in it. A game that hasn't exited 30 seconds after it was asked to is
-  killed, so a hung game never holds the lock for good.
+  cache dir that can rerun in it. The lock's exit cleanup either hands ownership to the kept
+  game or stops its games before releasing it, including when setup fails. A game that hasn't
+  exited 30 seconds after it was asked to is killed, so a hung game never holds the lock for good.
 - The published mod and its libraries are copied into the cache's `mods` folder, not linked, and
   the cache dir is under the real path of `$TMPDIR`: the game reads tile depth maps by absolute
   path and refuses paths through a symlink (`ZomboidFileSystem.validatePrefix`). The dev mod and
   the harness mod have no tiles and are linked. A client run enables the libraries first, in the
   conf's order, then the mod, the harness mod and the dev mod; a server, the same in its `Mods=`.
+- Server problem patterns (`SERVER_PROBLEMS`, `SERVER_IGNORE` and stack traces through the mods)
+  match the original log message, before the script adds line numbers. An anchored ignore such
+  as `^WARN` therefore excludes matching messages in both validation and multiplayer reports.
 - Every run in a mode starts a new world, and its save stays in `<cache>/Saves/Sandbox`; a run
   deletes all but the three newest before it starts. A plain run keeps them.
 - The launchers (`java/`) compile into `<cache>/launcher`, which a mod's checkouts share. A build

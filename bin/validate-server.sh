@@ -30,7 +30,6 @@ acquire_game_lock
 # The phases are timed from here, after any wait for another script's game.
 timing_mark start
 prepare_server "$PUBLISHED_MODS"
-stop_games_on_exit
 timing_mark launch
 start_server
 
