@@ -1035,15 +1035,6 @@ function T.placeBench(self, entity, sprite)
     end, "a " .. entity)
 end
 
--- Queues a wait until `condition()` holds on this client, at most RECEIVE_MS.
-local function waitOnClient(condition)
-    local sinceMs
-    queueWait(math.huge, nil, function()
-        sinceMs = sinceMs or getTimestampMs()
-        return condition() or getTimestampMs() - sinceMs > RECEIVE_MS
-    end)
-end
-
 --- Puts the character in the middle of the free square next to `square` that vanilla's walkAdj
 --- would walk it to (AdjacentFreeTileFinder.Find), or of its own square if there is none, facing
 --- `square`, so the walk that a menu option or an action queues before its job has no way to go
@@ -1085,10 +1076,10 @@ function T.goNextTo(self, square)
         return
     end
     -- The character's square catches up with a teleport only on its next update.
-    waitOnClient(function()
+    queueUntil(function()
         local here = T.player():getCurrentSquare()
         return here ~= nil and here:getX() == at.x and here:getY() == at.y
-    end)
+    end, RECEIVE_MS)
     T.server(self, "PZHarness.moveTo", function() return at end)
 end
 
@@ -1124,7 +1115,7 @@ function T.placeAsPlayer(self, square, itemType, sprite, modData)
         if not T.need(self, moveablesAction(square, "place", sprite, self.items[key][1], nil), "a way to place a " .. itemType) then
             return
         end
-        waitOnClient(function() return T.objectWithSprite(square, sprite) ~= nil end)
+        queueUntil(function() return T.objectWithSprite(square, sprite) ~= nil end, RECEIVE_MS)
         T.server(self, "PZHarness.trackPlaced", { x = handle.x, y = handle.y, z = handle.z, sprite = sprite })
         queueWait(1, function()
             handle.object = T.need(self, T.objectWithSprite(square, sprite), "this client's copy of a placed " .. itemType)
@@ -1144,7 +1135,7 @@ function T.pickUpAsPlayer(self, at, sprite)
         if not T.need(self, object and moveablesAction(square, "pickup", sprite, nil, object), "a way to pick up the " .. sprite) then
             return
         end
-        waitOnClient(function() return T.objectWithSprite(square, sprite) == nil end)
+        queueUntil(function() return T.objectWithSprite(square, sprite) == nil end, RECEIVE_MS)
     end)
 end
 
@@ -1244,11 +1235,9 @@ T.countPairs = PZHarness.Fixtures.countPairs
 
 -- Recipes
 
---- Every craftRecipe whose name starts with `prefix` (the `recipePrefix` setting by default).
-function T.recipeNames(prefix)
+local function recipeNames(recipes, prefix)
     prefix = prefix or settings().recipePrefix or ""
     local names = {}
-    local recipes = getScriptManager():getAllCraftRecipes()
     for i = 0, recipes:size() - 1 do
         local name = recipes:get(i):getName()
         if PZHarness.startsWith(name, prefix) then
@@ -1258,19 +1247,15 @@ function T.recipeNames(prefix)
     return names
 end
 
+--- Every craftRecipe whose name starts with `prefix` (the `recipePrefix` setting by default).
+function T.recipeNames(prefix)
+    return recipeNames(getScriptManager():getAllCraftRecipes(), prefix)
+end
+
 --- Every build menu recipe whose name starts with `prefix` (the `recipePrefix` setting by
 --- default): the entities' recipes, which getAllCraftRecipes, and so T.recipeNames, leaves out.
 function T.buildRecipeNames(prefix)
-    prefix = prefix or settings().recipePrefix or ""
-    local names = {}
-    local recipes = getScriptManager():getAllBuildableRecipes()
-    for i = 0, recipes:size() - 1 do
-        local name = recipes:get(i):getName()
-        if PZHarness.startsWith(name, prefix) then
-            table.insert(names, name)
-        end
-    end
-    return names
+    return recipeNames(getScriptManager():getAllBuildableRecipes(), prefix)
 end
 
 --- Teaches `player` every recipe whose name starts with `prefix` (the `recipePrefix` setting by

@@ -22,7 +22,7 @@ local SESSION = getTimestampMs()
 -- Unanswered requests by id: { onAnswer, kind, request, sentMs, answer, answeredMs }, `answer`
 -- once it has come while an earlier request still waits for its own.
 local pending = {}
-local lastId = 0
+local firstId, lastId = 1, 0
 -- Real milliseconds with at least one request unanswered, up to the last time none was, and since
 -- when one has been unanswered now; overlapping requests count once.
 local waitedMs, waitingSinceMs = 0, nil
@@ -56,10 +56,7 @@ end
 
 --- Whether a request is still waiting for its answer.
 function ServerCalls.busy()
-    for _ in pairs(pending) do
-        return true
-    end
-    return false
+    return pending[firstId] ~= nil
 end
 
 --- Real milliseconds so far that some request was waiting for its answer, for the runner's summary
@@ -88,17 +85,12 @@ end
 -- An answer's caller may send more requests meanwhile, which come after.
 local function deliver()
     while true do
-        local first
-        for id in pairs(pending) do
-            if not first or id < first then
-                first = id
-            end
-        end
-        local entry = first and pending[first]
+        local entry = pending[firstId]
         if not (entry and entry.answer) then
             return
         end
-        pending[first] = nil
+        pending[firstId] = nil
+        firstId = firstId + 1
         if not ServerCalls.busy() then
             waitedMs = waitedMs + getTimestampMs() - waitingSinceMs
             waitingSinceMs = nil

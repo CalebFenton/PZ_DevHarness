@@ -60,7 +60,8 @@ early when `isClient()`) is empty, so what only the authority can do goes throug
   set order (`PacketTypes.ClientCommand`), and two sent in the same tick do arrive swapped, so each
   request carries the session of the client's Lua and its id: the server serves a client's
   requests in the order they were sent, holding one that comes early, and the client hands out the
-  answers in that order too, so the undos stay in the order the calls were made.
+  answers in that order too, so the undos stay in the order the calls were made. Client delivery
+  advances a sequential queue head rather than searching all pending requests for each answer.
 - A round trip takes about 25 ms, so a call need not wait for the answer before it when nothing
   in between happens on this client: one whose `args` is a table goes out as soon as only waits
   for answers that change nothing on the server are queued before it (the setters', and `T.give`'s
