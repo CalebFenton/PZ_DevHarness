@@ -31,14 +31,6 @@ function T.buildSite(self)
     return found and found[1]
 end
 
---- Sets the character's skills to the levels `recipe` requires, until the test ends (T.setPerk).
-function T.setRecipeSkills(self, recipe)
-    for i = 0, recipe:getRequiredSkillCount() - 1 do
-        local skill = recipe:getRequiredSkill(i)
-        T.setPerk(self, skill:getPerk(), skill:getLevel())
-    end
-end
-
 -- Why the build menu refuses `recipe` to the character, checked in the game's order
 -- (CraftRecipeManager.isValidRecipeForCharacter, then CraftRecipeData.canPerform): the recipe
 -- unknown, a skill short, the dark, else the inputs.

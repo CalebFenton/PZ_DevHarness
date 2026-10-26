@@ -220,15 +220,84 @@ function T.startCraft(self, recipe, from, bench)
     end)
 end
 
---- Registers a test that crafts `spec.recipe` from the first `spec.from` item via the right-click
---- menu or, with `spec.bench` ({ entity script, sprite }, see T.bench), via that workstation's
---- window; instantly unless `spec.instant` is false. The character knows the mod's recipes, has the
---- required levels, stands by a table and carries exactly one craft's inputs (T.recipeInputs with
---- `spec.prefer`, copies in `self.items.inputs`) plus what `spec.setup(self)` adds. validate()
---- expects `spec.counts` in the server copy's inventory or at its feet (T.count into
---- `self.counts.craft`), and when `spec.refused` the game refusing the craft, then runs
---- `spec.validate(self)`; `spec.after(self)` may queue more reads before that. A failing test also
---- reports why the game refused the craft.
+-- The queued operation behind both entry points. Registered tests keep their all-recipe learning,
+-- minimum skills and deferred setup; a craft within a larger test knows only its target and runs
+-- ready now, so its queued input changes precede the native actions.
+local function craft(self, name, from, counted, opts, registered)
+    opts = opts or {}
+    local p = T.player()
+    local recipe = T.need(self, getScriptManager():getCraftRecipe(name), "the recipe " .. name)
+    if not recipe then return false end
+    if registered then
+        -- Avoid another multiplayer round trip once a previous craft test taught them all.
+        for _, recipeName in ipairs(T.recipeNames()) do
+            if not p:isRecipeActuallyKnown(recipeName) then
+                T.learnRecipes(p)
+                break
+            end
+        end
+    else
+        T.knowRecipes(self, { name }, true)
+    end
+    if registered or opts.workTable then T.placeWorkTable(p) end
+    if not registered then T.setRecipeSkills(self, recipe) end
+    local bench = opts.bench and T.placeBench(self, opts.bench[1], opts.bench[2])
+    if opts.bench and not bench then return false end
+    if registered and opts.prepare then
+        opts.prepare(self, recipe)
+    else
+        if registered then T.setRecipeSkills(self, recipe, true) end
+        local inputs, unmatched = T.recipeInputs(recipe, opts.prefer)
+        if not T.need(self, #unmatched == 0, "an item for " .. table.concat(unmatched, "; ")) then return false end
+        T.give(self, "inputs", inputs)
+    end
+    local function queueCraft()
+        if registered then
+            if opts.setup then opts.setup(self) end
+            -- Registered tests retain the native refusal diagnostic if the light never settles.
+            Runtime.waitForLight(true)
+        else
+            T.waitForLight(self)
+        end
+        T.step(function()
+            local item = T.need(self, p:getInventory():getFirstTypeRecurse(from), "a " .. from .. " to craft from")
+            if not item then return end
+            T.startCraft(self, recipe, item, bench and bench.object)
+            -- Added in this step after the native actions, before any caller's later reads.
+            T.count(self, "craft", counted, { dropped = not registered or opts.dropped ~= false })
+            if registered and opts.after then
+                T.step(function() opts.after(self) end)
+            end
+        end)
+    end
+    if registered then
+        T.step(queueCraft)
+    else
+        if opts.ready then opts.ready(self) end
+        queueCraft()
+    end
+    return true
+end
+
+--- Queues crafting `name` from the first carried `from` (full type), then counts `counted` types
+--- into self.counts.craft, including dropped outputs. Returns whether preparation queued the
+--- craft, not whether the game will accept it. Knows only this recipe until the test ends, sets
+--- its exact required skills, and gives one craft's inputs (T.recipeInputs with `opts.prefer`).
+--- `opts.workTable` ensures a nearby table; `opts.bench` is { entity script, sprite } (T.placeBench).
+--- `opts.ready(self)` runs now to queue input changes, before waiting for light and crafting.
+function T.craft(self, name, from, counted, opts)
+    return craft(self, name, from, counted, opts, false)
+end
+
+--- Registers a test around the queued craft operation, instantly unless `spec.instant` is false.
+--- Crafts `spec.recipe` from the first `spec.from` via the right-click menu or `spec.bench`'s
+--- window. Knows all the mod's recipes, ensures a table, and by default raises skills to at least
+--- the requirements and gives T.recipeInputs with `spec.prefer` into self.items.inputs.
+--- `spec.prepare(self, recipe)` replaces only that skill/input preparation; `spec.setup(self)`
+--- runs once its queued preparation has finished and may queue more changes before the craft.
+--- Counts into self.counts.craft, including dropped items unless `spec.dropped` is false, then
+--- runs `spec.after(self)` in a step for further reads. validate expects `spec.counts` and, with
+--- `spec.refused`, a refusal, then runs `spec.validate(self)`. Failures include craft diagnostics.
 function T.craftTest(name, spec)
     local counted = {}
     for fullType in pairs(spec.counts or {}) do
@@ -241,48 +310,7 @@ function T.craftTest(name, spec)
         spOnly = spec.spOnly,
         mpOnly = spec.mpOnly,
         run = function(self)
-            local p = T.player()
-            local recipe = T.need(self, getScriptManager():getCraftRecipe(spec.recipe), "the recipe " .. spec.recipe)
-            if not recipe then return end
-            -- Once the first craft test has taught them all, learning them again would only cost
-            -- a multiplayer client a server round trip.
-            for _, name in ipairs(T.recipeNames()) do
-                if not p:isRecipeActuallyKnown(name) then
-                    T.learnRecipes(p)
-                    break
-                end
-            end
-            T.placeWorkTable(p)
-            local bench = spec.bench and T.placeBench(self, spec.bench[1], spec.bench[2])
-            if spec.bench and not bench then return end
-            -- Set on both sides even when this client's copy has the level already: it may be a
-            -- perk sync ahead of the server's, which refuses the craft at perform without a word
-            -- (CraftRecipeManager.isValidRecipeForCharacter) while this client's action completes.
-            for i = 0, recipe:getRequiredSkillCount() - 1 do
-                local skill = recipe:getRequiredSkill(i)
-                T.setPerk(self, skill:getPerk(), math.max(p:getPerkLevel(skill:getPerk()), skill:getLevel()))
-            end
-            local inputs, unmatched = T.recipeInputs(recipe, spec.prefer)
-            if not T.need(self, #unmatched == 0, "an item for " .. table.concat(unmatched, "; ")) then return end
-            T.give(self, "inputs", inputs)
-            T.step(function()
-                if spec.setup then
-                    spec.setup(self)
-                end
-                -- The light can still lag the clock the previous test put back, and the game
-                -- refuses a craft in the dark; the test is about the craft, not the dusk.
-                Runtime.waitForLight(true)
-                T.step(function()
-                    local from = T.need(self, p:getInventory():getFirstTypeRecurse(spec.from), "a " .. spec.from .. " to craft from")
-                    if not from then return end
-                    T.startCraft(self, recipe, from, bench and bench.object)
-                    -- Queued after the craft's actions, which T.startCraft has just queued.
-                    T.count(self, "craft", counted, { dropped = true })
-                    if spec.after then
-                        T.step(function() spec.after(self) end)
-                    end
-                end)
-            end)
+            craft(self, spec.recipe, spec.from, counted, spec, true)
         end,
         validate = function(self)
             local counts = self.counts.craft or {}

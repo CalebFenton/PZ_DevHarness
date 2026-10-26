@@ -62,6 +62,19 @@ function T.knowRecipes(self, names, known)
     T.server(self, "PZHarness.knowRecipes", { names = names, known = known })
 end
 
+--- Sets the character's skills to the levels `recipe` requires until the test ends (T.setPerk).
+--- With `keepHigher`, retains any higher level. Sets both sides even when the client already
+--- has the level: its perk sync can be ahead of the server, which would refuse at perform.
+function T.setRecipeSkills(self, recipe, keepHigher)
+    local player = T.player()
+    for i = 0, recipe:getRequiredSkillCount() - 1 do
+        local skill = recipe:getRequiredSkill(i)
+        local level = skill:getLevel()
+        if keepHigher then level = math.max(player:getPerkLevel(skill:getPerk()), level) end
+        T.setPerk(self, skill:getPerk(), level)
+    end
+end
+
 --- Every craftRecipe and build menu recipe whose name starts with `prefix` (the `recipePrefix`
 --- setting by default) that a character has to learn (NeedToBeLearn), each once.
 function T.learnableRecipeNames(prefix)
