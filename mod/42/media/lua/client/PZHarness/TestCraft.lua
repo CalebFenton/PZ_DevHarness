@@ -229,10 +229,11 @@ local function craft(self, name, from, counted, opts, registered)
     local recipe = T.need(self, getScriptManager():getCraftRecipe(name), "the recipe " .. name)
     if not recipe then return false end
     if registered then
-        -- Avoid another multiplayer round trip once a previous craft test taught them all.
-        for _, recipeName in ipairs(T.recipeNames()) do
+        -- Scenario setup may already know them; otherwise learning belongs to this test.
+        local names = T.recipeNames()
+        for _, recipeName in ipairs(names) do
             if not p:isRecipeActuallyKnown(recipeName) then
-                T.learnRecipes(p)
+                T.knowRecipes(self, names, true)
                 break
             end
         end
@@ -291,8 +292,8 @@ end
 
 --- Registers a test around the queued craft operation, instantly unless `spec.instant` is false.
 --- Crafts `spec.recipe` from the first `spec.from` via the right-click menu or `spec.bench`'s
---- window. Knows all the mod's recipes, ensures a table, and by default raises skills to at least
---- the requirements and gives T.recipeInputs with `spec.prefer` into self.items.inputs.
+--- window. Knows all the mod's recipes until the test ends, ensures a table, and by default raises
+--- skills to at least the requirements and gives T.recipeInputs with `spec.prefer` into self.items.inputs.
 --- `spec.prepare(self, recipe)` replaces only that skill/input preparation; `spec.setup(self)`
 --- runs once its queued preparation has finished and may queue more changes before the craft.
 --- Counts into self.counts.craft, including dropped items unless `spec.dropped` is false, then
