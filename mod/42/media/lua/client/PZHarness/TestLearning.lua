@@ -1,4 +1,5 @@
 require "PZHarness/TestLib"
+local Runtime = require "PZHarness/TestRuntime"
 
 -- Development only, not published. Recipe learning for tests: what the character knows, on both
 -- sides, and levels set or levelled up the way the game does, each put back when the test ends.
@@ -6,6 +7,47 @@ require "PZHarness/TestLib"
 -- copy of the character.
 
 local T = PZHarness.Test
+
+local function recipeNames(recipes, prefix)
+    prefix = prefix or PZHarness.testSettings.recipePrefix or ""
+    local names = {}
+    for i = 0, recipes:size() - 1 do
+        local name = recipes:get(i):getName()
+        if PZHarness.startsWith(name, prefix) then
+            table.insert(names, name)
+        end
+    end
+    return names
+end
+
+--- Every craftRecipe whose name starts with `prefix` (the `recipePrefix` setting by default).
+function T.recipeNames(prefix)
+    return recipeNames(getScriptManager():getAllCraftRecipes(), prefix)
+end
+
+--- Every build menu recipe whose name starts with `prefix` (the `recipePrefix` setting by
+--- default): the entities' recipes, which getAllCraftRecipes, and so T.recipeNames, leaves out.
+function T.buildRecipeNames(prefix)
+    return recipeNames(getScriptManager():getAllBuildableRecipes(), prefix)
+end
+
+--- Teaches `player` every recipe whose name starts with `prefix` (the `recipePrefix` setting by
+--- default); in multiplayer the server's copy too. Not undone. Callable outside a test, as from a
+--- scenario's onStart; in multiplayer it queues a wait for the server, so a craft queued after it
+--- starts once the server knows the recipes.
+function T.learnRecipes(player, prefix)
+    local names = T.recipeNames(prefix)
+    PZHarness.Fixtures.learnRecipes(player, names)
+    Runtime.outside("PZHarness.learnRecipes", { names = names })
+end
+
+--- The opposite of T.learnRecipes. The server sends a client the recipes it learns but never the
+--- ones it forgets (SyncPlayerFieldsPacket), so both sides forget them.
+function T.forgetRecipes(player, prefix)
+    local names = T.recipeNames(prefix)
+    PZHarness.Fixtures.forgetRecipes(player, names)
+    Runtime.outside("PZHarness.forgetRecipes", { names = names })
+end
 
 --- Queues making this client's and the server's copy of the character know (`known`, true when
 --- nil) or forget the recipes `names`. When the test ends each side knows exactly the recipes it

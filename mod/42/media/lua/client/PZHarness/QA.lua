@@ -2,7 +2,7 @@
 -- a debug scenario for playing through the mod by hand, whose character nothing sees or hurts,
 -- with every skill and recipe the mod reads, near what the mod's recipes and jobs take.
 
-require "PZHarness/TestLib"
+require "PZHarness/TestCraft"
 
 PZHarness = PZHarness or {}
 local QA = {}

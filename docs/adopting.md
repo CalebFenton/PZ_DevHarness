@@ -304,6 +304,30 @@ end)
 
 `PZHarness.Test`, from `PZHarness/TestLib.lua`:
 
+The core owns registration, expectations and reversible setters. Its internal `TestRuntime.lua`
+owns the active test, action queue, lighting waits and ordered server calls. Feature modules add
+methods to the same `PZHarness.Test` table; require the feature used, not the internal runtime:
+
+- `PZHarness/TestWorld`: square selection, world fixtures, movement and vehicles.
+- `PZHarness/TestLearning`: recipe enumeration, learning/forgetting and skill-learning checks.
+- `PZHarness/TestCraft`: recipe inputs, work tables, craft execution and craft tests; requires
+  `TestWorld` and `TestLearning`.
+- `TestBuild` requires `TestCraft`; `TestMenus` requires `TestWorld`.
+
+`waitFor` records a timeout in its own action, before any later step or call runs; it does not
+queue another action to recheck the result.
+
+`server(self, name, args, ready, what, ms)` can also wait for a client copy: after a successful
+reply and any given items have arrived, `ready(reply)` is polled in the call's own action.
+It fails as missing `what` after `ms` real milliseconds (ten seconds by default), without running
+later steps. Failed calls never invoke `ready`. World placements use this same completion path
+with their fifteen-second copy deadline, preserving immediate single-player handles.
+
+`TestWorld` also supplies `where(square)`, a `{ x, y, z, square }` handle; `at(handleOrSquare,
+fields)`, plain coordinates with extra server arguments; and `square(self, opts, what)`, one
+reserved square or missing `what`. Square searches accept a fixture handle as `opts.near`
+without copying or mutating the options.
+
 - Registering: `test(name, spec)`, `craftTest(name, spec)`. `spec.spOnly` or `spec.mpOnly`, a reason string, keeps a test out of the other mode. A test still busy after 30 seconds of real time fails with what it was waiting on (the queued action's type, or which server answer or wait; `waitUntil(condition, maxMs, what)` names a wait), its queue is cleared, its undos run and the next test starts; `spec.timeoutSeconds` raises the limit for a test that is slow on purpose. A test whose starting square still hasn't loaded, some seconds after the test before it took the character far away, fails without running, and the next one waits for the square again.
 - Expectations: `expect`, `expectNear`, `expectEqual(label, actual, expected)` (worded as `expectNear`: "label is X, expected Y"), `need`. Once a test misses something, its later queued steps and waits don't run.
 - Restore stack, two-sided (see [two-sided fixtures](multiplayer.md#two-sided-fixtures)): `defer`, `onTick`, `setTime`, `setPerk`, `setSandbox`, `setMultiplier`, `setGrid`, `setMechanicsCheat`, `makeDark`, `changeItem`; `spec.instant` and the `perks` setting too. `setTime`'s undo puts back the date with the hour, since a clock run past midnight moves the world to the next day. A multiplayer server times every action in real time, and an instant vehicle part install or uninstall on a client stops as invalid once the server has moved the part, so a test turns `setMechanicsCheat` on around those instead. Vanilla's `ISInstallVehiclePart:new` takes its time from its caller and never asks its `getDuration`, so neither cheat shortens an install: `shortenQueuedInstalls()`, in the step that queued one (`ISVehiclePartMenu.onInstallPart`), gives it the time `getDuration` gives.

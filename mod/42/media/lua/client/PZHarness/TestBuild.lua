@@ -1,5 +1,4 @@
-require "PZHarness/TestLib"
-require "PZHarness/TestLearning"
+require "PZHarness/TestCraft"
 require "PZHarness/StageLots"
 local Stage = require "PZHarness/Stage"
 

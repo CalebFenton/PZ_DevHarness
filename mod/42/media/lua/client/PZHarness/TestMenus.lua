@@ -1,4 +1,4 @@
-require "PZHarness/TestLib"
+require "PZHarness/TestWorld"
 require "ISUI/ISContextMenu"
 require "ISUI/ISWorldObjectContextMenu"
 require "ISUI/ISInventoryPaneContextMenu"

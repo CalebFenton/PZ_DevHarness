@@ -5,7 +5,7 @@
 -- pages are laid out from (Capture.newCatalog) and the icons they name (Run:addIconSheet).
 
 require "ISUI/ISPanel"
-require "PZHarness/TestLib"
+require "PZHarness/TestCraft"
 
 PZHarness = PZHarness or {}
 local Capture = {}

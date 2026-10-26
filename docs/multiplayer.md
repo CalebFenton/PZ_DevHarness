@@ -71,7 +71,7 @@ early when `isClient()`) is empty, so what only the authority can do goes throug
   `T.batch(fn)` sends every such call that `fn` queues together, when the first one's turn comes,
   and its steps and waits read each answer in its turn; it is for calls a test makes back to back,
   since the server has run them all before anything `fn` queued between them happens here.
-  `TestLib.lua` says what a batch must not hold.
+  `TestRuntime.lua` says what a batch must not hold.
 - The runner starts the next test only once every request of the last one, its undos above all,
   has its answer, so no test meets what the one before built. The undos, the runner's reset of
   the server's character and the server's half of the leak check go out together, one round trip
