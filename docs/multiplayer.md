@@ -44,7 +44,9 @@ early when `isClient()`) is empty, so what only the authority can do goes throug
 
 - `PZHarness.serverHandler(name, fn)` in the dev mod's server Lua registers `fn(player, args,
   defer)`, which returns a table of plain values; `PZHarness.need(value, what)` returns `value`, or
-  ends the handler as missing `what` when it is nil or false. `player` is the
+  ends the handler as missing `what` when it is nil or false. It yields the coroutine each handler
+  runs in, since a debug game stops at any Lua error, so it works only through Lua calls from the
+  handler: never inside a `pcall`, an undo, or a function the game calls back. `player` is the
   server's copy of the calling character. `defer(undo)` takes back what it built when the calling
   test ends, on the server, in order with the test's own undos; a handler that fails or misses
   something has its undos run at once.

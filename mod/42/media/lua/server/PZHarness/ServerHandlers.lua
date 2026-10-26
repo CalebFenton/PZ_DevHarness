@@ -24,8 +24,8 @@ local MODULE = "PZHarness"
 local handlers = {}
 -- What each call's handler deferred, by caller and call id, until its test ends.
 local undos = {}
--- What the running handler found missing through PZHarness.need.
-local raised
+-- What a handler's coroutine yields through PZHarness.need, which no handler returns.
+local MISSING = {}
 
 --- Registers `fn(player, args, defer)` as the server handler `name`, replacing any earlier one,
 --- so a reloaded handler file takes effect.
@@ -34,11 +34,14 @@ function PZHarness.serverHandler(name, fn)
 end
 
 --- `value`, unless it is nil or false: then the running handler ends, and its test fails as
---- missing `what` rather than as a server failure.
+--- missing `what` rather than as a server failure. A debug game stops at any Lua error, caught or
+--- not, so this yields the handler's coroutine instead of raising. Kahlua yields only through Lua
+--- calls (LuaCallFrame.canYield), so call it in the handler or a Lua function it calls, never
+--- inside a pcall, a deferred undo, or a function the game calls back from Java (an event, an
+--- Eval or a sort's comparator), where the yield itself fails.
 function PZHarness.need(value, what)
     if value == nil or value == false then
-        raised = tostring(what)
-        error("missing " .. raised)
+        coroutine.yield(MISSING, tostring(what))
     end
     return value
 end
@@ -68,14 +71,13 @@ local function call(player, request)
     local function defer(undo)
         table.insert(list, undo)
     end
-    raised = nil
-    local ok, reply = pcall(handler, player, request.args or {}, defer)
-    if not ok then
-        -- What the handler built before it failed goes at once: no test unwinds a failed call.
+    -- A coroutine, so that PZHarness.need can end it: it never resumes after that yield.
+    local ok, reply, what = coroutine.resume(coroutine.create(handler), player, request.args or {}, defer)
+    if not ok or reply == MISSING then
+        -- What the handler built before it ended goes at once: no test unwinds a failed call.
         local errors = unwind(list)
-        -- A handler that caught a need's error and failed later failed for its own reason.
-        if raised and #errors == 0 and tostring(reply):find(raised, 1, true) then
-            return { missing = raised }
+        if ok then
+            return { missing = what, error = #errors > 0 and table.concat(errors, "; ") or nil }
         end
         table.insert(errors, 1, tostring(reply))
         return { error = table.concat(errors, "; ") }
