@@ -21,9 +21,11 @@ local function isWallAllowed(wall, opts)
     return wall == nil or (not opts.bare and opts.allows ~= nil and opts.allows(wall))
 end
 
--- Whether `object` may stand on open ground of `opts`.
-local function isAllowed(object, opts)
-    if object:isFloor() then
+-- Whether `object` may stand on open ground of `opts`, besides the square's floor `floor`. Other
+-- objects can carry the floor flag too, such as boulders, which stand in a shot as anything else
+-- does.
+local function isAllowed(object, floor, opts)
+    if object == floor then
         return true
     end
     if opts.bare then
@@ -53,9 +55,9 @@ function Stage.isOpenGround(square, opts)
             return false
         end
     end
-    local objects = square:getObjects()
+    local floor, objects = square:getFloor(), square:getObjects()
     for i = 0, objects:size() - 1 do
-        if not isAllowed(objects:get(i), opts) then
+        if not isAllowed(objects:get(i), floor, opts) then
             return false
         end
     end

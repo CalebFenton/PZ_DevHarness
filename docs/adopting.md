@@ -509,8 +509,9 @@ Stage.runGroups(run, selection, {
   captions float over the shots.
 - Open ground and lots (`PZHarness/StageLots.lua`): `isOpenGround(square, opts)` holds for a
   loaded square outdoors and in no room, on solid floor that isn't water, with no vehicle and
-  nothing on it but floor and ground cover, nor a wall unless `allows` takes it. `opts`: `bare`
-  (nothing but floor), `trees` (trees too), `allows(object)` (other objects too), `floor` (a prefix
+  nothing on it but its floor and ground cover (a boulder, which carries the floor flag too, is
+  not floor), nor a wall unless `allows` takes it. `opts`: `bare` (nothing but its floor), `trees`
+  (trees too), `allows(object)` (other objects too), `floor` (a prefix
   the floor's sprite name starts with: `NATURAL_FLOOR` for soil or grass) and `free` (nothing on it
   stops a character walking on, `IsoGridSquare.isFree`). `isAreaOpen(corner, w, h, accepts)` holds
   when `accepts` does for every square of the rectangle (nil for one not loaded).

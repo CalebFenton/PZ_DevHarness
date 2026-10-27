@@ -347,11 +347,12 @@ end
 
 -- Items and recipes
 
---- The icon the crafting window draws for `fullType`: the script's, which for a moveable is not
---- the tile the inventory shows, or else the item's own.
+--- The icon the crafting window draws for `fullType`: the script's (Item.getNormalTexture), which
+--- for a moveable is not the tile the inventory shows, and for an item of several looks
+--- (IconsForTexture) is always its first rather than the look a new item rolls; or else the item's
+--- own.
 function Capture.iconTexture(fullType)
-    local icon = getScriptManager():getItem(fullType):getIcon()
-    return icon and getTexture("Item_" .. icon) or instanceItem(fullType):getTex()
+    return getScriptManager():getItem(fullType):getNormalTexture() or instanceItem(fullType):getTex()
 end
 
 local Catalog = {}
