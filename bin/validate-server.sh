@@ -34,15 +34,10 @@ timing_mark launch
 start_server
 
 started=
-SECONDS=0
-while [ "$SECONDS" -lt "$TIMEOUT" ] && kill -0 "$SERVER_PID" 2>/dev/null; do
-    if server_started; then
-        timing_mark ready
-        started=1
-        break
-    fi
-    sleep 1
-done
+if wait_server_started "$TIMEOUT"; then
+    timing_mark ready
+    started=1
+fi
 stop_server
 timing_mark exit
 

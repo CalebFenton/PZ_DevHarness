@@ -14,13 +14,14 @@ What `dev/run-debug-client.sh` does with each flag, why a run is fast, and the r
 | `--test --mp` | The same in multiplayer: a dedicated server and a client that joins it; see [multiplayer.md](multiplayer.md). |
 | `--test --mp --stay` | Both stay open; the next `--test --mp --stay` reruns the tests in them. |
 | `--test --failed` | Runs only the tests that failed in the last `--test` run of the same kind (with or without `--mp`), and the one a stopped run was in. |
-| `--test --changed` | Runs the tests the conf's `TEST_MAP` gives for the files the batch changed: since the branch left its upstream, committed or not, untracked files included ([choosing tests](#choosing-tests)). Prints the base and each file's share and why. A deleted file under the mods that no glob covers any more runs every test; with nothing changed under the mods, nothing runs. A library's changes are never in the batch: after one, run every test. |
-| `--<mode>` | Runs the mod's handler for the mode and quits. A capture mode with `MODE_CAPTURES_<mode>` then crops its shots into the mod's captures ([adopting.md](adopting.md#capture-modes)); one with `MODE_GROUPS_<mode>` shoots only the groups its selection variable names, every group if it names none, and refuses an unknown name before the game starts. |
+| `--test --changed` | Runs the tests the conf's `TEST_MAP` gives for the files the batch changed: since the branch left its upstream, committed or not, untracked files included ([choosing tests](#choosing-tests)). Prints the base and each file's share and why. A changed test file runs the tests it registers; a deleted file under the mods that no glob covers any more runs every test; with nothing changed under the mods, nothing runs. A library's changes are never in the batch: after one, run every test. |
+| `--<mode>` | Runs the mod's handler for the mode and quits. A capture mode with `MODE_CAPTURES_<mode>` then crops its shots into the mod's captures ([adopting.md](adopting.md#capture-modes)); one with `MODE_GROUPS_<mode>` shoots only the groups its selection variable (the mode in capitals, `PROMO` for `--promo`) names, every group if it names none, and refuses an unknown name before the game starts. |
 
 `--failed` and `--changed` combine with `--mp` and `--stay`, not with each other or with `TESTS`.
 
-Environment: `TESTS=<prefix>,...` runs only the tests whose names start with one of them, and
-`=<name>` in the list names one test exactly; `REPEAT=<n>` runs the selection n times over in one
+Environment: `TESTS=<prefix>,...` runs only the tests whose names start with one of them,
+`=<name>` in the list names one test exactly and `@<file>` the tests a dev mod test file of that
+name registers; `REPEAT=<n>` runs the selection n times over in one
 game and ends with a `<TAG> REPEAT <name> passed=<n> failed=<n>` line per test, the most failed
 first; `ORDER=reverse` runs the tests in reverse order, and `ORDER=shuffle` in an order from a
 seed the script picks and prints, which `ORDER=shuffle:<seed>` repeats; `LEAKS=fail` (the
@@ -60,15 +61,16 @@ site or a parked car beside a test that never placed one, and make one run diffe
 code it turns off: generator spawning, survivor houses and other building stories, vehicle and
 zone stories, ranches, animal tracks and paths, rats and cockroaches, parked and jammed cars,
 annotated maps (each of which makes a building a stash), house alarms, the helicopter and the
-random meta events. In single player the runner sets them before the scenario's `setSandbox`,
-which runs after and may set any of them back; on the `--mp` server they are appended to its
-sandbox file wherever the conf's `harness_server_setup` set nothing. A conf that sets
-`QUIET_WORLD` itself replaces the list. Other modes (`--promo`, `--art`, a mod's reports) and
-`validate-server.sh` keep the world's own population.
+random meta events. The conf's `TEST_SANDBOX` adds the mod's own options for a test world, such
+as a mod's random spawns turned off. In single player the runner sets both before the scenario's
+`setSandbox`, which runs after and may set any of them back; on the `--mp` server they are
+appended to its sandbox file wherever the conf's `harness_server_setup` set nothing. A conf that
+sets `QUIET_WORLD` itself replaces the list. Other modes (`--promo`, `--art`, a mod's reports) and
+`validate-server.sh` keep the world's own population and the mod's settings.
 
-A `--test` run is also held under a clear sky from its start: no cloud, fog or rain, as the
-`clearWeather` flag of a [capture mode](adopting.md#capture-settings) holds it. On the `--mp`
-server the runner clears the server's, which it sends to its client.
+A `--test` run is also held under a clear sky from its start: no cloud, fog or rain, as a
+[capture mode](adopting.md#capture-settings)'s is. On the `--mp` server the runner clears the
+server's, which it sends to its client.
 
 In every mode, and when you start the scenario by hand, the runner also records the run's mods
 for the new save, which the scenario panel doesn't, and turns zombies off, before the scenario's
@@ -133,8 +135,8 @@ agent's worktree branch, counts from where it left `origin/HEAD`, and without th
 which leaves out the branch's commits. The harness's own changes count from the harness commit the repository
 recorded at the base. The script prints `--changed: base <hash> (<why>)`, a
 `--changed: <file>: <prefixes>` line per file, and `--changed: running <prefixes>`. Like
-`dev/static-check.sh`, it refuses to run while `TEST_MAP` misses a file of the mods or has a glob
-that matches none, and says which ([adopting.md](adopting.md#devharnessconf)).
+`dev/static-check.sh`, it refuses to run while `TEST_MAP` misses a file of the mod or the dev mod
+or has a glob that matches none, and says which ([adopting.md](adopting.md#devharnessconf)).
 
 A library of the conf's `LIBRARY_MODS` lives in a repository of its own, whose commits the mod's
 repository doesn't record as it does the harness submodule's, so a batch has no base to count a
@@ -154,11 +156,13 @@ suspects <test>: <file> (<hash> "<subject>", ..., uncommitted); <file> (...)
 ```
 
 The files are those of `--changed`'s batch whose `TEST_MAP` entries reach the test: an entry's
-prefix the test's name starts with, or `=<name>` naming it, and a file under the mods that no glob
-covers reaches every test. Each has the batch's commits that touched it, newest first, and
-`uncommitted` when it differs from `HEAD` or is untracked. A test none reaches gets
-`suspects <test>: none of the changed files reach it`: the cause is older than the base, or the
-map misses it.
+prefix the test's name starts with, `=<name>` naming it, or the test file that registered it
+(`<cache dir>/Lua/PZHarnessTests.txt`, which the runner writes as it starts, names each test's
+file); a file under the mods that no glob covers reaches every test. Each has the batch's commits
+that touched it, newest first, and `uncommitted` when it differs from `HEAD` or is untracked. A
+test none reaches gets `suspects <test>: none of the changed files reach it`: the cause is older
+than the base, or the map misses it. `lib/tests.py` decides `--changed`, `--failed` and the
+suspects, and `lib/results.py` reads the run's result lines for it and for the verdict.
 
 ### Repeats
 
@@ -176,7 +180,7 @@ than a test failed. A `TRACE=1` run always runs: its timings differ from run to 
 ### Checks before a run
 
 The conf's `PRECHECK` ([adopting.md](adopting.md#devharnessconf)) runs before every harness game,
-`validate-server.sh` too, and no game starts if it fails. Normally it is the mod's
+`validate-server.sh` too, and no game starts if it fails. By default it is the mod's
 `dev/static-check.sh` ([static-check.md](static-check.md)).
 
 ## Where the time goes
@@ -234,7 +238,7 @@ the worktree; `dev/.runs-failed` stays with each checkout. The mod should gitign
   the build cheat off, the character back where the test started) and starts the next test on
   the next tick.
 - Uncapped frames. Game time per second doesn't depend on the frame rate, so more frames a second
-  only shorten what is counted in ticks. `--test` and modes registered `uncapped` draw as many
+  only shorten what is counted in ticks. `--test` and modes registered `capture` draw as many
   frames as they can (about 260 a second on an M3 Max, against 60). A test therefore waits with
   `waitUntil` on the condition it needs, never for a fixed number of frames. Every mode loads
   uncapped, since the main menu and the loading screen step per frame; the others go back to 60
@@ -262,7 +266,7 @@ the worktree; `dev/.runs-failed` stays with each checkout. The mod should gitign
   client and server share one computer.
 - Settling by loaded chunks. A run starts once one square in every chunk 40 squares around the
   character has loaded, not after a fixed delay.
-- Fast UI in captures. A mode registered `fastUI` draws the UI at its highest rate, so its steps
+- Fast UI in captures. A mode registered `capture` draws the UI at its highest rate, so its steps
   that wait for the UI to draw wait less.
 - `--test --stay`. Starting and quitting the game costs about 21 seconds. A kept game reruns the
   tests in a second or two plus their own time: the runner unregisters the mod's tests, runs

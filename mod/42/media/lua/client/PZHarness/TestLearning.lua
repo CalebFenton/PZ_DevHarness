@@ -13,7 +13,7 @@ local function recipeNames(recipes, prefix)
     local names = {}
     for i = 0, recipes:size() - 1 do
         local name = recipes:get(i):getName()
-        if PZHarness.startsWith(name, prefix) then
+        if luautils.stringStarts(name, prefix) then
             table.insert(names, name)
         end
     end
@@ -84,7 +84,7 @@ function T.learnableRecipeNames(prefix)
         for i = 0, recipes:size() - 1 do
             local recipe = recipes:get(i)
             local name = recipe:getName()
-            if PZHarness.startsWith(name, prefix) and recipe:needToBeLearn() and not seen[name] then
+            if luautils.stringStarts(name, prefix) and recipe:needToBeLearn() and not seen[name] then
                 seen[name] = true
                 table.insert(names, name)
             end

@@ -1,21 +1,42 @@
 require "PZHarness/TestWorld"
 require "PZHarness/TestLearning"
 local Runtime = require "PZHarness/TestRuntime"
+local Report = require "PZHarness/Report"
 
 -- Recipe inputs, crafting through the game's menus, and diagnostics for refused/dropped crafts.
 local T = PZHarness.Test
 
---- The script Item the harness gives for `input`, a recipe's InputScript, or nil when it has no
---- possible item: the first of its possible items listed in `prefer` (full names), else its first
---- possible item other than a generic Base.Moveable, else its first.
-function T.inputItem(input, prefer)
-    local possible = input:getPossibleInputItems()
-    for _, wanted in ipairs(prefer or {}) do
+--- The vanilla items an input naming several takes when the caller's `prefer` names none of
+--- them: for a tag, the first possible item can differ from run to run, and the tests, the QA
+--- layouts and the promo's recipe sheets must come out the same each run.
+T.VANILLA_PREFERRED = {
+    "Base.Bucket", "Base.WaterBottle", "Base.Charcoal", "Base.HandDrill", "Base.Screwdriver", "Base.Wrench",
+    "Base.PipeWrench", "Base.BlowTorch", "Base.Hammer", "Base.SmithingHammer", "Base.Saw", "Base.KitchenKnife",
+    "Base.Pliers", "Base.Tongs", "Base.WeldingMask", "Base.Shovel2", "Base.MasonsTrowel", "Base.Matches",
+    "Base.BucketConcreteFull",
+}
+
+-- The first of `possible` (an ArrayList of script Items) named in `wanted`, or nil.
+local function firstWanted(possible, wanted)
+    for _, fullType in ipairs(wanted) do
         for j = 0, possible:size() - 1 do
-            if possible:get(j):getFullName() == wanted then
+            if possible:get(j):getFullName() == fullType then
                 return possible:get(j)
             end
         end
+    end
+    return nil
+end
+
+--- The script Item the harness gives for `input`, a recipe's InputScript, or nil when it has no
+--- possible item: the first of its possible items listed in `prefer` (full names), else in
+--- T.VANILLA_PREFERRED, else its first possible item other than a generic Base.Moveable, else its
+--- first.
+function T.inputItem(input, prefer)
+    local possible = input:getPossibleInputItems()
+    local chosen = firstWanted(possible, prefer or {}) or firstWanted(possible, T.VANILLA_PREFERRED)
+    if chosen then
+        return chosen
     end
     for j = 0, possible:size() - 1 do
         if possible:get(j):getFullName() ~= "Base.Moveable" then
@@ -80,8 +101,7 @@ function T.placeWorkTable(player)
     end
     if not isClient() then
         if not PZHarness.Fixtures.placeWorkTable(player) then
-            print(PZHarness.run.tag .. " FAIL PZHarness.workTable: no free square next to the character for a work table")
-            PZHarness.ServerCalls.lateFailures = PZHarness.ServerCalls.lateFailures + 1
+            Report.lateFailure("PZHarness.workTable", "no free square next to the character for a work table")
         end
         return
     end
@@ -107,7 +127,7 @@ local function craftLogic(recipe, from, bench)
     -- A player's right-click comes after the UI has drawn, by when the inventory windows list the
     -- containers around where the character is now and faces; at the uncapped frame rate a test
     -- can get here first.
-    PZHarness.refreshInventoryWindows()
+    T.refreshInventoryWindows()
     logic:setContainers(ISInventoryPaneContextMenu.getContainers(p))
     logic:setRecipeFromContextClick(recipe, from)
     return logic

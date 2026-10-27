@@ -257,4 +257,20 @@ function Loot.squareOutsideRooms(character)
     return nil
 end
 
+--- A crate that never enters the world, to fill and read. Give it a square from
+--- Loot.squareOutsideRooms to roll procedural tables into it, or nil for anything else.
+---@param square IsoGridSquare?
+function Loot.scratchContainer(square)
+    return ItemContainer.new("crate", square, nil)
+end
+
+--- A share of samples as "<percent>% (1 in <n>)", with `percentPlaces` and `oneInPlaces`
+--- decimals, or "none" when nothing came.
+function Loot.share(fraction, percentPlaces, oneInPlaces)
+    if fraction <= 0 then
+        return "none"
+    end
+    return string.format("%." .. percentPlaces .. "f%% (1 in %." .. oneInPlaces .. "f)", fraction * 100, 1 / fraction)
+end
+
 return Loot

@@ -4,7 +4,7 @@
 # the mod, its dev mod and the harness mod with the game's own Kahlua compiler, then
 # check/check.py cross-checks their translations, scripts, textures, sandbox options and Lua
 # names, with the conf's CHECK_PLUGINS for the mod's own rules; and that the conf's TEST_MAP
-# covers every file of the mods (check_test_map in lib/harness.sh).
+# covers every file of the mods (lib/tests.py check).
 # A mod's dev/static-check.sh sources this. Needs a JDK's javac (or JAVAC) and python3.
 #
 # CACHE overrides the cache dir (default: $TMPDIR/<CACHE_NAME>-check).
@@ -72,5 +72,5 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$HARNESS/check/check.py" --game "$PZ/Java" --
 if [ -n "${WORKSHOP_REPO:-}" ]; then
     "$HARNESS/bin/workshop-txt.sh" --check || status=1
 fi
-check_test_map || status=1
+tests_py check || status=1
 exit $status

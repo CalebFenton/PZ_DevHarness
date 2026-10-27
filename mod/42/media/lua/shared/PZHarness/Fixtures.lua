@@ -1,7 +1,8 @@
 -- Development only, not published. What the test library's two-sided fixtures do to one side's
 -- copy of the game, shared so the client (TestLib.lua) and server (ServerFixtures.lua) make the
 -- same change and dev mod server handlers get the lookups too. Each setter returns its undo. The
--- dev mod's test settings live here for the same reason.
+-- dev mod's test settings live here for the same reason, and the two-sided fixtures themselves
+-- (PZHarness.twoSided).
 
 PZHarness = PZHarness or {}
 local Fixtures = {}
@@ -34,6 +35,26 @@ PZHarness.testSettings = PZHarness.testSettings or {}
 --- load after shared Lua, and each side loads only its own.
 function PZHarness.registerTests(settings)
     PZHarness.testSettings = settings
+end
+
+-- The two-sided fixtures by name (PZHarness.twoSided).
+Fixtures.TWO_SIDED = {}
+
+--- Registers the two-sided fixture `name`: `apply(player, args)` changes one side's copy and
+--- returns the undo, or nil and what is missing (a noun phrase). The server serves it as the
+--- handler "PZHarness.<name>" (ServerFixtures.lua), and PZHarness.Test.twoSided(name) gives the
+--- client's setter, which applies it to this game's copy and, on a multiplayer client, has the
+--- server apply it to its own; each side undoes its change when the test ends. Call it from
+--- shared Lua, so a multiplayer server, which loads no client Lua, has it too.
+function PZHarness.twoSided(name, apply)
+    Fixtures.TWO_SIDED[name] = apply
+end
+
+--- Calls the dev mod's `sandboxChanged` setting, if any, after a sandbox option changed.
+function Fixtures.sandboxChanged()
+    if PZHarness.testSettings.sandboxChanged then
+        PZHarness.testSettings.sandboxChanged()
+    end
 end
 
 -- The Shoddy Table players build, a crafting surface.
@@ -205,6 +226,24 @@ function Fixtures.setMechanicsCheat(player, on)
     player:setMechanicsCheat(on)
     return function() player:setMechanicsCheat(saved) end
 end
+
+-- The test library's two-sided setters (TestLib.lua), each the args its client setter sends.
+PZHarness.twoSided("setTime", function(_, args) return Fixtures.setTime(args.hour) end)
+PZHarness.twoSided("setMultiplier", function(_, args) return Fixtures.setMultiplier(args.multiplier) end)
+PZHarness.twoSided("setGrid", function(_, args) return Fixtures.setGrid(args.on) end)
+PZHarness.twoSided("setPerk", function(player, args)
+    return Fixtures.setPerk(player, Perks.FromString(args.perk), args.level)
+end)
+PZHarness.twoSided("setInstant", function(player, args) return Fixtures.setInstant(player, args.on) end)
+PZHarness.twoSided("setMechanicsCheat", function(player, args) return Fixtures.setMechanicsCheat(player, args.on) end)
+-- An option in neither the mod's table nor the game's is missing rather than created.
+PZHarness.twoSided("setSandbox", function(_, args)
+    local options, name = Fixtures.sandboxOptions(args.table, args.key)
+    if not options then
+        return nil, "the sandbox option " .. tostring(args.key)
+    end
+    return Fixtures.setSandbox(options, name, args.key, args.value, Fixtures.sandboxChanged)
+end)
 
 --- Every perk's level, by perk id, for Fixtures.setPerkLevels.
 function Fixtures.perkLevels(player)

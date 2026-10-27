@@ -1,8 +1,20 @@
-"""The checks on the tiles of the tilesets a mod's mod.info names with tiledef= (Mod.tilesets).
+"""The checks on the mod's texture packs (Mod.sprites) and on the tiles of the tilesets its
+mod.info names with tiledef= (Mod.tilesets).
 
-check.py imports this after rules.py, so these run after the checks there and before any plugin's.
+check.py imports this after the rules_*.py modules, so these run after the checks there and before
+any plugin's.
 """
-from rules import check, has_entry, has_text, item_exists
+from moddata import check, has_entry, has_text, item_exists
+
+
+@check
+def pack_clash(mod, game, report):
+    # Sprite names are global, and a mod's packs load after the game's, so a mod sprite named
+    # like a vanilla one replaces it everywhere.
+    report.saw("packed sprites", len(mod.sprites))
+    for name, path in sorted(mod.sprites.items()):
+        if name in game.sprites:
+            report.fail("pack-clash", path, None, "sprite %s replaces the game's sprite of that name" % name)
 
 
 def _full_type(name, module):

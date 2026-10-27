@@ -11,7 +11,7 @@ How `--test --mp` runs a mod's tests against a dedicated server, and what a test
    harness mod and the dev mod, as the client enables them; ports 16361 and 16362, `Open`,
    `PauseEmpty` off) and runs the conf's `harness_server_setup`, then appends `Zombies = 6` to its
    sandbox, so the world has no zombies, as the runner gives a single player scenario's world, and
-   the `QUIET_WORLD` options the hook didn't set ([a quiet world](running.md#a-quiet-world)).
+   the `QUIET_WORLD` and `TEST_SANDBOX` options the hook didn't set ([a quiet world](running.md#a-quiet-world)).
    Every cold run starts a new world.
 3. Starts the server with FastServer, through `start_server` in `lib/harness.sh` as
    `validate-server.sh` does, and the client with ClickToStart at the same time. The client waits
@@ -94,13 +94,18 @@ player behaves as before:
 
 - Setters (`setSandbox`, `setTime`, `setMultiplier`, `setGrid`, `setPerk`, `setMechanicsCheat`,
   `changeItem`, the test's `instant` and `perks`) change this game's copy at once; on a multiplayer
-  client they also send the change to the server (handlers named `PZHarness.*` in
-  `ServerFixtures.lua`) at once and queue a wait for its answer, so actions queued after them start
-  once the server has it (server calls may go out before that, as above). The server undoes it
-  when the test ends; for `perks` a multiplayer client takes back the server's levels, not its own:
-  the server's perk sync can leave this client's a level behind for up to a second, and a stale
-  level put back after every test would outlast the syncs. Each side calls the dev mod's
-  `sandboxChanged` setting after its own copy of an option changes.
+  client they also send the change to the server (handlers named `PZHarness.*`) at once and queue
+  a wait for its answer, so actions queued after them start once the server has it (server calls
+  may go out before that, as above). The server undoes it when the test ends; for `perks` a
+  multiplayer client takes back the server's levels, not its own: the server's perk sync can leave
+  this client's a level behind for up to a second, and a stale level put back after every test
+  would outlast the syncs. Each side calls the dev mod's `sandboxChanged` setting after its own
+  copy of an option changes. Such a setter is written once: `PZHarness.twoSided(name, apply)`, in
+  shared Lua (`shared/PZHarness/Fixtures.lua` registers the library's own), takes
+  `apply(player, args)`, which changes one side's copy and returns its undo, or nil and what is
+  missing; `ServerFixtures.lua` serves it as the handler `PZHarness.<name>`, and
+  `T.twoSided(name)` is the client's setter `(self, args, onReply)`, which a dev mod can use for
+  a two-sided fixture of its own.
   A client lights its squares with the daylight the server sends it, which the server does only
   every ten game minutes, so the server's `setTime` (and its undo) makes its next climate tick
   send it; `makeDark` then waits, up to 10 seconds, for this client's light to follow.

@@ -28,12 +28,12 @@ second.
 
 | Key | Meaning |
 | --- | --- |
-| `PRECHECK` | `PRECHECK=(dev/static-check.sh)` runs it before every game of the harness, so a typo costs seconds rather than a game start ([running.md](running.md#checks-before-a-run)). |
+| `PRECHECK` | Unless the conf sets it otherwise, every game of the harness runs `dev/static-check.sh` first, so a typo costs seconds rather than a game start ([running.md](running.md#checks-before-a-run)). |
 | `CHECK_PLUGINS` | Optional: a bash array of Python files, relative to the repository, with the mod's own checks ([Plugins](#plugins)). |
 | `LIBRARY_MODS` | Optional: the library mods the published mod requires ([adopting.md](adopting.md#devharnessconf)). Their Lua, scripts, translations and packs are read with the mod's, so its requires of their modules and its getText keys resolve, and checked as published code, since they ship too; `library-require` holds the published `mod.info`'s `require=` to them. |
 | `CHECK_ALL_LANGUAGES` | Optional: when set, every language the game offers (but `STREW`, its placeholder) must have every translation file and key English has (`translation-missing`); otherwise a language the mod has that lacks keys is only a note. |
 | `WORKSHOP_REPO` | Optional: when set, the check also fails while `workshop.txt` isn't what `dev/workshop-txt.sh` makes of the README, or the description is over Steam's limit ([workshop-page.md](workshop-page.md)). |
-| `TEST_MAP` | Optional: when set, the check also fails while it misses a file of the mod, the dev mod or the harness mod, tracked or untracked, or has a glob that matches none of them, with a line for each that says what to fix: `TEST_MAP: <file> has no line in dev/harness.conf; ...` or `TEST_MAP: <glob> matches no file; ...` ([adopting.md](adopting.md#devharnessconf)). `run-client.sh --changed` runs the same check first. |
+| `TEST_MAP` | Optional: when set, the check also fails while it misses a file of the mod or the dev mod, tracked or untracked, other than a test file (a dev mod Lua file whose name has `Tests`), or has a glob that matches none of those or the harness mod's, with a line for each that says what to fix: `TEST_MAP: <file> has no line in dev/harness.conf; ...` or `TEST_MAP: <glob> matches no file; ...` ([adopting.md](adopting.md#devharnessconf)). `lib/tests.py check` runs it, and `run-client.sh --changed` runs the same check first. |
 
 It checks each library's `42` and `common`, `MOD_DIR`'s `42` and `common`, the dev mod's `42` and
 the harness mod. Translations are read from their `media/lua/shared/Translate` and merged by key
@@ -55,8 +55,11 @@ folder the library sits in (`MyLib/42/...` from the compiler, `../MyLib/...` fro
   source.
 - `check/luasource.py` tokenises Lua (comments and strings never look like code), `check/scripts.py`
   parses scripts the way `ScriptParser` does, `check/packs.py` and `check/tiledefs.py` read and
-  write `.pack` and `.tiles` files, and `check/rules.py` holds the checks, one function each, with
-  the tile checks in `check/tiles.py`. `check/check.py` runs them.
+  write `.pack` and `.tiles` files, and `check/moddata.py` reads the mod (the `Mod` the checks
+  look at), with the `@check` registry, the report and the lookups the checks share. The checks,
+  one function each, are in `check/rules_translations.py`, `check/rules_scripts.py`,
+  `check/rules_sandbox.py` and `check/rules_lua.py`, with the pack and tile checks in
+  `check/tiles.py`. `check/check.py` runs them.
 
 Without a type checker, Lua names are checked by name: a call site does not say what it calls on,
 and a name declared local anywhere in a file counts as local in all of it. Both can hide a
@@ -120,13 +123,13 @@ mistake, never report a correct name. Run over the game's own 1,400 Lua files, `
 
 A mod's own rules, such as ones about its map coordinates, live in the mod's repository as Python
 files that `CHECK_PLUGINS` names. The checker loads each after its own checks, in the order given,
-and runs their checks after its own. A plugin imports `rules`, which
+and runs their checks after its own. A plugin imports `moddata`, which
 `check/check.py` puts on the path along with `gamedata`, `luasource`, `scripts`, `packs` and
 `tiledefs`:
 
 ```python
 """My mod's rules (dev/check/widgets.py)."""
-from rules import check, has_text
+from moddata import check, has_text
 
 
 @check
@@ -139,7 +142,7 @@ def widget_labels(mod, game, report):
 ```
 
 - `@check` registers `function(mod, game, report)`.
-- `mod` (`rules.Mod`) holds what was read: `lua` (one `luasource` file each, with its tokens,
+- `mod` (`moddata.Mod`) holds what was read: `lua` (one `luasource` file each, with its tokens,
   names, strings and tables, its `module` name, `requires` (literal module names with an optional
   `.lua` suffix removed, paired with source offsets), whether it is `published`, the Workshop's
   (the mod's or a library's) rather than the dev mod's or the harness mod's, and its `owner`, the id
@@ -151,7 +154,7 @@ def widget_labels(mod, game, report):
   (`gamedata.Game`) holds the game's side, and `file(path)` finds a game file.
 - `report.fail(rule, path, line, message)` fails the run, `report.note(message)` only prints,
   and `report.saw(what)` counts for the summary line.
-- `rules` has the lookups the built-in checks use, such as `has_entry`, `has_text`,
+- `moddata` has the lookups the built-in checks use, such as `has_entry`, `has_text`,
   `text_problem`, `item_exists`, `recipe_exists`, `packed`, `lua_globals` and `lua_defined`.
   `lua_globals(mod, game, published=True)` restricts the mod-side definitions to Lua that ships;
   publication checks use this same lookup rather than a separate definition of a Lua global.

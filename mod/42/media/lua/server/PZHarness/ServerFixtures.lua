@@ -13,10 +13,13 @@ PZHarness = PZHarness or {}
 local Fixtures = PZHarness.Fixtures
 local handler, need = PZHarness.serverHandler, PZHarness.need
 
-local function sandboxChanged()
-    if PZHarness.testSettings.sandboxChanged then
-        PZHarness.testSettings.sandboxChanged()
-    end
+-- The two-sided fixtures (PZHarness.twoSided), registered from shared Lua before this file loads.
+for name in pairs(Fixtures.TWO_SIDED) do
+    handler("PZHarness." .. name, function(player, args, defer)
+        local undo, missing = Fixtures.TWO_SIDED[name](player, args)
+        defer(need(undo, "the server's " .. tostring(missing)))
+        return {}
+    end)
 end
 
 -- Removes `object` when the calling test ends, as T.track does.
@@ -129,46 +132,9 @@ handler("PZHarness.vehicle", function(_, args, defer)
     need(nil, "open ground for a " .. tostring(args.script))
 end)
 
-handler("PZHarness.setSandbox", function(_, args, defer)
-    local options, name = Fixtures.sandboxOptions(args.table, args.key)
-    need(options, "the server's sandbox option " .. tostring(args.key))
-    defer(Fixtures.setSandbox(options, name, args.key, args.value, sandboxChanged))
-    return {}
-end)
-
-handler("PZHarness.setTime", function(_, args, defer)
-    defer(Fixtures.setTime(args.hour))
-    return {}
-end)
-
 -- The runner's clear sky for a multiplayer run, which the server sends to its clients.
 handler("PZHarness.clearWeather", function()
     Fixtures.clearWeather()
-    return {}
-end)
-
-handler("PZHarness.setMultiplier", function(_, args, defer)
-    defer(Fixtures.setMultiplier(args.multiplier))
-    return {}
-end)
-
-handler("PZHarness.setGrid", function(_, args, defer)
-    defer(Fixtures.setGrid(args.on))
-    return {}
-end)
-
-handler("PZHarness.setPerk", function(player, args, defer)
-    defer(Fixtures.setPerk(player, Perks.FromString(args.perk), args.level))
-    return {}
-end)
-
-handler("PZHarness.setInstant", function(player, args, defer)
-    defer(Fixtures.setInstant(player, args.on))
-    return {}
-end)
-
-handler("PZHarness.setMechanicsCheat", function(player, args, defer)
-    defer(Fixtures.setMechanicsCheat(player, args.on))
     return {}
 end)
 

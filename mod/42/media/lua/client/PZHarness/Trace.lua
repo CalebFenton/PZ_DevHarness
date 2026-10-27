@@ -53,10 +53,6 @@ function Trace.stop()
     end
 end
 
-function Trace.on()
-    return writer ~= nil
-end
-
 --- Called every frame of a test with what heads its action queue (nil once empty); records each
 --- action once it no longer heads the queue.
 function Trace.observe(test, action, frame)

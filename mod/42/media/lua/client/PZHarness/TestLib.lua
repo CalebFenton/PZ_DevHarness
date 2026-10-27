@@ -1,12 +1,13 @@
 require "Tests/TimedActionsTests"
-require "PZHarness/Runner"
+require "PZHarness/Run"
 require "PZHarness/Fixtures"
 require "PZHarness/Checks"
+local Report = require "PZHarness/Report"
 
 -- The generic half of a mod's test library. A mod's own library inherits from it
 -- (setmetatable(ModTest, { __index = PZHarness.Test })) and adds fixtures for the mod's objects;
 -- test files register with vanilla's timed action test runner through T.test. The runner (debug
--- menu or PZHarness/Runner.lua) calls run(), waits for the action queue to empty, then calls
+-- menu or PZHarness/Schedule.lua) calls run(), waits for the action queue to empty, then calls
 -- validate(). It resets inventory, hands, worn items and position between tests; nothing else.
 --
 -- Settings and hooks come from the dev mod's PZHarness.registerTests (see
@@ -90,12 +91,29 @@ function T.onTick(self, fn)
     T.defer(self, function() Events.OnTick.Remove(fn) end)
 end
 
--- The setters below are two-sided: they change this game's copy at once, and on a multiplayer
--- client the server's copy too (Runtime.alsoOnServer), which the server undoes when the test ends.
+--- The client setter of the two-sided fixture `name` (PZHarness.twoSided): `setter(self, args,
+--- onReply)` changes this game's copy at once and, on a multiplayer client, the server's copy too
+--- (Runtime.alsoOnServer), with `onReply` called on the server's answer; each side undoes its
+--- change when the test ends. Returns false, the fixture recorded as missing (T.need), if it
+--- couldn't be made here.
+function T.twoSided(name)
+    return function(self, args, onReply)
+        local undo, missing = PZHarness.Fixtures.TWO_SIDED[name](T.player(), args)
+        if not T.need(self, undo, missing) then
+            return false
+        end
+        T.defer(self, undo)
+        Runtime.alsoOnServer(self, "PZHarness." .. name, args, onReply)
+        return true
+    end
+end
+
+local setTime, setPerk, setSandbox = T.twoSided("setTime"), T.twoSided("setPerk"), T.twoSided("setSandbox")
+local setMultiplier, setMechanicsCheat = T.twoSided("setMultiplier"), T.twoSided("setMechanicsCheat")
+local setGrid, setInstant = T.twoSided("setGrid"), T.twoSided("setInstant")
 
 function T.setTime(self, hour)
-    T.defer(self, PZHarness.Fixtures.setTime(hour))
-    Runtime.alsoOnServer(self, "PZHarness.setTime", { hour = hour }, function()
+    setTime(self, { hour = hour }, function()
         -- A clock sync the server sent before it changed the time may have come in since.
         getGameTime():setTimeOfDay(hour)
     end)
@@ -106,8 +124,7 @@ end
 --- level, so until the test ends the client reapplies it whenever a sync changes it.
 function T.setPerk(self, perk, level)
     local p = T.player()
-    T.defer(self, PZHarness.Fixtures.setPerk(p, perk, level))
-    Runtime.alsoOnServer(self, "PZHarness.setPerk", { perk = perk:getId(), level = level })
+    setPerk(self, { perk = perk:getId(), level = level })
     if isClient() then
         T.onTick(self, function()
             if p:getPerkLevel(perk) ~= level then
@@ -117,27 +134,17 @@ function T.setPerk(self, perk, level)
     end
 end
 
-local function sandboxChanged()
-    if settings().sandboxChanged then
-        settings().sandboxChanged()
-    end
-end
-
 --- Sets a sandbox option of the mod (SandboxVars[settings.sandbox]) or, failing that, of the
 --- game, in SandboxVars and in the game's own copy. An option in neither is recorded as missing
 --- rather than created. Each side calls the `sandboxChanged` setting after its copy changes.
 function T.setSandbox(self, key, value)
-    local options, name = PZHarness.Fixtures.sandboxOptions(settings().sandbox, key)
-    if not T.need(self, options, "the sandbox option " .. key) then return end
-    T.defer(self, PZHarness.Fixtures.setSandbox(options, name, key, value, sandboxChanged))
-    Runtime.alsoOnServer(self, "PZHarness.setSandbox", { table = settings().sandbox, key = key, value = value })
+    setSandbox(self, { table = settings().sandbox, key = key, value = value })
 end
 
 --- The game runs `multiplier` times as fast: the clock and every timed action alike. The game drops
 --- back to 1 when the character moves without a path or a zombie comes close.
 function T.setMultiplier(self, multiplier)
-    T.defer(self, PZHarness.Fixtures.setMultiplier(multiplier))
-    Runtime.alsoOnServer(self, "PZHarness.setMultiplier", { multiplier = multiplier })
+    setMultiplier(self, { multiplier = multiplier })
 end
 
 --- Vanilla's mechanics cheat on or off for the character, on both sides (Fixtures.setMechanicsCheat).
@@ -147,8 +154,7 @@ end
 --- check, so a test turns it on around the action, after reading canInstallPart and
 --- canUninstallPart itself.
 function T.setMechanicsCheat(self, on)
-    T.defer(self, PZHarness.Fixtures.setMechanicsCheat(T.player(), on))
-    Runtime.alsoOnServer(self, "PZHarness.setMechanicsCheat", { on = on })
+    setMechanicsCheat(self, { on = on })
 end
 
 --- Vanilla's ISInstallVehiclePart:new takes its time from its caller (ISVehiclePartMenu.onInstallPart)
@@ -185,8 +191,7 @@ end
 
 --- The power grid on or off. Off, it also clears power a generator taken away left behind.
 function T.setGrid(self, on)
-    T.defer(self, PZHarness.Fixtures.setGrid(on))
-    Runtime.alsoOnServer(self, "PZHarness.setGrid", { on = on })
+    setGrid(self, { on = on })
     if not on then
         dropStaleGeneratorPower()
     end
@@ -229,8 +234,7 @@ end
 -- sandbox options, the mod's setup, then spec.run unless a fixture is already missing.
 local function startSpec(self, spec, hour)
     -- The server makes the actions a multiplayer client sends it, so it decides their length.
-    T.defer(self, PZHarness.Fixtures.setInstant(T.player(), spec.instant == true))
-    Runtime.alsoOnServer(self, "PZHarness.setInstant", { on = spec.instant == true })
+    setInstant(self, { on = spec.instant == true })
     if hour then
         T.setTime(self, hour)
     end
@@ -282,23 +286,11 @@ local function runEntry(entry, name, spec, problem)
     end
 end
 
---- Prints a test's verdict: "<tag> PASS <name> (<s> s)", or FAIL with `failures` as its reasons.
---- The harness runner calls it once it has checked the test for leaks; the debug menu's runner
---- gets it from validate.
-function T.printVerdict(name, failures, seconds)
-    local took = PZHarness.tookSuffix(seconds)
-    if #failures > 0 then
-        print(PZHarness.run.tag .. " FAIL " .. name .. ": " .. table.concat(failures, "; ") .. took)
-    else
-        print(PZHarness.run.tag .. " PASS " .. name .. took)
-    end
-end
-
 -- The runner's validate of a registered test: its failures (a malformed opt-out, the runner's
 -- timeout, a cleared action queue, a missing fixture, or spec.validate's), then spec.cleanup and
 -- the undos. Leaves the failures in `entry.failures` and the test's wall time, from its run to the
 -- end of its undos, in `entry.seconds`, and returns whether the test passed. The verdict is
--- printed here only when the harness runner isn't running the test (PZHarness.runnerOwnsVerdicts),
+-- printed here only when the harness runner isn't running the test (Report.runnerOwnsVerdicts),
 -- since the runner adds what its leak check finds first.
 local function validateEntry(entry, name, spec, problem)
     local self = entry.state or { undo = {}, missing = { "a run before validate" } }
@@ -307,7 +299,7 @@ local function validateEntry(entry, name, spec, problem)
     if problem then
         table.insert(failures, problem)
     elseif entry.timedOut then
-        -- The runner stopped the test (Runner.lua): what validate reads may never have come.
+        -- The runner stopped the test (Schedule.lua): what validate reads may never have come.
         table.insert(failures, entry.timedOut)
         entry.timedOut = nil
     elseif self.queueCleared then
@@ -329,10 +321,26 @@ local function validateEntry(entry, name, spec, problem)
     Runtime.finish(self, failures)
     entry.seconds = self.startedMs and (getTimestampMs() - self.startedMs) / 1000 or 0
     entry.failures = failures
-    if not PZHarness.runnerOwnsVerdicts then
-        T.printVerdict(name, failures, entry.seconds)
+    if not Report.runnerOwnsVerdicts() then
+        Report.verdict(name, failures, entry.seconds)
     end
     return #failures == 0
+end
+
+-- The test file registering a test: the innermost file on the call stack whose name has "Tests",
+-- as a dev mod's test files are named (docs/adopting.md), so a helper library that registers the
+-- test for it, as T.craftTest does, doesn't count. A --changed run selects a changed test file's
+-- tests by it ("@<file>").
+local function definingFile()
+    local coroutine = getCurrentCoroutine()
+    for i = getCallframeTop(coroutine) - 1, 0, -1 do
+        local file = getFilenameOfCallframe(getCoroutineCallframeStack(coroutine, i))
+        local name = file and string.match(file, "[^/\\]*$")
+        if name and string.find(name, "Tests") then
+            return name
+        end
+    end
+    return nil
 end
 
 --- Registers test `name`. `spec`: run(self), validate(self), cleanup(self), all optional; `hour`;
@@ -346,12 +354,26 @@ function T.test(name, spec)
         mpOnly = not problem and spec.mpOnly or nil,
         -- The runner's per-test limit in real seconds, if the test needs more than its default.
         timeoutSeconds = spec.timeoutSeconds,
+        -- The file's name, which "@<file>" selects (Schedule.lua).
+        file = definingFile(),
         run = function(entry) runEntry(entry, name, spec, problem) end,
         validate = function(entry) return validateEntry(entry, name, spec, problem) end,
     }
 end
 
 -- Lookups and data
+
+--- Refreshes the inventory windows, which supply crafting's containers
+--- (ISInventoryPaneContextMenu.getContainers) but only catch up when the UI next draws. Until then
+--- they keep bags the runner's reset removed, which the client can't name to the server ("Unable
+--- to resolve container location").
+function T.refreshInventoryWindows()
+    for _, page in ipairs({ getPlayerInventory(0), getPlayerLoot(0) }) do
+        if page then
+            page.inventoryPane.inventoryPage:refreshBackpacks()
+        end
+    end
+end
 
 -- In shared/PZHarness/Fixtures.lua, so a dev mod's server handlers have them too.
 T.lineUpTrailer = PZHarness.Fixtures.lineUpTrailer

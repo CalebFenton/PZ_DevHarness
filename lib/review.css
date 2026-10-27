@@ -1,0 +1,27 @@
+/* bin/review.sh renders a mod's REVIEW_DOCS with this, close to how GitHub shows them, so a review
+   copy reads like the real page. */
+body {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 32px;
+    font: 16px/1.5 -apple-system, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+    color: #1f2328;
+    background: #fff;
+}
+h1, h2, h3 { margin: 24px 0 16px; font-weight: 600; line-height: 1.25; }
+h1, h2 { padding-bottom: 0.3em; border-bottom: 1px solid #d1d9e0; }
+h1 { font-size: 2em; }
+h2 { font-size: 1.5em; }
+h3 { font-size: 1.25em; }
+p, ul, ol, table { margin: 0 0 16px; }
+a { color: #0969da; text-decoration: none; }
+code { padding: 0.2em 0.4em; font-size: 85%; background: #eff1f3; border-radius: 6px; }
+img { max-width: 100%; }
+table { border-collapse: collapse; display: block; overflow: auto; }
+th, td { padding: 6px 13px; border: 1px solid #d1d9e0; vertical-align: top; }
+th { font-weight: 600; }
+tr:nth-child(2n) { background: #f6f8fa; }
+td img { vertical-align: middle; image-rendering: pixelated; }
+/* The PDF reads like the web page: one tall page as wide as the screen layout, which review.sh
+   trims to the end of the text. 200 inches is the most a PDF page may be. */
+@page { size: 11in 200in; margin: 0.4in 0; }

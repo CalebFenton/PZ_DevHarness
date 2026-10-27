@@ -94,6 +94,12 @@ if ! declare -p QUIET_WORLD > /dev/null 2>&1; then
     )
 fi
 
+# The mod's own sandbox options for a --test world, as Table.Key=value (a number, true or false),
+# set with QUIET_WORLD's on both sides (docs/adopting.md).
+if ! declare -p TEST_SANDBOX > /dev/null 2>&1; then
+    TEST_SANDBOX=()
+fi
+
 # The game reads depth maps by absolute path and refuses paths outside the mod folders and the
 # cache dir without resolving symlinks (ZomboidFileSystem.validatePrefix), so a symlinked mod, or a
 # cache under macOS's /var (really /private/var), loses its tile depth maps. Hence a real copy of
@@ -309,89 +315,113 @@ finish_games() {
     release_game_lock
 }
 
-# Runs the conf's PRECHECK, normally the mod's dev/static-check.sh, from the repository, and fails
-# the script if it fails, before it spends a game on code it rejects.
+# A kept game's reruns (run-client.sh --stay). They read run-client.sh's CACHE, MP, SERVER_CACHE,
+# the run's SELECTION and settings, and its files in <cachedir>/Lua: HARNESS_FILE, which the game
+# read at its start, and REQUEST_FILE, which asks it to rerun (client/PZHarness/Run.lua).
+
+# Whether $1, relative to the dev mod, is one of the files a rerun loads again.
+reloaded() {
+    local pattern
+    for pattern in "${RELOAD_FILES[@]}"; do
+        # shellcheck disable=SC2053 # the pattern is a glob
+        [[ $1 == $pattern ]] && return 0
+    done
+    return 1
+}
+
+# Why a kept game can't rerun the tests: it belongs to another cache dir, part of it has stopped,
+# or something it loaded only at start changed since. Prints nothing if it can.
+session_stale() {
+    if [ "$SESSION_CACHE" != "$CACHE" ]; then
+        echo "it runs with the cache dir $SESSION_CACHE"
+        return
+    fi
+    local pid
+    for pid in $SESSION_GAMES; do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo "its process $pid has stopped"
+            return
+        fi
+    done
+    local file
+    while read -r file; do
+        if [[ $file != "$DEV_MOD_DIR/"* ]] || ! reloaded "${file#"$DEV_MOD_DIR/"}"; then
+            echo "${file#"$REPO/"} changed"
+            return
+        fi
+    done < <(find "$DEV_MOD_DIR" "$HARNESS_MOD_DIR" -newer "$HARNESS_FILE" -type f)
+    # "Files <ours> and <copy> differ" or "Only in <folder>: <name>", for every changed file.
+    local changed i
+    for ((i = 0; i < ${#LIBRARY_DIRS[@]}; i++)); do
+        changed=$(diff -rq "${LIBRARY_DIRS[$i]}" "$CACHE/mods/${LIBRARY_FOLDERS[$i]}" | head -1 || true)
+        if [ -n "$changed" ]; then
+            echo "the library ${LIBRARY_IDS[$i]} changed: $changed"
+            return
+        fi
+    done
+    changed=$(diff -rq "$MOD_DIR" "$CACHE/mods/$MOD_FOLDER" | head -1 || true)
+    if [ -n "$changed" ]; then
+        echo "the mod changed: $changed"
+    fi
+}
+
+# Sends a kept game the tests to run, the run's settings and the files to load again, in the
+# conf's order: RUN_ID, which names the run in console.txt. With --mp the server loads the shared
+# and server files again too, from its own cache dir.
+request_rerun() {
+    RUN_ID="$$-$(date +%s)"
+    local pattern file relative server_files=()
+    {
+        echo "$RUN_ID"
+        echo "$SELECTION"
+        printf 'option leaks=%s\noption order=%s\noption rounds=%s\noption trace=%s\n' "$LEAKS" "$ORDER" "$ROUNDS" "$TRACE"
+        for pattern in "${RELOAD_FILES[@]}"; do
+            for file in "$CACHE/mods/$DEV_MOD_FOLDER/"$pattern; do
+                [ -f "$file" ] || continue
+                echo "$file"
+                relative=${file#"$CACHE/mods/$DEV_MOD_FOLDER/"}
+                if [ -n "$MP" ] && [[ $relative == */media/lua/server/* || $relative == */media/lua/shared/* ]]; then
+                    server_files+=("server $SERVER_CACHE/mods/$DEV_MOD_FOLDER/$relative")
+                fi
+            done
+        done
+        if [ ${#server_files[@]} -gt 0 ]; then
+            printf '%s\n' "${server_files[@]}"
+        fi
+    } > "$REQUEST_FILE.tmp"
+    mv "$REQUEST_FILE.tmp" "$REQUEST_FILE" # whole, so the game never reads half a request
+}
+
+# Runs the conf's PRECHECK, by default the mod's dev/static-check.sh if it has one, from the
+# repository, and fails the script if it fails, before it spends a game on code it rejects.
 run_precheck() {
-    declare -p PRECHECK > /dev/null 2>&1 && [ ${#PRECHECK[@]} -gt 0 ] || return 0
+    if ! declare -p PRECHECK > /dev/null 2>&1; then
+        PRECHECK=()
+        [ ! -x "$REPO/dev/static-check.sh" ] || PRECHECK=(dev/static-check.sh)
+    fi
+    [ ${#PRECHECK[@]} -gt 0 ] || return 0
     if ! (cd "$REPO" && "${PRECHECK[@]}"); then
         echo "FAIL: PRECHECK (${PRECHECK[*]}) failed, so no game started" >&2
         exit 1
     fi
 }
 
-# TEST_MAP ----------------------------------------------------------------------------------------
+# Test selection ----------------------------------------------------------------------------------
 
-# The conf's TEST_MAP maps each file of the mods to the tests that reach it (docs/adopting.md),
-# for run-client.sh --changed and the suspects of a failure. static-check.sh and --changed fail
-# while it misses a file (check_test_map).
-
-# Every file of the repository and the harness submodule, tracked or untracked, relative to the
-# repository.
-repo_files() {
-    local submodule=${HARNESS#"$REPO/"}
-    git -C "$REPO" ls-files --cached --others --exclude-standard
-    git -C "$HARNESS" ls-files --cached --others --exclude-standard | sed "s|^|$submodule/|"
-}
-
-# Sets MATCHES to TEST_MAP's entry indexes for file $1, relative to the repository. Fails only
-# outside the mods TEST_MAP covers; a mapped file with no matching glob has an empty MATCHES.
-test_map_matches() {
-    local entry i=0
-    MATCHES=()
-    case $1 in
-        "${MOD_DIR#"$REPO/"}/"* | "${DEV_MOD_DIR#"$REPO/"}/"* | "${HARNESS_MOD_DIR#"$REPO/"}/"*) ;;
-        *) return 1 ;;
-    esac
-    for entry in ${TEST_MAP[@]+"${TEST_MAP[@]}"}; do
-        # shellcheck disable=SC2053 # the glob is a pattern
-        [[ $1 != ${entry%%=*} ]] || MATCHES+=("$i")
-        i=$((i + 1))
-    done
-    return 0
-}
-
-# What file $1 reaches, in REACH: "-" for none, as for a file outside the mods TEST_MAP covers;
-# "*" for every test, as for a mapped file that no glob covers; else the test prefixes of every
-# glob that matches it, comma-separated, empty for a file no test exercises.
-file_reach() {
-    local i prefixes=
-    if ! test_map_matches "$1"; then
-        REACH=-
-        return
+# Runs lib/tests.py, which owns the conf's TEST_MAP (docs/adopting.md) and the test selections of
+# run-client.sh --changed and --failed and the suspects of a failure, with the conf and the batch
+# (tests.py batch) it needs. `tests_py check` fails, saying how to fix each, while TEST_MAP misses a
+# file of the mod or the dev mod or has a glob that matches no file.
+tests_py() {
+    local vars=(REPO="$REPO" HARNESS="$HARNESS" MOD_DIR="$MOD_DIR" DEV_MOD_DIR="$DEV_MOD_DIR"
+        HARNESS_MOD_DIR="$HARNESS_MOD_DIR" RUNS_FAILED="$RUNS_FAILED" SINCE="${SINCE:-}"
+        LIBRARY_IDS="${LIBRARY_IDS[*]+${LIBRARY_IDS[*]}}" BATCH_BASE="${BATCH_BASE:-}"
+        BATCH_HEAD="${BATCH_HEAD:-}" HARNESS_BASE="${HARNESS_BASE:-}" HARNESS_HEAD="${HARNESS_HEAD:-}"
+        BATCH_BASE_SAID="${BATCH_BASE_SAID:-}" PYTHONDONTWRITEBYTECODE=1)
+    if declare -p TEST_MAP > /dev/null 2>&1; then
+        vars+=(TEST_MAP="$(printf '%s\n' ${TEST_MAP[@]+"${TEST_MAP[@]}"})")
     fi
-    if [ ${#MATCHES[@]} -eq 0 ]; then
-        REACH='*'
-        return
-    fi
-    for i in "${MATCHES[@]}"; do
-        prefixes="$prefixes,${TEST_MAP[i]#*=}"
-    done
-    REACH=$(tr ',' '\n' <<< "$prefixes" | sed '/^$/d' | sort -u | paste -sd, -)
-}
-
-# Fails, saying how to fix each, while TEST_MAP misses a mapped file, whose change would run every
-# test, or has a glob that matches none of those files, such as one for a file since renamed.
-# A conf without TEST_MAP runs every test for any change, so has nothing to miss.
-check_test_map() {
-    local file i status=0 used=()
-    declare -p TEST_MAP > /dev/null 2>&1 || return 0
-    while read -r file; do
-        test_map_matches "$file" || continue
-        if [ ${#MATCHES[@]} -eq 0 ]; then
-            echo "TEST_MAP: $file has no line in dev/harness.conf; add one naming the tests that reach it (nothing after = for none)" >&2
-            status=1
-        fi
-        for i in ${MATCHES[@]+"${MATCHES[@]}"}; do
-            used[i]=1
-        done
-    done < <(repo_files)
-    for ((i = 0; i < ${#TEST_MAP[@]}; i++)); do
-        if [ -z "${used[i]:-}" ]; then
-            echo "TEST_MAP: ${TEST_MAP[i]%%=*} matches no file; fix or remove its line in dev/harness.conf" >&2
-            status=1
-        fi
-    done
-    return $status
+    env -u TEST_MAP "${vars[@]}" python3 "$HARNESS/lib/tests.py" "$@"
 }
 
 # Run timing --------------------------------------------------------------------------------------
@@ -509,6 +539,95 @@ prepare_server() {
     rm -rf "$CACHE/Saves/Multiplayer/$SERVER_NAME"
 }
 
+# The client cache of run-client.sh: your game settings, the mods to load and the run's file,
+# HARNESS_FILE, from run-client.sh's MODE, SELECTION and settings. Clears the other files in
+# <cachedir>/Lua the last run left (client/PZHarness/Run.lua).
+prepare_cache() {
+    # Reuse your game settings (resolution, language, accepted terms of service) so a fresh cache
+    # dir doesn't stop at first-run screens.
+    if [ ! -f "$CACHE/options.ini" ] && [ -f "$HOME/Zomboid/options.ini" ]; then
+        cp "$HOME/Zomboid/options.ini" "$CACHE/options.ini"
+    fi
+    # Harness runs play no sound, so they don't blare while you work. Only the volumes are zeroed:
+    # the sound engine still runs, so code that plays sounds runs the same. A plain run keeps your
+    # volumes.
+    if [ -n "$MODE" ] && [ -f "$CACHE/options.ini" ]; then
+        local key
+        for key in soundVolume musicVolume ambientVolume vehicleEngineVolume jumpScareVolume voiceVolumePlayers; do
+            sed -i '' "s/^$key=.*/$key=0/" "$CACHE/options.ini"
+        done
+    fi
+    # Without this file the client empties mods/default.txt on start, as it does the first time a
+    # cache dir runs a new major release (ZomboidFileSystem.resetDefaultModsForNewRelease).
+    echo "If this file does not exist, default.txt will be reset to empty (no mods active)." > "$CACHE/mods/reset-mods-42_00.txt"
+    # The dev mod and the harness load in every mode, so playing by hand has the scenario and the
+    # tests too.
+    link_dev_mods
+    mkdir -p "$CACHE/Lua"
+    rm -f "$REQUEST_FILE" "$CONNECT_FILE" "$TRACE_FILE" "$TEST_FILES_FILE"
+    # Written when playing by hand too: the tests take their console tag from it. A --test world
+    # is quiet (QUIET_WORLD) and has the mod's TEST_SANDBOX options; the runner sets them before the
+    # scenario's own setSandbox, which may override them. A mode with groups gets the conf's
+    # MODE_GROUPS_<mode> too, all of them whatever the selection.
+    local quiet= groups_var="MODE_GROUPS_$MODE"
+    if [ "$MODE" = test ]; then
+        quiet=$(IFS=,; echo "${QUIET_WORLD[*]+${QUIET_WORLD[*]}}${TEST_SANDBOX[*]+,${TEST_SANDBOX[*]}}")
+    fi
+    local groups=${!groups_var:-}
+    printf 'mode=%s\nselection=%s\nstay=%s\nmp=%s\nmark=%s\ntag=%s\nleaks=%s\norder=%s\nrounds=%s\ntrace=%s\nquiet=%s\ngroups=%s\n' \
+        "$MODE" "$SELECTION" "$STAY" "$MP" "$MARK" "$TAG" "$LEAKS" "$ORDER" "$ROUNDS" "$TRACE" "${quiet#,}" \
+        "${groups// /,}" > "$HARNESS_FILE"
+    # Libraries first, in their load order, as a player's game loads a mod's require= mods first.
+    {
+        printf 'VERSION = 1,\n\nmods\n{\n'
+        printf '    mod = %s,\n' ${LIBRARY_IDS[@]+"${LIBRARY_IDS[@]}"} "$MOD_ID" "$HARNESS_MOD_ID" "$DEV_MOD_ID"
+        printf '}\n\nmaps\n{\n}\n'
+    } > "$CACHE/mods/default.txt"
+    # The harness sets the scenario's forceLaunch; this debug option lets it start from the main
+    # menu. A multiplayer client joins the server instead.
+    printf 'Version=1\nDebugScenario.ForceLaunch=%s\n' "$([ -n "$MODE" ] && [ -z "$MP" ] && echo true || echo false)" > "$CACHE/debug-options.ini"
+    if [ -n "$MP" ]; then
+        # The character the client kept of the last run's server, whose world is gone.
+        rm -rf "$CACHE/Saves/Multiplayer"
+    fi
+    # Every harness run starts a new world and leaves its save behind, gigabytes over weeks; the
+    # newest few stay for looking into a run.
+    if [ -n "$MODE" ] && [ -d "$CACHE/Saves/Sandbox" ]; then
+        ls -1t "$CACHE/Saves/Sandbox" | tail -n +4 | while IFS= read -r save; do
+            rm -rf "${CACHE:?}/Saves/Sandbox/$save"
+        done
+    fi
+}
+
+# The server of run-client.sh --mp, in SERVER_CACHE on SERVER_PORT, started: the client's mods, no
+# zombies, a quiet world with the mod's TEST_SANDBOX options, not paused while nobody plays, open
+# to the client without a whitelist, on its own ports. Every harness test world has no zombies, so
+# nothing attacks the character during the tests. The server runs its sandbox file as Lua, so the
+# lines go after the conf's hook's, and set an option only where the hook set nothing.
+prepare_mp_server() {
+    local client_cache=$CACHE sandbox option key
+    CACHE=$SERVER_CACHE
+    link_dev_mods
+    prepare_server "$PUBLISHED_MODS;$HARNESS_MOD_ID;$DEV_MOD_ID" "DefaultPort=$SERVER_PORT" \
+        "UDPPort=$((SERVER_PORT + 1))" Open=true PauseEmpty=false
+    sandbox="$CACHE/Server/${SERVER_NAME}_SandboxVars.lua"
+    if [ -f "$sandbox" ]; then
+        echo "SandboxVars.Zombies = 6" >> "$sandbox"
+    else
+        echo "SandboxVars = { Zombies = 6 }" > "$sandbox"
+    fi
+    for option in ${QUIET_WORLD[@]+"${QUIET_WORLD[@]}"} ${TEST_SANDBOX[@]+"${TEST_SANDBOX[@]}"}; do
+        key=${option%%=*}
+        if [[ $key == *.* ]]; then
+            echo "SandboxVars.${key%%.*} = SandboxVars.${key%%.*} or {}" >> "$sandbox"
+        fi
+        echo "if SandboxVars.$key == nil then SandboxVars.$key = ${option#*=} end" >> "$sandbox"
+    done
+    timing_mark server_start
+    start_server
+    CACHE=$client_cache
+}
+
 # Starts the dedicated server of $CACHE in the background, its console reading from file
 # descriptor 3: SERVER_PID, and SERVER_LOG, its console.txt. java/FastServer.java starts it with
 # more asset loader threads.
@@ -533,6 +652,19 @@ start_server() {
 
 server_started() {
     grep -q "SERVER STARTED" "$SERVER_LOG" 2>/dev/null
+}
+
+# Waits until the server of start_server has started, at most $1 seconds; fails if it stops or
+# the time runs out first.
+wait_server_started() {
+    local waited=0
+    until server_started; do
+        if [ "$waited" -ge "$1" ] || ! kill -0 "$SERVER_PID" 2>/dev/null; then
+            return 1
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
 }
 
 # Asks the server to save and exit, through its console if this script started it.

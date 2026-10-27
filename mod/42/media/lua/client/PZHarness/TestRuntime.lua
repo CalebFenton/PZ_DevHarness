@@ -1,4 +1,5 @@
 require "PZHarness/ServerCalls"
+local Report = require "PZHarness/Report"
 
 -- Internal runtime of TestLib: the action queue, ordered server calls and the active test's
 -- lifetime. TestLib creates PZHarness.Test before loading this module; feature modules require
@@ -229,8 +230,7 @@ local RECEIVE_MS = 15000
 local unwindingFailures
 
 -- Takes back on the server what call `id` of handler `name` built. A multiplayer server answers
--- after the test's verdict, so a failure then is reported on its own line and counted by the
--- runner.
+-- after the test's verdict, so a failure then is reported on its own line (Report.lateFailure).
 local function unwindOnServer(self, name, id)
     PZHarness.ServerCalls.send("unwind", { test = self.name, call = id }, function(answer)
         if not answer.error then
@@ -240,8 +240,7 @@ local function unwindOnServer(self, name, id)
         if unwindingFailures then
             table.insert(unwindingFailures, failure)
         else
-            print(PZHarness.run.tag .. " FAIL " .. self.name .. ": " .. failure)
-            PZHarness.ServerCalls.lateFailures = PZHarness.ServerCalls.lateFailures + 1
+            Report.lateFailure(self.name, failure)
         end
     end)
 end
@@ -517,8 +516,7 @@ function Runtime.outside(name, args, ready)
             return true
         end
         if getTimestampMs() - sinceMs > RECEIVE_MS then
-            print(PZHarness.run.tag .. " FAIL " .. name .. ": this client never got what the server did")
-            PZHarness.ServerCalls.lateFailures = PZHarness.ServerCalls.lateFailures + 1
+            Report.lateFailure(name, "this client never got what the server did")
             return true
         end
         return false

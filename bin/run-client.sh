@@ -32,7 +32,7 @@
 # ORDER=shuffle[:<seed>] changes the order, LEAKS=fail (the default), warn or off sets what the
 # leak check between tests does, and TRACE=1 reports where the run's time went (lib/trace.py).
 # After a failure the script names, for each failed test, the batch's changed files that reach it
-# and their commits. docs/running.md and docs/debugging.md describe them.
+# and their commits (lib/tests.py). docs/running.md and docs/debugging.md describe them.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../lib/harness.sh"
 
@@ -78,177 +78,43 @@ if [ -n "$MP" ]; then
     SERVER_PORT=${SERVER_PORT:-16361}
 fi
 # What the run does, comma-separated: for --test TESTS name prefixes or exact "=<name>" names
-# (from --failed or --changed when given), else the variable the conf names in
-# MODE_SELECTION_<mode>.
+# (from --failed or --changed, "@<file>" too, when given), else the environment variable named
+# after the mode in capitals, PROMO for --promo.
 SELECTION=
+# The mark of the run's console lines: TAG for --test, else TAG without its "Test" and the mode
+# capitalised, REPromo for RETest's --promo.
 MARK=$TAG
 # The test runs' settings, which the runner reads with the selection.
 LEAKS=${LEAKS:-fail} ORDER=${ORDER:-} ROUNDS=${REPEAT:-1} TRACE=${TRACE:-}
-# Where --failed finds what failed last, one line per kind of run: "<test or test-mp>
-# <name>:<runs>,...", each test that failed with the number of runs of that kind in a row it has
-# failed.
+# Where --failed finds what failed last: "<test or test-mp> <name>:<runs>,...", each test that
+# failed with the number of runs of that kind in a row it has failed (lib/tests.py).
 FAILED_KEY="test${MP:+-mp}"
-# Runs in a row a test may fail before the script says reruns aren't narrowing it down.
-STUCK_RUNS=3
 
-# The exact names of the tests that failed in the last run of this kind, as a selection.
-select_failed() {
-    local line names
-    line=$(grep "^$FAILED_KEY " "$RUNS_FAILED" 2>/dev/null | tail -1 || true)
-    if [ -z "$line" ]; then
-        echo "--failed: no $FAILED_KEY run has been recorded in ${RUNS_FAILED#"$REPO/"} yet" >&2
-        exit 2
-    fi
-    names=$(sed 's/:[0-9]*//g' <<< "${line#"$FAILED_KEY "}")
-    if [ -z "$names" ]; then
-        echo "--failed: nothing failed in the last $FAILED_KEY run; no tests to run"
-        exit 0
-    fi
-    echo "--failed: rerunning what failed in the last $FAILED_KEY run: ${names//,/, }"
-    SELECTION="=${names//,/,=}"
+# Runs `tests_py "$@"` for a selection: prints what it decided and sets SELECTION, or ends the
+# script when no test is to run (0) or it failed (2).
+select_tests() {
+    local out status=0
+    out=$(tests_py "$@") || status=$?
+    [ -z "$out" ] || grep -v '^SELECTION=' <<< "$out" || true
+    case $status in
+        0) SELECTION=$(sed -n 's/^SELECTION=//p' <<< "$out") ;;
+        3) exit 0 ;;
+        *) exit 2 ;;
+    esac
 }
 
-# The batch that --changed and the suspects of a failure look at: what changed since BATCH_BASE,
-# SINCE when set, else where the branch left its upstream, else HEAD, which leaves out the
-# branch's commits. HARNESS_BASE is the harness commit the repository recorded at BATCH_BASE, so
-# the batch has the harness's own commits too, else the harness's HEAD. Both HEADs are kept as the
-# run starts, so a commit made during the run isn't counted in it.
-batch_base() {
-    local upstream submodule=${HARNESS#"$REPO/"}
-    BATCH_HEAD=$(git -C "$REPO" rev-parse HEAD)
-    HARNESS_HEAD=$(git -C "$HARNESS" rev-parse HEAD)
-    if [ -n "${SINCE:-}" ]; then
-        if ! BATCH_BASE=$(git -C "$REPO" rev-parse --verify --quiet "$SINCE^{commit}"); then
-            echo "SINCE=$SINCE names no commit of the repository" >&2
-            exit 2
-        fi
-        BATCH_BASE_WHY="SINCE=$SINCE"
-    elif upstream=$(git -C "$REPO" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null) \
-        && BATCH_BASE=$(git -C "$REPO" merge-base HEAD "$upstream"); then
-        BATCH_BASE_WHY="where the branch left $upstream"
-    elif upstream=$(git -C "$REPO" rev-parse --abbrev-ref origin/HEAD 2>/dev/null) \
-        && BATCH_BASE=$(git -C "$REPO" merge-base HEAD "$upstream"); then
-        # A local branch, as an agent's worktree has, covers what it added to the default branch.
-        BATCH_BASE_WHY="where the branch left $upstream, having no upstream of its own"
-    else
-        BATCH_BASE=$BATCH_HEAD
-        BATCH_BASE_WHY="HEAD: the branch has no upstream and the repository no origin/HEAD, so SINCE=<ref> adds its commits"
-    fi
-    HARNESS_BASE=$(git -C "$REPO" rev-parse --verify --quiet "$BATCH_BASE:$submodule" || true)
-    if [ -z "$HARNESS_BASE" ] || ! git -C "$HARNESS" cat-file -e "$HARNESS_BASE^{commit}" 2>/dev/null; then
-        HARNESS_BASE=$HARNESS_HEAD
-    fi
-    BATCH_BASE_SAID="$(git -C "$REPO" rev-parse --short "$BATCH_BASE") ($BATCH_BASE_WHY)"
-}
-
-# Every file changed in the batch, committed, staged, unstaged or untracked, relative to the
-# repository, the harness submodule's own changes included.
-changed_files() {
-    local submodule=${HARNESS#"$REPO/"}
-    {
-        git -C "$REPO" diff --name-only "$BATCH_BASE"
-        git -C "$REPO" ls-files --others --exclude-standard
-        { git -C "$HARNESS" diff --name-only "$HARNESS_BASE"; git -C "$HARNESS" ls-files --others --exclude-standard; } \
-            | sed "s|^|$submodule/|"
-    } | sort -u
-}
-
-# The batch's commits that touched file $1, newest first, as "<hash> "<subject>"", and
-# "uncommitted" if it differs from HEAD or is untracked.
-file_history() {
-    local submodule=${HARNESS#"$REPO/"} dir=$REPO base=$BATCH_BASE head=$BATCH_HEAD file=$1
-    if [[ $file == "$submodule/"* ]]; then
-        dir=$HARNESS base=$HARNESS_BASE head=$HARNESS_HEAD file=${file#"$submodule/"}
-    fi
-    git -C "$dir" log --format='%h "%<(60,trunc)%s' "$base..$head" -- "$file" | sed 's/ *$/"/'
-    if [ -n "$(git -C "$dir" status --porcelain -- "$file")" ]; then
-        echo uncommitted
-    fi
-}
-
-# The test prefixes the conf's TEST_MAP gives for the batch's changed files, saying why for each
-# file (file_reach), once check_test_map has passed. A library's repository records no batch base
-# for this one, so its changes are not in the batch.
-select_changed() {
-    local file picked= everything= relevant=
-    check_test_map || exit 2
-    echo "--changed: base $BATCH_BASE_SAID"
-    if [ ${#LIBRARY_IDS[@]} -gt 0 ]; then
-        echo "--changed: changes to the libraries (${LIBRARY_IDS[*]}) are not in the batch; after one, run every test"
-    fi
-    while read -r file; do
-        [ -n "$file" ] || continue
-        file_reach "$file"
-        case $REACH in
-            -) continue ;;
-            '*')
-                echo "--changed: $file: no TEST_MAP glob covers it, so every test runs"
-                everything=1
-                ;;
-            *)
-                echo "--changed: $file: ${REACH:-no tests}"
-                picked="$picked,$REACH"
-                ;;
-        esac
-        relevant=1
-    done < <(changed_files)
-    if [ -z "$relevant" ]; then
-        echo "--changed: nothing under the mods changed since the base; no tests to run"
-        exit 0
-    fi
-    if [ -n "$everything" ]; then
-        SELECTION=
-        return
-    fi
-    SELECTION=$(tr ',' '\n' <<< "$picked" | sed '/^$/d' | sort -u | paste -sd, -)
-    if [ -z "$SELECTION" ]; then
-        echo "--changed: no test covers the changed files; no tests to run"
-        exit 0
-    fi
-    echo "--changed: running $SELECTION"
-}
-
-# For each test that failed, the line "suspects <test>: <file> (<commits>); ...": the batch's
-# changed files that reach it (file_reach; an entry "=<name>" reaches that test alone), each with
-# file_history's commits, newest first.
-print_suspects() {
-    local names=$1 name file files reach prefix line hit history
-    [ -n "$names" ] && [ -n "${BATCH_BASE:-}" ] || return 0
-    files=$(changed_files)
-    echo "suspects: the files changed since $BATCH_BASE_SAID that reach each failed test"
-    for name in ${names//,/ }; do
-        line=
-        while read -r file; do
-            [ -n "$file" ] || continue
-            file_reach "$file"
-            hit=
-            case $REACH in
-                -) ;;
-                '*') hit=1 ;;
-                *)
-                    for prefix in ${REACH//,/ }; do
-                        if [[ $prefix == =* && $name == "${prefix#=}" ]] || [[ $prefix != =* && $name == "$prefix"* ]]; then
-                            hit=1
-                        fi
-                    done
-                    ;;
-            esac
-            [ -n "$hit" ] || continue
-            history=$(file_history "$file" | awk 'NR > 1 { printf ", " } { printf "%s", $0 }')
-            line="$line; $file (${history:-no commit})"
-        done <<< "$files"
-        line=${line:-; none of the changed files reach it}
-        echo "suspects $name: ${line#; }"
-    done
+results_py() {
+    PYTHONDONTWRITEBYTECODE=1 python3 "$HARNESS/lib/results.py" "$@"
 }
 
 if [ "$MODE" = test ]; then
     SELECTION=${TESTS:-}
-    batch_base
+    batch=$(tests_py batch) || exit 2
+    eval "$batch"
     if [ -n "$FAILED" ]; then
-        select_failed
+        select_tests failed "$FAILED_KEY"
     elif [ -n "$CHANGED" ]; then
-        select_changed
+        select_tests changed
     fi
     case $LEAKS in
         fail | warn | off) ;;
@@ -271,23 +137,21 @@ if [ "$MODE" = test ]; then
         *) echo "ORDER is reverse, shuffle or shuffle:<seed>" >&2; exit 2 ;;
     esac
 elif [ -n "$MODE" ]; then
-    selection_var="MODE_SELECTION_$MODE"
-    if [ -n "${!selection_var:-}" ]; then
-        selection_name=${!selection_var}
-        SELECTION=${!selection_name:-}
-    fi
-    mark_var="MODE_MARK_$MODE"
-    MARK=${!mark_var:-$TAG}
+    selection_name=$(tr '[:lower:]' '[:upper:]' <<< "$MODE")
+    SELECTION=${!selection_name:-}
+    MARK="${TAG%Test}$(tr '[:lower:]' '[:upper:]' <<< "${MODE:0:1}")${MODE:1}"
     # A mode with groups refuses a name the conf doesn't list before the game starts, and gets
     # every group when the selection names none, so its handler always has the groups to shoot,
-    # in the conf's order.
+    # in the conf's order. The runner gets the conf's groups too (PZHarness.run.groups), so the
+    # handler can refuse a group of its own the conf doesn't list.
     groups_var="MODE_GROUPS_$MODE"
-    if [ -n "${!groups_var:-}" ]; then
-        groups=${!groups_var} picked=
+    groups=${!groups_var:-}
+    if [ -n "$groups" ]; then
+        picked=
         SELECTION=${SELECTION// /}
         for group in ${SELECTION//,/ }; do
             if [[ " $groups " != *" $group "* ]]; then
-                echo "unknown ${selection_name:-$MODE} group $group; the groups are ${groups// /, }" >&2
+                echo "unknown $selection_name group $group; the groups are ${groups// /, }" >&2
                 exit 2
             fi
         done
@@ -299,13 +163,9 @@ elif [ -n "$MODE" ]; then
         SELECTION=${picked#,}
     fi
 fi
-# A selection the mod refuses fails here rather than after the game has started.
-if [ -n "$MODE" ] && declare -F "harness_check_$MODE" > /dev/null; then
-    "harness_check_$MODE"
-fi
 # Only a game that died or hung outside a test: the runner fails a stuck test itself after its
-# per-test limit (Runner.lua). REPEAT runs the suite that many times over, so the cap scales with
-# it. The other modes, such as a mod's long reports, get a longer cap.
+# per-test limit (Schedule.lua). REPEAT runs the suite that many times over, so the cap scales
+# with it. The other modes, such as a mod's long reports, get a longer cap.
 if [ "$MODE" = test ]; then
     TIMEOUT=${TIMEOUT:-$((300 * ROUNDS))}
 else
@@ -345,60 +205,15 @@ if [ -n "$MODE" ]; then
     run_precheck
 fi
 LOG="$CACHE/console.txt"
-# The harness Lua reads the run from the first file, with --stay rerun requests from the second
-# and with --mp the server to join from the third, written once the server has started
-# (PZHarness/Runner.lua).
+# The files of <cachedir>/Lua the harness Lua and this script talk through (client/PZHarness/
+# Run.lua): the run, --stay rerun requests, with --mp the server to join, written once the server
+# has started, the file each test came from, and where a TRACE run's runner records its timings
+# (PZHarness/Trace.lua).
 HARNESS_FILE="$CACHE/Lua/PZHarness.txt"
 REQUEST_FILE="$CACHE/Lua/PZHarnessRerun.txt"
 CONNECT_FILE="$CACHE/Lua/PZHarnessConnect.txt"
-# Where a TRACE run's runner records its timings (PZHarness/Trace.lua).
+TEST_FILES_FILE="$CACHE/Lua/PZHarnessTests.txt"
 TRACE_FILE="$CACHE/Lua/PZHarnessTrace.txt"
-
-# Whether $1, relative to the dev mod, is one of the files a rerun loads again.
-reloaded() {
-    local pattern
-    for pattern in "${RELOAD_FILES[@]}"; do
-        # shellcheck disable=SC2053 # the pattern is a glob
-        [[ $1 == $pattern ]] && return 0
-    done
-    return 1
-}
-
-# Why a kept game can't rerun the tests: it belongs to another cache dir, part of it has stopped,
-# or something it loaded only at start changed since. Prints nothing if it can.
-session_stale() {
-    if [ "$SESSION_CACHE" != "$CACHE" ]; then
-        echo "it runs with the cache dir $SESSION_CACHE"
-        return
-    fi
-    local pid
-    for pid in $SESSION_GAMES; do
-        if ! kill -0 "$pid" 2>/dev/null; then
-            echo "its process $pid has stopped"
-            return
-        fi
-    done
-    local file
-    while read -r file; do
-        if [[ $file != "$DEV_MOD_DIR/"* ]] || ! reloaded "${file#"$DEV_MOD_DIR/"}"; then
-            echo "${file#"$REPO/"} changed"
-            return
-        fi
-    done < <(find "$DEV_MOD_DIR" "$HARNESS_MOD_DIR" -newer "$HARNESS_FILE" -type f)
-    # "Files <ours> and <copy> differ" or "Only in <folder>: <name>", for every changed file.
-    local changed i
-    for ((i = 0; i < ${#LIBRARY_DIRS[@]}; i++)); do
-        changed=$(diff -rq "${LIBRARY_DIRS[$i]}" "$CACHE/mods/${LIBRARY_FOLDERS[$i]}" | head -1 || true)
-        if [ -n "$changed" ]; then
-            echo "the library ${LIBRARY_IDS[$i]} changed: $changed"
-            return
-        fi
-    done
-    changed=$(diff -rq "$MOD_DIR" "$CACHE/mods/$MOD_FOLDER" | head -1 || true)
-    if [ -n "$changed" ]; then
-        echo "the mod changed: $changed"
-    fi
-}
 
 acquire_game_lock reuse
 # The run's phases are timed from here, after any wait for another script's game (report_timing).
@@ -415,111 +230,6 @@ if [ -n "$SESSION_PID" ]; then
         stop_session
     fi
 fi
-
-# Sends a kept game the tests to run, the run's settings and the files to load again, in the
-# conf's order. The id names the run in console.txt. With --mp the server loads the shared and
-# server files again too, from its own cache dir.
-request_rerun() {
-    RUN_ID="$$-$(date +%s)"
-    local pattern file relative server_files=()
-    {
-        echo "$RUN_ID"
-        echo "$SELECTION"
-        printf 'option leaks=%s\noption order=%s\noption rounds=%s\noption trace=%s\n' "$LEAKS" "$ORDER" "$ROUNDS" "$TRACE"
-        for pattern in "${RELOAD_FILES[@]}"; do
-            for file in "$CACHE/mods/$DEV_MOD_FOLDER/"$pattern; do
-                [ -f "$file" ] || continue
-                echo "$file"
-                relative=${file#"$CACHE/mods/$DEV_MOD_FOLDER/"}
-                if [ -n "$MP" ] && [[ $relative == */media/lua/server/* || $relative == */media/lua/shared/* ]]; then
-                    server_files+=("server $SERVER_CACHE/mods/$DEV_MOD_FOLDER/$relative")
-                fi
-            done
-        done
-        if [ ${#server_files[@]} -gt 0 ]; then
-            printf '%s\n' "${server_files[@]}"
-        fi
-    } > "$REQUEST_FILE.tmp"
-    mv "$REQUEST_FILE.tmp" "$REQUEST_FILE" # whole, so the game never reads half a request
-}
-
-# Reuse your game settings (resolution, language, accepted terms of service) so a fresh cache
-# dir doesn't stop at first-run screens.
-prepare_cache() {
-    if [ ! -f "$CACHE/options.ini" ] && [ -f "$HOME/Zomboid/options.ini" ]; then
-        cp "$HOME/Zomboid/options.ini" "$CACHE/options.ini"
-    fi
-    # Harness runs play no sound, so they don't blare while you work. Only the volumes are zeroed:
-    # the sound engine still runs, so code that plays sounds runs the same. A plain run keeps your
-    # volumes.
-    if [ -n "$MODE" ] && [ -f "$CACHE/options.ini" ]; then
-        for key in soundVolume musicVolume ambientVolume vehicleEngineVolume jumpScareVolume voiceVolumePlayers; do
-            sed -i '' "s/^$key=.*/$key=0/" "$CACHE/options.ini"
-        done
-    fi
-    # Without this file the client empties mods/default.txt on start, as it does the first time a
-    # cache dir runs a new major release (ZomboidFileSystem.resetDefaultModsForNewRelease).
-    echo "If this file does not exist, default.txt will be reset to empty (no mods active)." > "$CACHE/mods/reset-mods-42_00.txt"
-    # The dev mod and the harness load in every mode, so playing by hand has the scenario and the
-    # tests too.
-    link_dev_mods
-    mkdir -p "$CACHE/Lua"
-    rm -f "$REQUEST_FILE" "$CONNECT_FILE" "$TRACE_FILE"
-    # Written when playing by hand too: the tests take their console tag from it. A --test world
-    # is quiet (QUIET_WORLD, lib/harness.sh); the runner sets those options before the scenario's
-    # own setSandbox, which may override them.
-    local quiet=
-    if [ "$MODE" = test ]; then
-        quiet=$(IFS=,; echo "${QUIET_WORLD[*]+${QUIET_WORLD[*]}}")
-    fi
-    printf 'mode=%s\nselection=%s\nstay=%s\nmp=%s\nmark=%s\ntag=%s\nleaks=%s\norder=%s\nrounds=%s\ntrace=%s\nquiet=%s\n' \
-        "$MODE" "$SELECTION" "$STAY" "$MP" "$MARK" "$TAG" "$LEAKS" "$ORDER" "$ROUNDS" "$TRACE" "$quiet" > "$HARNESS_FILE"
-    # Libraries first, in their load order, as a player's game loads a mod's require= mods first.
-    {
-        printf 'VERSION = 1,\n\nmods\n{\n'
-        printf '    mod = %s,\n' ${LIBRARY_IDS[@]+"${LIBRARY_IDS[@]}"} "$MOD_ID" "$HARNESS_MOD_ID" "$DEV_MOD_ID"
-        printf '}\n\nmaps\n{\n}\n'
-    } > "$CACHE/mods/default.txt"
-    # The harness sets the scenario's forceLaunch; this debug option lets it start from the main
-    # menu. A multiplayer client joins the server instead.
-    printf 'Version=1\nDebugScenario.ForceLaunch=%s\n' "$([ -n "$MODE" ] && [ -z "$MP" ] && echo true || echo false)" > "$CACHE/debug-options.ini"
-    if [ -n "$MP" ]; then
-        # The character the client kept of the last run's server, whose world is gone.
-        rm -rf "$CACHE/Saves/Multiplayer"
-    fi
-    # Every harness run starts a new world and leaves its save behind, gigabytes over weeks; the
-    # newest few stay for looking into a run.
-    if [ -n "$MODE" ] && [ -d "$CACHE/Saves/Sandbox" ]; then
-        ls -1t "$CACHE/Saves/Sandbox" | tail -n +4 | while IFS= read -r save; do
-            rm -rf "${CACHE:?}/Saves/Sandbox/$save"
-        done
-    fi
-}
-
-# The server of --mp: the client's mods, no zombies, a quiet world, not paused while nobody plays,
-# open to the client without a whitelist, on its own ports. Every harness test world has no
-# zombies, so nothing attacks the character during the tests. The server runs its sandbox file as
-# Lua, so the lines go after the conf's options, and the quiet ones (QUIET_WORLD) only where the
-# conf's hook set nothing.
-prepare_mp_server() {
-    local client_cache=$CACHE sandbox option
-    CACHE=$SERVER_CACHE
-    link_dev_mods
-    prepare_server "$PUBLISHED_MODS;$HARNESS_MOD_ID;$DEV_MOD_ID" "DefaultPort=$SERVER_PORT" \
-        "UDPPort=$((SERVER_PORT + 1))" Open=true PauseEmpty=false
-    sandbox="$CACHE/Server/${SERVER_NAME}_SandboxVars.lua"
-    if [ -f "$sandbox" ]; then
-        echo "SandboxVars.Zombies = 6" >> "$sandbox"
-    else
-        echo "SandboxVars = { Zombies = 6 }" > "$sandbox"
-    fi
-    for option in ${QUIET_WORLD[@]+"${QUIET_WORLD[@]}"}; do
-        echo "if SandboxVars.${option%%=*} == nil then SandboxVars.${option%%=*} = ${option#*=} end" >> "$sandbox"
-    done
-    timing_mark server_start
-    start_server
-    CACHE=$client_cache
-}
 
 install_mod
 # This run's part of console.txt: all of it after a launch; in a kept game, from this run's request
@@ -592,76 +302,19 @@ else
     fi
 fi
 
-# The tests that failed in this run, or were running when it stopped, for the next --failed run of
-# the same kind, each with how many such runs in a row it has failed; a run that never started its
-# tests leaves the last record alone. A FAIL line names its test, as do the late failures of its
-# server undos; one for a call outside any test names the handler, which no TEST line does.
-record_failed_tests() {
-    [ "$MODE" = test ] && logged "> $TAG START " || return 0
-    local names previous name entry runs record= stuck=
-    names=$(awk -v tag="$TAG" '
-        index($0, "> TEST: ") { current = substr($0, index($0, "> TEST: ") + 8); ran[current] = 1; next }
-        index($0, "> " tag " FAIL ") {
-            name = substr($0, index($0, "> " tag " FAIL ") + length(tag) + 8)
-            sub(/: .*/, "", name)
-            if (name in ran) failed[name] = 1
-            if (name == current) current = ""
-        }
-        index($0, "> " tag " PASS ") { current = "" }
-        index($0, "> " tag " DONE ") { done = 1 }
-        END {
-            if (!done && current != "") failed[current] = 1
-            for (name in failed) print name
-        }' "$RUN_LOG" | sort | paste -sd, -)
-    previous=$(grep "^$FAILED_KEY " "$RUNS_FAILED" 2>/dev/null | tail -1 || true)
-    for name in ${names//,/ }; do
-        runs=1
-        for entry in ${previous//,/ }; do
-            if [ "${entry%:*}" = "$name" ] && [[ ${entry##*:} =~ ^[0-9]+$ ]]; then
-                runs=$((${entry##*:} + 1))
-            fi
-        done
-        record="$record,$name:$runs"
-        if [ "$runs" -ge "$STUCK_RUNS" ]; then
-            stuck="$stuck $name ($runs)"
-        fi
-    done
-    { grep -v "^$FAILED_KEY " "$RUNS_FAILED" 2>/dev/null || true; echo "$FAILED_KEY ${record#,}"; } > "$RUNS_FAILED.tmp"
-    mv "$RUNS_FAILED.tmp" "$RUNS_FAILED"
-    if [ -n "$names" ]; then
-        echo "--failed reruns: ${names//,/, }"
-        print_suspects "$names"
-    fi
-    if [ -n "$stuck" ]; then
-        echo "failed $STUCK_RUNS or more runs in a row:$stuck. Rerunning won't narrow it; read ${HARNESS#"$REPO/"}/docs/debugging.md and change approach first"
-    fi
-}
-
-# One RUNS_TESTS_LOG line per PASS, FAIL or SKIP line of this run that has the test's wall time,
-# dated as the run's RUNS_LOG line: "<date> mode=<mode> test=<name> status=<pass, fail or skip>
-# seconds=<s>". A test REPEAT runs n times has n lines.
-record_test_times() {
-    [ "$MODE" = test ] && [ -n "${RUN_AT:-}" ] && [ -f "$RUN_LOG" ] || return 0
-    awk -v tag="$TAG" -v at="$RUN_AT" -v mode="$1" '
-        match($0, "> " tag " (PASS|FAIL|SKIP) ") && match($0, /\([0-9.]+ s\)$/) {
-            seconds = substr($0, RSTART + 1, RLENGTH - 4)
-            rest = substr($0, index($0, "> " tag " ") + length(tag) + 3)
-            status = tolower(substr(rest, 1, 4))
-            name = substr(rest, 6)
-            sub(/[: ].*/, "", name)
-            printf "%s mode=%s test=%s status=%s seconds=%s\n", at, mode, name, status, seconds
-        }' "$RUN_LOG" >> "$RUNS_TESTS_LOG"
-}
-
-# On exit (exit_report, lib/harness.sh): records what failed for --failed, prints this run's phases
-# and appends it to RUNS_LOG, and its tests to RUNS_TESTS_LOG. A kept game's rerun has no boot or
-# world phase, and only a game that quits has a quit phase. A run a Lua error stopped has a stopped
-# phase instead of the run, up to the poll that saw the error.
+# On exit (exit_report, lib/harness.sh): records what failed for --failed and prints the suspects
+# (lib/tests.py), prints this run's phases and appends it to RUNS_LOG, and appends a RUNS_TESTS_LOG
+# line per PASS, FAIL or SKIP line of its tests, dated as the run's RUNS_LOG line: "<date>
+# mode=<mode> test=<name> status=<pass, fail or skip> seconds=<s>" (lib/results.py). A kept game's
+# rerun has no boot or world phase, and only a game that quits has a quit phase. A run a Lua error
+# stopped has a stopped phase instead of the run, up to the poll that saw the error.
 report_timing() {
     [ -n "$MODE" ] || return 0
-    record_failed_tests
+    if [ "$MODE" = test ]; then
+        tests_py record "$FAILED_KEY" "${RUN_LOG:-}" "$TAG" "$TEST_FILES_FILE" || true
+    fi
     local counts mode="$MODE${MP:+-mp}${SESSION_PID:+-rerun}"
-    counts=$(sed -n "s/.*> $TAG DONE \(passed=[0-9]* failed=[0-9]* skipped=[0-9]*\)\$/\1/p" "$RUN_LOG" 2>/dev/null | tail -1)
+    counts=$(results_py counts "${RUN_LOG:-}" "$TAG" || true)
     report_run "$1" "$mode" "${SELECTION:-all}" \
         "${counts:-passed=- failed=- skipped=-}" \
         "setup|launch|script start to the game's launch, or to the rerun request in a kept game" \
@@ -672,7 +325,9 @@ report_timing() {
         "stopped|stopped|to the Lua error that stopped the run" \
         "quit|exit|to the game's exit, and with --mp the server's" \
         "server|server_ready|server launch to ready|server_start"
-    record_test_times "$mode"
+    if [ "$MODE" = test ] && [ -n "${RUN_AT:-}" ]; then
+        results_py times "$RUN_LOG" "$TAG" "$RUN_AT" "$mode" >> "$RUNS_TESTS_LOG" || true
+    fi
 }
 
 # The milestones in this run's log, each timed when a poll first sees it.
@@ -845,12 +500,8 @@ if [ "$MODE" != test ]; then
     fi
     exit 0
 fi
-if logged "$TAG DONE passed=0 failed=0 skipped=[0-9]+$"; then
-    echo "FAIL: no test ran in this mode ($(sed -n "s/.*> $TAG DONE passed=0 failed=0 skipped=\([0-9]*\)\$/\1/p" "$RUN_LOG" | tail -1) skipped)"
+if ! verdict=$(results_py verdict "$RUN_LOG" "$TAG"); then
+    echo "$verdict"
     exit 1
 fi
-if ! logged "$TAG DONE passed=[1-9][0-9]* failed=0 skipped=[0-9]+$"; then
-    echo "FAIL: not every test passed"
-    exit 1
-fi
-echo "PASS"
+echo "$verdict"

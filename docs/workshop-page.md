@@ -228,9 +228,10 @@ Pinning Pillow keeps a rerun from unchanged captures writing the same bytes. Wha
   what the things are for, a key being what `thing` takes. It fails unless every item in
   `promo.json` has a place. A card is the icon over the name; with `models`, the item's
   `model_<Module>_<Type>` capture framed from its box in `promo.json`'s `models`, over the icon
-  beside the name. `draw(rows, width, columns, k, height)` draws the rows given, or all of them;
-  `pages(pages, k)` makes gallery pages of (file name, caption, row captions, columns), and fails
-  unless each row is on one.
+  beside the name; `lib/capture.py` makes both from the capture mode's item model shots
+  ([adopting.md](adopting.md#capture-modes)). `draw(rows, width, columns, k, height)` draws the
+  rows given, or all of them; `pages(pages, k)` makes gallery pages of (file name, caption, row
+  captions, columns), and fails unless each row is on one.
 - **The recipe sheet.** `RecipeSheet(captures, sections, accent, accents, results)`, sections of
   (caption, recipe ids). It fails unless every recipe is in exactly one section. A card is the
   recipe's name, skills, how it's learned and its tools, then its inputs, an arrow and its

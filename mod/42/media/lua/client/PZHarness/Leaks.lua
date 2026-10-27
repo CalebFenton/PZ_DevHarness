@@ -6,8 +6,10 @@
 -- either side saw change. Server updates may still be in flight, so differences are rechecked
 -- every few ticks until the client catches up or a limit passes, and only what remains is reported.
 
+require "PZHarness/Run"
 require "PZHarness/Snapshot"
 require "PZHarness/ServerCalls"
+require "PZHarness/TestLib"
 
 PZHarness = PZHarness or {}
 local Leaks = {}
@@ -16,6 +18,9 @@ PZHarness.Leaks = Leaks
 -- The longest a check waits for the server's updates to arrive, and how often it looks meanwhile.
 local SETTLE_MS = 500
 local SETTLE_POLL_MS = 50
+-- How much further than TestLib's SEARCH_RADIUS the check looks, unless the dev mod sets
+-- `leakRadius`.
+local LEAK_MARGIN = 2
 
 -- This game's snapshot the next check compares with, and whether the server's baseline starts
 -- over with the next call.
@@ -26,6 +31,35 @@ local fresh = true
 function Leaks.reset()
     baseline = nil
     fresh = true
+end
+
+--- The check's settings: mode (the run's LEAKS: fail, warn or off), radius, z levels and ignore
+--- patterns (built-in plus the dev mod's `leakIgnore`).
+function Leaks.settings()
+    local run = PZHarness.run
+    local mode = run.leaks ~= nil and run.leaks ~= "" and run.leaks or "fail"
+    local tests = PZHarness.testSettings
+    local ignore = {}
+    for _, list in ipairs({ PZHarness.Snapshot.DEFAULT_IGNORE, tests.leakIgnore or {} }) do
+        for _, pattern in ipairs(list) do
+            table.insert(ignore, pattern)
+        end
+    end
+    return mode, tests.leakRadius or PZHarness.Test.SEARCH_RADIUS + LEAK_MARGIN, tests.leakLevels, ignore
+end
+
+--- What a check found (Leaks.start's result, or nil for no check) as Report.findings prints it: a
+--- LEAK for each thing left behind, then a DESYNC for each square where client and server
+--- differ, each with the reason it fails the test under LEAKS=fail.
+function Leaks.findings(found)
+    local findings = {}
+    for _, line in ipairs(found and found.leaks or {}) do
+        table.insert(findings, { kind = "LEAK", line = line, failure = "left behind " .. line })
+    end
+    for _, line in ipairs(found and found.desyncs or {}) do
+        table.insert(findings, { kind = "DESYNC", line = line, failure = "client and server differ at " .. line })
+    end
+    return findings
 end
 
 local function askServer(args, onAnswer)

@@ -2,7 +2,10 @@
 -- a debug scenario for playing through the mod by hand, whose character nothing sees or hurts,
 -- with every skill and recipe the mod reads, near what the mod's recipes and jobs take.
 
+require "PZHarness/Runner"
 require "PZHarness/TestCraft"
+local Stage = require "PZHarness/Stage"
+require "PZHarness/StageLots"
 
 PZHarness = PZHarness or {}
 local QA = {}
@@ -135,6 +138,170 @@ function QA.materials(names, prefer)
         return a.type < b.type
     end)
     return order, unmatched
+end
+
+--- A summary for QA.packToolboxes and QA.layGroups to count into, and QA.printSummary to print:
+--- `tools` packed in `boxes` toolboxes, of the types `toolboxes` lists; `items` of `types` laid
+--- in `groups`; and the types the game lacks (`unknown`) and those no square was left for
+--- (`unplaced`).
+function QA.newSummary()
+    return { types = 0, items = 0, groups = 0, tools = 0, boxes = 0, toolboxes = {}, unknown = {}, unplaced = {} }
+end
+
+-- Kept tools go in vanilla toolboxes. A kept item goes in only if vanilla files it as a tool and it
+-- fits a toolbox's MaxItemSize, which keeps the toolboxes few enough to hold: the crafting window
+-- takes items only from the bags the character holds or wears (ISInventoryPage:refreshBackpacks).
+local TOOLBOX = "Base.Toolbox"
+
+--- Puts the kept vanilla tools of `stock` (a list of { type, used, kept }, as QA.materials gives)
+--- in toolboxes in `player`'s inventory, starting a new one when the last has no room, the first
+--- two in the hands, and counts them into `summary` (QA.newSummary). Room is counted with no
+--- character, by the toolbox's own capacity, which the Organized and Disorganized traits would
+--- change (ItemContainer.getEffectiveCapacity), so every character gets the same toolboxes. A kept
+--- item that doesn't go in is added to its entry's `used`, what is left to lay out.
+function QA.packToolboxes(player, stock, summary)
+    local boxes, container = {}, nil
+    local maxSize = instanceItem(TOOLBOX):getMaxItemSize()
+    for _, entry in ipairs(stock) do
+        local script = entry.kept > 0 and luautils.stringStarts(entry.type, "Base.") and getScriptManager():FindItem(entry.type)
+        local category = script and script:getDisplayCategory()
+        local weight = script and script:getActualWeight()
+        if (category == "Tool" or category == "ToolWeapon") and weight < maxSize then
+            for _ = 1, entry.kept do
+                if not (container and container:hasRoomFor(nil, weight)) then
+                    local box = player:getInventory():AddItem(instanceItem(TOOLBOX))
+                    table.insert(boxes, box)
+                    container = box:getItemContainer()
+                end
+                container:AddItem(QA.newItem(entry.type))
+                summary.tools = summary.tools + 1
+            end
+            table.insert(summary.toolboxes, entry.type)
+            entry.kept = 0
+        end
+        entry.used = entry.used + entry.kept
+    end
+    summary.boxes = #boxes
+    player:setPrimaryHandItem(boxes[1])
+    player:setSecondaryHandItem(boxes[2])
+    -- So the inventory window shows the held toolboxes at once.
+    ISInventoryPage.dirtyUI()
+end
+
+-- A layout of QA.layGroups: rows `width` squares wide from its origin, south one after the other,
+-- skipping squares `accepts` refuses, so items keep their order around a house or a tree.
+local Layout = {}
+Layout.__index = Layout
+
+--- The layout's next square `accepts` takes, cleared of ground cover so what lies there shows; nil
+--- once the layout has taken `maxRows` rows.
+function Layout:nextSquare()
+    while self.row < self.maxRows do
+        local square = getCell():getGridSquare(self.x + self.column, self.y + self.row, self.z)
+        self.column = self.column + 1
+        if self.column == self.width then
+            self.column, self.row = 0, self.row + 1
+        end
+        if self.accepts(square) then
+            Stage.clearGroundCover(square)
+            return square
+        end
+    end
+    return nil
+end
+
+--- Ends the row, and leaves the next empty, between groups.
+function Layout:nextGroup()
+    self.row = self.row + (self.column > 0 and 2 or 1)
+    self.column = 0
+end
+
+--- The first square of the layout's next run of `length` squares east along the world that
+--- `accepts` takes, with the layout moved past the run's other squares so nothing is laid on them;
+--- nil if none is left.
+function Layout:nextRun(length)
+    local first
+    repeat
+        first = self:nextSquare()
+    until not first or Stage.isAreaOpen(first, length, 1, self.accepts)
+    for _ = 2, length do
+        self:nextSquare()
+    end
+    return first
+end
+
+--- The west square of the layout's next whole row that `accepts` takes, past an empty row, with the
+--- layout moved past that row; nil if none is left.
+function Layout:nextOpenRow()
+    self:nextGroup()
+    while self.row < self.maxRows do
+        local start = getCell():getGridSquare(self.x, self.y + self.row, self.z)
+        self.row = self.row + 1
+        if Stage.isAreaOpen(start, self.width, 1, self.accepts) then
+            Stage.clearGroundCover(start)
+            return start
+        end
+    end
+    return nil
+end
+
+-- Lays `entry`'s items on the layout's next square, scattered over it so they show.
+local function lay(layout, summary, entry, newItem)
+    if not QA.isKnown(entry.type) then
+        table.insert(summary.unknown, entry.type)
+        return
+    end
+    local square = layout:nextSquare()
+    if not square then
+        table.insert(summary.unplaced, entry.type)
+        return
+    end
+    for _ = 1, entry.count do
+        square:AddWorldInventoryItem(newItem(entry), ZombRandFloat(0.2, 0.8), ZombRandFloat(0.2, 0.8), 0)
+        summary.items = summary.items + 1
+    end
+    summary.types = summary.types + 1
+end
+
+local function isLoaded(square)
+    return square ~= nil
+end
+
+local function newItemOf(entry)
+    return QA.newItem(entry.type, entry.fluid)
+end
+
+--- Lays out `groups`, a list of { name, items }, in order from the square `origin` in rows `width`
+--- squares wide running south, each group from a row of its own with an empty row before it, a
+--- square to each item of `items`: { type, count, fluid }, `count` items of `type` filled with the
+--- Fluid `fluid` if given. Counts into `summary` (QA.newSummary). `opts`:
+--- - maxRows: the most rows the layout takes;
+--- - accepts(square), if any: whether an item may lie on `square` (nil where none is loaded),
+---   else any loaded square; the layout skips the others;
+--- - after, if any: { [name] = fn(layout, summary) }, what a group sets after its items, with the
+---   layout's nextSquare(), nextRun(length) and nextOpenRow(), and `width`; a group with no items
+---   is laid only for this;
+--- - newItem(entry), if any: the item to lay for `entry`, else QA.newItem(type, fluid).
+function QA.layGroups(origin, width, groups, summary, opts)
+    local after, newItem = opts.after or {}, opts.newItem or newItemOf
+    local layout = setmetatable({ x = origin:getX(), y = origin:getY(), z = origin:getZ(), column = 0, row = 0,
+        width = width, maxRows = opts.maxRows, accepts = opts.accepts or isLoaded }, Layout)
+    local laid = 0
+    for _, group in ipairs(groups) do
+        if #group.items > 0 or after[group.name] then
+            if laid > 0 then
+                layout:nextGroup()
+            end
+            for _, entry in ipairs(group.items) do
+                lay(layout, summary, entry, newItem)
+            end
+            if after[group.name] then
+                after[group.name](layout, summary)
+            end
+            laid = laid + 1
+        end
+    end
+    summary.groups = summary.groups + laid
 end
 
 --- Builds the build menu entity of the tile `sprite` at x, y, z as `player` does from the build

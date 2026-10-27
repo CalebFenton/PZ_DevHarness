@@ -1,9 +1,11 @@
--- Development only, not published. Lots for capture modes (docs/adopting.md, "Staging"): telling
--- open ground, finding a lot of it near the character, its squares, placing tiles on it so they
--- draw at once, and clearing it. It adds to PZHarness.Stage (PZHarness/Stage.lua).
+-- Development only, not published. Lots and places for capture modes (docs/adopting.md, "Staging"):
+-- telling open ground, finding lots and places near the character, their squares, placing tiles on
+-- them so they draw at once, clearing them, and the item model shots on a found floor. It adds to
+-- PZHarness.Stage (PZHarness/Stage.lua).
 
 require "PZHarness/Fixtures"
 local Stage = require "PZHarness/Stage"
+local Capture = require "PZHarness/Capture"
 
 -- The start of the names of the floors of soil and grass, which a world's generation blends.
 Stage.NATURAL_FLOOR = "blends_natural"
@@ -49,7 +51,7 @@ function Stage.isOpenGround(square, opts)
     end
     if opts.floor then
         local name = floorName(square)
-        if name == nil or not PZHarness.startsWith(name, opts.floor) then
+        if name == nil or not luautils.stringStarts(name, opts.floor) then
             return false
         end
     end
@@ -94,10 +96,10 @@ local function isApart(x, y, w, h, others, gap)
 end
 
 --- The closest lot `w` by `h` squares whose every square is open ground (Stage.isOpenGround with
---- `opts`), as { x, y, z, w, h }, its north-west corner and size, or nil. With `opts.others`
---- (lots this returned), it keeps `opts.gap` squares from each of them; with `opts.clearance`, the
---- squares that far round it are open ground too, of any floor, so that no building or fence
---- stands at its edge.
+--- `opts`), as { x, y, z, w, h }, its north-west corner and size, and a place on that corner
+--- (Stage.place), or nil. With `opts.others` (lots this returned), it keeps `opts.gap` squares from
+--- each of them; with `opts.clearance`, the squares that far round it are open ground too, of any
+--- floor, so that no building or fence stands at its edge.
 function Stage.findLot(player, w, h, opts)
     opts = opts or {}
     local others, gap, c = opts.others or {}, opts.gap or 0, opts.clearance or 0
@@ -114,7 +116,12 @@ function Stage.findLot(player, w, h, opts)
         return isApart(x, y, w, h, others, gap) and Stage.isAreaOpen(square, w, h, open)
             and (c == 0 or Stage.isAreaOpen(cell:getGridSquare(x - c, y - c, z), w + 2 * c, h + 2 * c, openAround))
     end)
-    return corner and { x = corner:getX(), y = corner:getY(), z = corner:getZ(), w = w, h = h } or nil
+    if not corner then
+        return nil
+    end
+    local lot = Stage.place(corner)
+    lot.x, lot.y, lot.z, lot.w, lot.h = corner:getX(), corner:getY(), corner:getZ(), w, h
+    return lot
 end
 
 --- The square `dx`, `dy` squares east and south of `lot`'s corner, `up` floors above it, or nil
@@ -148,6 +155,127 @@ function Stage.recalcLot(lot)
             end
         end
     end
+end
+
+-- Places ----------------------------------------------------------------------------------------------
+
+-- A place is a square its positions are measured from, `origin`, and a frame, the directions a
+-- position's two numbers, { along, out }, run in. An area of a place is the squares from along[1]
+-- to along[2] and out[1] to out[2]; with `sum` and `half`, only those whose along + out is within
+-- `half` of `sum`, a band across the screen.
+
+--- The frame of positions in (east, south) squares, which a lot's are.
+Stage.GRID = { along = { 1, 0 }, out = { 0, 1 } }
+
+--- A place on `origin` in `frame`, Stage.GRID by default.
+function Stage.place(origin, frame)
+    return { origin = origin, frame = frame or Stage.GRID }
+end
+
+--- The square at `position` ({ along, out }) of `place`, or nil where none is loaded.
+function Stage.at(place, position)
+    local origin, frame = place.origin, place.frame
+    local along, out = position[1], position[2]
+    return getCell():getGridSquare(origin:getX() + along * frame.along[1] + out * frame.out[1],
+        origin:getY() + along * frame.along[2] + out * frame.out[2], origin:getZ())
+end
+
+--- The squares of `place` at the positions of each list of positions given, in order.
+function Stage.squaresAt(place, ...)
+    local squares = {}
+    for i = 1, select("#", ...) do
+        for _, position in ipairs((select(i, ...))) do
+            table.insert(squares, Stage.at(place, position))
+        end
+    end
+    return squares
+end
+
+--- The squares of `place` at `positions` that are loaded and, if given, pass `accepts(square)`.
+function Stage.loadedSquares(place, positions, accepts)
+    local squares = {}
+    for _, position in ipairs(positions) do
+        local square = Stage.at(place, position)
+        if square and (not accepts or accepts(square)) then
+            table.insert(squares, square)
+        end
+    end
+    return squares
+end
+
+--- Whether fn(square) holds for every square of `area` of `place`, stopping at the first that
+--- fails. From out `outFrom` rather than the area's own first if given.
+function Stage.everyAreaSquare(place, area, fn, outFrom)
+    for along = area.along[1], area.along[2] do
+        for out = outFrom or area.out[1], area.out[2] do
+            local inBand = not area.sum or math.abs(along + out - area.sum) <= area.half
+            if inBand and not fn(Stage.at(place, { along, out })) then
+                return false
+            end
+        end
+    end
+    return true
+end
+
+-- Whether `square` stands at least `gap` from each of `places`' origins along x or y.
+local function isApartFrom(square, places, gap)
+    for _, other in ipairs(places) do
+        local origin = other.origin
+        if math.abs(square:getX() - origin:getX()) < gap and math.abs(square:getY() - origin:getY()) < gap then
+            return false
+        end
+    end
+    return true
+end
+
+--- The place closest to the character in the first of `frames` that has one for which
+--- fits(place) holds and whose origin stands at least `gap` from each of `others`' origins along
+--- x or y, or nil.
+function Stage.closestPlace(player, frames, fits, others, gap)
+    for _, frame in ipairs(frames) do
+        local best = Stage.closestSquare(player, function(origin)
+            return isApartFrom(origin, others or {}, gap or 0) and fits(Stage.place(origin, frame))
+        end)
+        if best then
+            return Stage.place(best, frame)
+        end
+    end
+    return nil
+end
+
+--- Finds the places of `specs` that `needs` names, in the order of `specs`, each apart from those
+--- found before it, and logs them in one line under `mark`. Returns them by name and their origins
+--- in order, or nil and the `missing` of the first it can't find. A spec has a `name`, a `label`
+--- for the log, what is `missing` when there is none, and either `frames` and `fits(place,
+--- player)` (Stage.closestPlace, `gap` from those found), or `find(player, found)` returning the
+--- place or nil, given the places found so far; `detail(place)` adds to its entry in the log.
+function Stage.findPlaces(player, specs, needs, mark, gap)
+    local places, found, origins, logged = {}, {}, {}, {}
+    for _, spec in ipairs(specs) do
+        if needs[spec.name] then
+            local place
+            if spec.find then
+                place = spec.find(player, found)
+            else
+                place = Stage.closestPlace(player, spec.frames, function(candidate)
+                    return spec.fits(candidate, player)
+                end, found, gap)
+            end
+            if not place then
+                return nil, spec.missing
+            end
+            places[spec.name] = place
+            table.insert(found, place)
+            local origin, facing = place.origin, place.frame.facing
+            table.insert(origins, origin)
+            table.insert(logged, string.format("%s %d,%d", spec.label, origin:getX(), origin:getY())
+                .. (facing and " facing " .. facing or "") .. (spec.detail and spec.detail(place) or ""))
+        end
+    end
+    if #logged > 0 then
+        print(mark .. " " .. table.concat(logged, "; "))
+    end
+    return places, origins
 end
 
 -- Tiles and clearing ----------------------------------------------------------------------------------
@@ -209,6 +337,112 @@ function Stage.emptyLot(lot)
         end
     end
     Stage.recalcLot(lot)
+end
+
+-- Shots on a lot or a place --------------------------------------------------------------------------
+
+local function noRegions()
+    return {}
+end
+
+--- Adds the steps that turn the clock to `shot.hour` if given, walk the character to the square
+--- `shot.x`, `shot.y` of `lot`, let it look around, set the zoom `shot.zoomSteps` out from the
+--- closest and shoot the screen as `shot.name` with no regions, for a mode that writes no JSON.
+function Stage.addSpotShot(run, player, lot, shot)
+    if shot.hour then
+        Stage.addHour(run, shot.hour)
+    end
+    Stage.addGoTo(run, player, { Stage.lotSquare(lot, shot.x, shot.y) }, shot.zoomSteps)
+    run:addOpaque(shot.name, noRegions)
+end
+
+-- The item model shots, each item alone on a floor laid around the studio square, at the closest
+-- zoom the game draws, which the zoom options leave out (Stage.pushClosestZoom). Positions are
+-- (east, south) squares from the studio square. The character stands off to the side, to the item's
+-- left on the screen.
+Stage.STUDIO = {
+    -- The open ground the floor needs, and how far around the studio square the floor goes where
+    -- the ground is clear, and the plants go anyway, since the bigger items' shots reach past it.
+    open = { along = { -3, 3 }, out = { -3, 3 } },
+    floor = { along = { -5, 5 }, out = { -5, 5 } },
+    player = { -1, 1 },
+    -- Where lib/capture.py looks for the item, in UI units around the studio square's floor
+    -- centre: room for the tallest models, and clear of the character.
+    window = { half = 360, up = 700, down = 300 },
+    -- Turned so that the long side of most models faces the camera.
+    rotation = 315,
+}
+
+--- The findPlaces spec of the studio, open ground the character isn't standing on.
+Stage.STUDIO_PLACE = {
+    name = "studio",
+    label = "items",
+    missing = "open ground for the item shots' floor",
+    frames = { Stage.GRID },
+    fits = function(place, player)
+        return Stage.everyAreaSquare(place, Stage.STUDIO.open, function(square)
+            return Stage.isOpenGround(square) and square ~= player:getCurrentSquare()
+        end)
+    end,
+}
+
+-- Where lib/capture.py looks for the item in a studio shot: STUDIO.window around the studio
+-- square's floor centre, kept on the screen.
+local function studioWindow(studio, name)
+    local x, y = Stage.onScreen(studio.origin)
+    local window = Stage.STUDIO.window
+    return Stage.screenRegion(name, x - window.half, y - window.up, x + window.half, y + window.down)
+end
+
+--- Adds the steps that shoot each of `items` (Capture Catalog:items entries) alone on a floor of
+--- `floorSprite` laid on the open ground of the place `studio` (Stage.STUDIO_PLACE): the bare floor
+--- as <prefix>models_floor, then each item as <prefix>model_<Module>_<Type>, added to `models` with
+--- the window lib/capture.py finds it in by difference from the floor.
+function Stage.addFloorModels(run, studio, items, models, floorSprite)
+    local group = run.current
+    local floorSquare = studio.origin
+    run:add(function()
+        print(run.mark .. " item floor " .. floorSprite)
+        Stage.everyAreaSquare(studio, Stage.STUDIO.floor, function(square)
+            Stage.clearGroundCover(square)
+            if Stage.isOpenGround(square) then
+                square:addFloor(floorSprite)
+            end
+            return true
+        end)
+        Stage.pushClosestZoom()
+        -- Every item at once, so that their models load while the character looks around: Lua
+        -- can't tell when a model has loaded, and a loaded one draws on the next frame.
+        for _, item in ipairs(items) do
+            floorSquare:AddWorldInventoryItem(instanceItem(item.fullType), 0.5, 0.5, 0)
+        end
+    end)
+    Stage.addGoTo(run, getPlayer(), { Stage.at(studio, Stage.STUDIO.player) }, 0)
+    local floor = run.prefix .. "models_floor"
+    run:add(function()
+        floorSquare:removeAllWorldObjects()
+        return Capture.DRAW_FRAMES
+    end)
+    run:add(function()
+        run:screenshot(floor)
+    end)
+    for _, item in ipairs(items) do
+        local name = "model_" .. string.gsub(item.fullType, "%.", "_")
+        run:add(function()
+            local placed = instanceItem(item.fullType)
+            placed:setWorldZRotation(Stage.STUDIO.rotation)
+            floorSquare:AddWorldInventoryItem(placed, 0.5, 0.5, 0)
+            return Capture.DRAW_FRAMES
+        end)
+        run:add(function()
+            local file = run.prefix .. name
+            run:screenshot(file)
+            table.insert(models, { name = name, group = group, file = file, floor = floor,
+                window = studioWindow(studio, name) })
+            floorSquare:removeAllWorldObjects()
+        end)
+    end
+    run:add(Stage.popClosestZoom)
 end
 
 return Stage

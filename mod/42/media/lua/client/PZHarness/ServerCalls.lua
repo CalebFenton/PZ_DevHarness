@@ -8,7 +8,9 @@
 -- serves them in id order, and answers reach callers in that order too. Requests can therefore be
 -- pipelined, and a test's undos stay in the order they were made.
 
+require "PZHarness/Run"
 require "PZHarness/Trace"
+local Report = require "PZHarness/Report"
 
 PZHarness = PZHarness or {}
 local ServerCalls = {}
@@ -26,10 +28,6 @@ local firstId, lastId = 1, 0
 -- Real milliseconds with at least one request unanswered, up to the last time none was, and since
 -- when one has been unanswered now; overlapping requests count once.
 local waitedMs, waitingSinceMs = 0, nil
-
--- Failures that arrive after their test's verdict, such as a server undo that failed; the runner
--- counts them.
-ServerCalls.lateFailures = 0
 
 --- Sends a request of `kind` ("call", "unwind" or "reload") and calls `onAnswer(answer)` with the
 --- server's answer, or with `{ error = ... }` if none comes, after the answers to the requests
@@ -67,14 +65,13 @@ end
 
 --- Calls the server handler `name` for something outside any one test, such as the runner's reset
 --- or a scenario's setup, and `onReply(reply)` with its reply, exactly as the handler returned it:
---- false, 0 or nil too. A failure prints a FAIL line of its own, which the runner counts as it
---- does a late undo's, and never calls onReply.
+--- false, 0 or nil too. A failure prints a FAIL line of its own (Report.lateFailure), which the
+--- run counts as it does a late undo's, and never calls onReply.
 function ServerCalls.callOutsideTest(name, args, onReply)
     ServerCalls.send("call", { name = name, test = name, args = args or {} }, function(answer)
         local problem = answer.error or answer.missing
         if problem then
-            print(PZHarness.run.tag .. " FAIL " .. name .. ": " .. tostring(problem))
-            ServerCalls.lateFailures = ServerCalls.lateFailures + 1
+            Report.lateFailure(name, tostring(problem))
         elseif onReply then
             onReply(answer.reply)
         end

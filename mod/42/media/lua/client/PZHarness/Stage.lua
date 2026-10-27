@@ -1,8 +1,8 @@
 -- Development only, not published. Staging for capture modes (docs/adopting.md, "Staging"):
 -- finding a place near the character and clearing it, walking the character to a shot and
 -- letting the lighting settle, framing what a shot shows, the world every shot is taken in, the
--- window and menu shots, and the driver that runs a mode's groups. PZHarness/StageLots.lua adds
--- open ground and lots; PZHarness/Capture.lua runs the steps.
+-- window and menu shots, dressing the character, and the driver that runs a mode's groups.
+-- PZHarness/StageLots.lua adds open ground, lots and places; PZHarness/Capture.lua runs the steps.
 
 require "PZHarness/Fixtures"
 require "ISUI/ISWorldObjectContextMenu"
@@ -98,7 +98,7 @@ function Stage.isGroundCover(object)
     local sprite = object:getSprite() and object:getSprite():getName()
     return (props ~= nil and (props:has(IsoFlagType.canBeRemoved)
         or (props:has(IsoFlagType.vegitation) and object:getType() ~= IsoObjectType.tree)))
-        or (sprite ~= nil and PZHarness.startsWith(sprite, LITTER))
+        or (sprite ~= nil and luautils.stringStarts(sprite, LITTER))
 end
 
 --- Clears the ground cover off `square`, so what is set on it shows. Takes a nil square.
@@ -494,6 +494,77 @@ function Stage.addMenuShot(run, name, open)
     run:removeBackdrop()
 end
 
+-- Dressing ---------------------------------------------------------------------------------------
+
+-- The items each look wears and holds, made the first time it is worn, by look; and the clothes
+-- the character wore before a look first changed them.
+local lookItems = setmetatable({}, { __mode = "k" })
+local ownClothes
+
+-- The items of `look`, made once: { clothes, weapon }.
+local function itemsOf(player, look)
+    local items = lookItems[look]
+    if not items then
+        local inventory = player:getInventory()
+        items = { clothes = {} }
+        for _, fullType in ipairs(look.clothes or {}) do
+            table.insert(items.clothes, inventory:AddItem(fullType))
+        end
+        items.weapon = look.weapon and inventory:AddItem(look.weapon)
+        lookItems[look] = items
+    end
+    return items
+end
+
+--- Dresses `player` in `look` at once. `female`, `hair` and `beard` (model names, "" for none) and
+--- `hairColour` change only if given. With `clothes` (full types, made once per look) or
+--- `ownClothes` (what it wore before a look first changed its clothes) it wears only those and
+--- holds `weapon` (a full type, made once; in both hands if two-handed) or nothing; without
+--- either its clothes and hands stay.
+function Stage.dress(player, look)
+    if look.female ~= nil then
+        player:setFemale(look.female)
+        player:getDescriptor():setFemale(look.female)
+    end
+    local visual = player:getHumanVisual()
+    if look.hair then
+        visual:setHairModel(look.hair)
+    end
+    if look.beard then
+        visual:setBeardModel(look.beard)
+    end
+    if look.hairColour then
+        visual:setHairColor(look.hairColour)
+    end
+    if look.clothes or look.ownClothes then
+        if not ownClothes then
+            ownClothes = {}
+            local worn = player:getWornItems()
+            for i = 0, worn:size() - 1 do
+                table.insert(ownClothes, worn:get(i):getItem())
+            end
+        end
+        local items = itemsOf(player, look)
+        player:clearWornItems()
+        for _, item in ipairs(look.ownClothes and ownClothes or items.clothes) do
+            player:setWornItem(item:IsClothing() and item:getBodyLocation() or item:canBeEquipped(), item)
+        end
+        local held = items.weapon
+        player:setPrimaryHandItem(held)
+        player:setSecondaryHandItem(held and held:isTwoHandWeapon() and held or nil)
+        triggerEvent("OnClothingUpdated", player)
+    end
+    player:resetModel()
+end
+
+--- Adds the step that dresses `player` in `look` (Stage.dress) and lets the world draw it.
+function Stage.addOutfit(run, player, look)
+    run:add(function()
+        Stage.dress(player, look)
+        return Capture.DRAW_FRAMES
+    end)
+end
+
 -- The groups ---------------------------------------------------------------------------------------
 
 -- Adds a step that starts a clock, and returns a function that adds a step logging, as
@@ -510,36 +581,65 @@ local function addTimer(run, label)
     end
 end
 
---- The set of what `chosen` groups need, for a runGroups prepare to find only that: every name in
---- the `key` list of each chosen group's entry in `groups`, as a key mapped to true.
-function Stage.groupNeeds(groups, chosen, key)
-    local needs = {}
-    for _, name in ipairs(chosen) do
-        for _, need in ipairs(groups[name][key]) do
-            needs[need] = true
+--- Shoots the groups of `mode.groups` named in `selection` (comma-separated, in the order to shoot
+--- them, as the harness gives a capture mode its MODE_GROUPS) with `run`, then writes the data and
+--- calls done (Run:run). A group missing from the conf's MODE_GROUPS (PZHarness.run.groups) fails
+--- the run, as a full run would never shoot it. `mode`:
+--- - `groups`: by name, { add(data), places }: what adds the group's steps, and the names of the
+---   places it needs;
+--- - `places`: Stage.findPlaces specs (PZHarness/StageLots.lua), at least `gap` apart; only those
+---   the chosen groups need are looked for, so one group can't fail for want of another's;
+--- - `catalog`: a Capture catalog; the data holds its entries of `items` and its recipes, and the
+---   built-in group `icons` shoots the icons they name;
+--- - `data`: what else the data holds;
+--- - `prepare(chosen, places, origins)`: runs once the places are found, adding the steps that set
+---   the world (Stage.addWorldSettings), and returns nil, or why the run can't go on.
+--- The UI is hidden and the mouse put in a corner, where it hovers over nothing a shot shows: the
+--- world outlines what it is over, and menus follow it. Each group's time and the total are logged.
+function Stage.runGroups(run, selection, mode, done)
+    local data, catalog = mode.data or {}, mode.catalog
+    local groups = {}
+    for name, group in pairs(mode.groups) do
+        groups[name] = group
+    end
+    if catalog then
+        data.items = catalog:items(mode.items or {})
+        data.recipes = catalog:recipes()
+        groups.icons = groups.icons or { add = function() run:addIconSheet("icons", catalog:iconList()) end }
+    end
+    local listed = {}
+    for _, name in ipairs(Capture.names(PZHarness.run.groups)) do
+        listed[name] = true
+    end
+    for name in pairs(groups) do
+        if not listed[name] then
+            run:fail("group " .. name .. " isn't in the conf's MODE_GROUPS_" .. PZHarness.run.mode)
+            return
         end
     end
-    return needs
-end
-
---- Shoots the groups named in `selection` (comma-separated, in the order to shoot them, as the
---- harness gives a capture mode its MODE_GROUPS) with `run`, then writes `data` and calls done
---- (Run:run). `groups` maps each name to a function that adds its steps. `prepare(chosen)`, if
---- given, runs first with the names: it finds and builds what they need, adding steps as it
---- likes, and returns nil, or why the run can't go on, which fails it. The UI is hidden and the
---- mouse put in a corner, where it hovers over nothing a shot shows: the world outlines what it
---- is over, and menus follow it. Each group's time and the total are logged.
-function Stage.runGroups(run, selection, groups, prepare, data, done)
     local chosen = Capture.names(selection)
+    local needs = {}
     for _, name in ipairs(chosen) do
         if not groups[name] then
             run:fail("the mode has no group " .. name)
             return
         end
+        for _, need in ipairs(groups[name].places or {}) do
+            needs[need] = true
+        end
     end
     print(run.mark .. " START " .. selection)
     local endTotal = addTimer(run, "total")
-    local missing = prepare and prepare(chosen)
+    local places, origins = {}, {}
+    if mode.places then
+        local found, second = Stage.findPlaces(getPlayer(), mode.places, needs, run.mark, mode.gap)
+        if not found then
+            run:fail("within " .. Stage.SEARCH_RADIUS .. " squares, no " .. second)
+            return
+        end
+        places, origins = found, second
+    end
+    local missing = mode.prepare and mode.prepare(chosen, places, origins)
     if missing then
         run:fail(missing)
         return
@@ -550,7 +650,7 @@ function Stage.runGroups(run, selection, groups, prepare, data, done)
     for _, name in ipairs(chosen) do
         run:group(name)
         local endGroup = addTimer(run, name)
-        groups[name](name)
+        groups[name].add(data)
         endGroup()
     end
     endTotal()

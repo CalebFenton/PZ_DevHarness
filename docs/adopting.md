@@ -9,15 +9,18 @@ How a mod takes the harness on, what it tells the harness about itself, and the 
 | `bin/run-client.sh` | The client runner behind a mod's `dev/run-debug-client.sh`, single player and multiplayer (`--mp`). |
 | `bin/validate-server.sh` | Boots a throwaway dedicated server with the mod and fails on anything the mod logs. |
 | `bin/static-check.sh` | The static check behind a mod's `dev/static-check.sh`: compiles the Lua with the game's compiler and cross-checks the mod against the installed game ([static-check.md](static-check.md)). |
-| `check/` | The static check's Java probe and Python checker, and the `.pack` and `.tiles` readers it uses. |
-| `lib/harness.sh` | Paths, JVM arguments, the game lock, `install_mod`, `compile_java`, and the dedicated server both scripts start (`prepare_server`, `start_server`, `stop_server`, `server_problems`). A mod's own dev scripts may source it. |
+| `bin/review.sh`, `lib/review.css` | The review copy behind a mod's `dev/review.sh`: lays out the README images, renders `REVIEW_DOCS` to HTML as GitHub shows them, the first also to a PDF, and zips the mod, its libraries and the dev mods as players install them, into `REVIEW_DIR` (`~/Nextcloud` by default); `--art` adds the mod's `art/models/preview.py` page. Its header lists the files and what it needs. |
+| `check/` | The static check's Java probe and Python checker, and the `.pack`, `.tiles` and `.lotheader` readers it and a mod's plugins use. |
+| `lib/harness.sh` | Paths, JVM arguments, the game lock and a kept `--stay` game's reruns, `install_mod`, `compile_java`, the client cache (`prepare_cache`) and the dedicated server the scripts start (`prepare_server`, `prepare_mp_server`, `start_server`, `wait_server_started`, `stop_server`, `server_problems`). A mod's own dev scripts may source it. |
+| `lib/tests.py`, `lib/results.py` | Which tests a run runs and what a failure points at: `TEST_MAP`, `--changed`'s batch, `--failed`'s record and the suspects ([running.md](running.md#choosing-tests)); and the one reader of a `--test` run's result lines, for those and the verdict. |
 | `lib/capture.py` | Crops a [capture mode](#capture-modes)'s screenshots into the mod's captures; a mod's own extraction may import it. |
 | `lib/promo.py`, `lib/fonts/` | Lays out a mod's README images, Workshop gallery, poster, preview and mod icon from those captures, imported by the mod's `art/promo/compose.py` ([workshop-page.md](workshop-page.md#laying-out-the-images)), with the NotoSans font it draws in. |
 | `lib/trace.py` | Reports where a `TRACE=1` run's time went and writes it as a Perfetto timeline ([running.md](running.md#where-the-time-goes)). |
+| `lib/census.py` | Counts the rooms, container tiles by room and vehicle stalls of the vanilla towns (or `--town`s) and the whole map into a Lua table at `--out`, for a mod's loot report; its docstring has the formats it reads. |
 | `lib/art/`, `lib/blender.sh` | The art library a tile and item mod's `art/models` and `tools` build with: mesh and material helpers for its Blender builders, the tile, depth map and icon renderer, review sheet helpers, deterministic FBX export, the `.tiles` and texture pack writers, and the Blender invocation its `make.sh` sources ([art.md](art.md)). |
 | `java/ClickToStart.java` | Starts the client, presses "Click to start" on the loading screen, gives the asset loader more threads (`java/AssetLoading.java`), loads the tile depth maps early (`java/DepthMaps.java`) and in multiplayer sends every packet at once (`java/NetLatency.java`). |
 | `java/FastServer.java` | Starts the dedicated server of `--mp` and `validate-server.sh` with the same wider asset loader, sending every packet at once. |
-| `mod/42/` | The harness mod (`cf_test_harness`): `client/PZHarness/Runner.lua`, `TestLib.lua`, `ServerCalls.lua` and `Leaks.lua`, the leak check between tests, `Trace.lua`, what a `TRACE=1` run records, `Capture.lua`, the steps and shots of [capture modes](#capture-modes), `Stage.lua` and `StageLots.lua`, their [staging](#staging), and `QA.lua`, the setup of [QA scenarios](#qa-scenarios); `server/PZHarness/ServerHandlers.lua`, the server's half of the tests' server channel, `ServerFixtures.lua`, the server's half of the two-sided fixtures, `ServerChecks.lua`, of server checks and [reads](#the-test-library) of what the character carries, and `ServerLearning.lua`, of [recipe learning](#the-test-library); `shared/PZHarness/Fixtures.lua`, what both halves do, `Checks.lua`, expectations for server handlers, `Loot.lua`, the loot tables and rolls of [loot checks and reports](#loot), and `Snapshot.lua`, what the leak check reads on each side. |
+| `mod/42/` | The harness mod (`cf_test_harness`): `client/PZHarness/Runner.lua`, which registers the mod and starts its modes, `Run.lua`, the files the run script and the game talk through and `PZHarness.run`, `Schedule.lua`, which runs the tests one after another, `Report.lua`, every result line and the counts of `DONE`, `Stay.lua`, the reruns of a game kept by `--stay`, `Multiplayer.lua`, the `--mp` client's join, `TestLib.lua`, `ServerCalls.lua` and `Leaks.lua`, the leak check between tests, `Trace.lua`, what a `TRACE=1` run records, `Capture.lua`, the steps and shots of [capture modes](#capture-modes), `Stage.lua` and `StageLots.lua`, their [staging](#staging), and `QA.lua`, the setup of [QA scenarios](#qa-scenarios); `server/PZHarness/ServerHandlers.lua`, the server's half of the tests' server channel, `ServerFixtures.lua`, the server's half of the two-sided fixtures, `ServerChecks.lua`, of server checks and [reads](#the-test-library) of what the character carries, and `ServerLearning.lua`, of [recipe learning](#the-test-library); `shared/PZHarness/Fixtures.lua`, what both halves do, `Checks.lua`, expectations for server handlers, `Loot.lua`, the loot tables and rolls of [loot checks and reports](#loot), and `Snapshot.lua`, what the leak check reads on each side. |
 
 ## Adopting it
 
@@ -42,30 +45,29 @@ Sourced bash. Paths are relative to the repository. The mod's id and name come f
 | `CACHE_NAME` | Cache dirs go to `$TMPDIR/<name>-client`, `-server`, `-mpclient`, `-mpserver` and `-check` (the static check). |
 | `TAG` | The console tag of the tests' lines, such as `MyModTest`. |
 | `RELOAD_FILES` | A bash array of globs, relative to the dev mod, of the files a kept game loads again for a rerun, in load order (the mod's test library first). With `--mp` the server loads those under `media/lua/server` and `media/lua/shared` again too, so list the dev mod's server handler files here. |
-| `MODES` | The mod's other modes, space-separated; each becomes a `--<mode>` flag. |
-| `MODE_MARK_<mode>` | The console mark of the mode's lines; the run waits for `<mark> DONE`. |
-| `MODE_SELECTION_<mode>` | Optional: the environment variable whose value the mode's handler gets as its selection, as `TESTS` is for `--test`. |
-| `MODE_GROUPS_<mode>` | Optional: the groups a [capture mode](#capture-modes) shoots, space-separated, in the order a run takes them. The selection may name only these, or the run fails before the game starts and lists them; the handler gets the named ones, or every group if the selection names none, comma-separated in this order. |
+| `MODES` | The mod's other modes, space-separated; each becomes a `--<mode>` flag. Describe them in a comment above it. A mode's console mark, which the run waits for as `<mark> DONE` and the handler reads as `PZHarness.run.mark`, is `TAG` without its `Test` and the mode capitalised (`MyModShots` for `MyModTest`'s `--shots`); its selection comes from the environment variable named after it in capitals (`SHOTS`), as `TESTS` is for `--test`. |
+| `MODE_GROUPS_<mode>` | Optional: the groups a [capture mode](#capture-modes) shoots, space-separated, in the order a run takes them. The selection may name only these, or the run fails before the game starts and lists them; the handler gets the named ones, or every group if the selection names none, comma-separated in this order, and all of them as `PZHarness.run.groups`, so a group of the handler's own that the conf lacks fails the run (`Stage.runGroups`) rather than go unshot. |
 | `MODE_CAPTURES_<mode>` | Optional: the folder, such as `art/promo/captures`, that a [capture mode](#capture-modes)'s shots are cropped into after a run that finished cleanly. |
-| `TEST_MAP` | Optional: a bash array of `'<glob>=<prefix>,<prefix>'` entries for `--test --changed` and for the `suspects` lines after a failure ([running.md](running.md#choosing-tests)). Each glob is matched against paths relative to the repository with bash's `[[ == ]]`, where `*` crosses `/`; every entry a file matches adds its test name prefixes (`=<name>` for one test exactly), and an empty list (`'<glob>='`) adds none. Every file under the mod, the dev mod and the harness mod needs an entry, and every glob must match one of those files: `dev/static-check.sh` and `--changed` fail otherwise, naming each file without a line and each glob that matches none, so a new or renamed file shows up in the map at once. A file every test depends on names the mod's test prefix, the `prefix` it registers, which selects every test; files elsewhere, such as docs and art, reach no test and take no entry. The runner fails a prefix that names no test. |
-| `PRECHECK` | Optional: a bash array, the command every game run of the harness runs first from the repository, normally `(dev/static-check.sh)` ([static-check.md](static-check.md)). If it fails, no game starts. |
+| `TEST_MAP` | Optional: a bash array of `'<glob>=<prefix>,<prefix>'` entries for `--test --changed` and for the `suspects` lines after a failure ([running.md](running.md#choosing-tests)). Each glob is matched against paths relative to the repository, `*` crossing `/`; every entry a file matches adds its test name prefixes (`=<name>` for one test exactly), and an empty list (`'<glob>='`) adds none. A dev mod Lua file whose name has `Tests` registers tests and selects them itself (`@<file>`; `T.test` records each test's file), and a harness mod file reaches every test, so neither needs an entry; a line for a harness file narrows it, as for a feature module only some tests load. Every other file under the mod and the dev mod needs an entry, and every glob must match a file of those or the harness mod: `dev/static-check.sh` and `--changed` fail otherwise, naming each file without a line and each glob that matches none, so a new or renamed file shows up in the map at once. A file every test depends on names the mod's test prefix, the `prefix` it registers, which selects every test; files elsewhere, such as docs and art, reach no test and take no entry. The runner fails an entry that names no test. `lib/tests.py` owns the map. |
+| `PRECHECK` | Optional: a bash array, the command every game run of the harness runs first from the repository; `(dev/static-check.sh)` ([static-check.md](static-check.md)) when the mod has that script, and `PRECHECK=()` runs none. If it fails, no game starts. |
 | `CHECK_PLUGINS` | Optional: a bash array of Python files with the mod's own static check rules ([static-check.md](static-check.md#plugins)). |
 | `CHECK_ALL_LANGUAGES` | Optional: set to make the static check fail on any language the game offers that lacks a translation file or key English has. |
 | `QUIET_WORLD` | Optional: a bash array of `Key=value` sandbox options that make a `--test` world quiet, replacing the harness's list ([running.md](running.md#a-quiet-world)); `QUIET_WORLD=()` keeps the world's own population. |
+| `TEST_SANDBOX` | Optional: a bash array of the mod's own sandbox options for a `--test` world, as `Table.Key=value` (a number, `true` or `false`), such as `(MyMod.RandomSpawns=1)`. They are set with `QUIET_WORLD`'s, in single player before the scenario's `setSandbox` and on the `--mp` server where `harness_server_setup` set nothing ([running.md](running.md#a-quiet-world)). |
 | `SERVER_PROBLEMS` | Optional: an extended regex of server log lines that count as the mod's problems, besides stack traces through it. |
 | `SERVER_IGNORE` | Optional: an extended regex of matching lines that don't count. |
 | `WORKSHOP_REPO` | Optional: the GitHub repository, as `owner/name`, whose `README.md` [`dev/workshop-txt.sh`](workshop-page.md) turns into `workshop.txt`'s description; its relative images and links point there. With it set, the static check fails while `workshop.txt` is out of date or over Steam's limit. |
 | `WORKSHOP_BRANCH` | Optional: the branch those images and links point to; `master` by default. |
 | `WORKSHOP_SKIP` | Optional: a bash array of the README's `##` headings to leave off the Workshop page, such as `(Install Development)`. |
 | `WORKSHOP_GALLERY` | Optional: the folder of gallery images [`dev/workshop-gallery.sh --upload`](workshop-page.md#the-gallery) puts on the Workshop item; `art/promo/gallery` by default. |
+| `REVIEW_DOCS` | Optional: a bash array of the Markdown files `dev/review.sh` renders, such as `(README.md docs/player-guide.md)`; the first is also printed to a PDF. `(README.md)` by default. |
 
 Hooks, bash functions the conf may define:
 
 | Hook | When it runs |
 | --- | --- |
-| `harness_check_<mode>` | Before the lock and the launch. `$SELECTION` holds the selection; exit nonzero to refuse it, so a typo fails at once. |
 | `harness_after_<mode>` | After a run of the mode that finished cleanly, instead of the harness's own ending: with `MODE_CAPTURES_<mode>`, `lib/capture.py` crops the shots into that folder and the run prints `PASS: captures are in <folder>`; for a mode that saved `<mode>_*.png` screenshots, `PASS: screenshots are in <folder>`; else `PASS`. Define it for more, such as captures of the mod's own. |
-| `harness_server_setup` | After a server's `$CACHE/Server/$SERVER_NAME.ini` is written: in `validate-server.sh`, and for the server of `--mp`, whose sandbox then gets `Zombies = 6` and the `QUIET_WORLD` options it doesn't set appended; add files such as `${SERVER_NAME}_SandboxVars.lua`. `$MP` is `1` for the `--mp` server. |
+| `harness_server_setup` | After a server's `$CACHE/Server/$SERVER_NAME.ini` is written: in `validate-server.sh`, and for the server of `--mp`, whose sandbox then gets `Zombies = 6` and the `QUIET_WORLD` and `TEST_SANDBOX` options it doesn't set appended; add files such as `${SERVER_NAME}_SandboxVars.lua`. `$MP` is `1` for the `--mp` server. |
 
 Hooks can read `$REPO`, `$CACHE`, `$MOD_DIR`, `$DEV_MOD_DIR` (absolute by then), `$MODE` and `$MP`;
 in `validate-server.sh` both are empty.
@@ -104,6 +106,12 @@ Thin scripts that source the harness, so `$0` and the usage line name the mod's 
 . "$(dirname "$0")/harness/bin/workshop-gallery.sh"
 ```
 
+```sh
+#!/usr/bin/env bash
+# dev/review.sh
+. "$(dirname "$0")/harness/bin/review.sh"
+```
+
 ### The dev mod
 
 `<DEV_MOD_DIR>/42/mod.info` with `require=<the mod's id>,cf_test_harness`, holding the debug
@@ -120,10 +128,9 @@ PZHarness.register({
     prefix = "mymod_",            -- --test runs the TimedActionTests whose names start with it
     modes = {
         -- run(selection, done) starts once the world around the character has loaded and
-        -- calls done() when finished; done prints "<mark> DONE" and quits. The flags are optional;
+        -- calls done() when finished; done prints "<mark> DONE" and quits. `capture` is optional;
         -- see [capture settings](#capture-settings).
-        shots = { uncapped = true, clearWeather = true, fastUI = true,
-            run = function(selection, done) Shots.capture(selection, done) end },
+        shots = { capture = true, run = function(selection, done) Shots.capture(selection, done) end },
     },
     onStart = function(mode) end, -- optional, after the scenario's own onStart in every mode
 })
@@ -283,6 +290,21 @@ once the global object systems exist. For `setup`:
 - `printSummary(mark, line, summary, lists)` prints `line` under `mark`, then one line for each
   field of `summary` named in `lists` that is a non-empty list or a string: what the setup laid
   out, then what it couldn't.
+- `newSummary()`: a summary for the two below to count into (`types`, `items`, `groups`, `tools`,
+  `boxes`, and the lists `toolboxes`, `unknown`, `unplaced`), which a setup adds its own fields to.
+- `packToolboxes(player, stock, summary)`: puts the kept vanilla tools of `stock` (`{ type, used,
+  kept }`, as `materials` gives) in `Base.Toolbox`es in `player`'s inventory, the first two in the
+  hands. A tool goes in if vanilla files it as `Tool` or `ToolWeapon` and it weighs less than a
+  toolbox's MaxItemSize; room is the toolbox's own capacity, not any character's. Kept items that
+  don't go in are added to their entry's `used`.
+- `layGroups(origin, width, groups, summary, opts)`: lays `groups` (`{ name, items }`, each item
+  `{ type, count, fluid }`) from the square `origin` in rows `width` wide running south, a square
+  to each item, each group from a new row past an empty one. `opts.maxRows` bounds it;
+  `opts.accepts(square)` says where an item may lie (any loaded square without it), and the layout
+  skips the rest; `opts.after[name](layout, summary)` places what a group sets after its items with
+  `layout:nextSquare()`, `nextRun(length)` (squares in a row east) and `nextOpenRow()` (a whole
+  row); `opts.newItem(entry)` makes an item (`newItem(type, fluid)` without it). Types the game
+  lacks go in `unknown`, items left without a square in `unplaced`.
 
 ```lua
 -- <DEV_MOD_DIR>/42/media/lua/client/MyMod/Debug/MyModDebugScenario.lua, continued
@@ -302,52 +324,29 @@ end)
 
 ## The test library
 
-`PZHarness.Test`, from `PZHarness/TestLib.lua`:
+`PZHarness.Test` is the test library a mod's own inherits. Its modules add to the same table; a
+mod's test library requires each one its tests use, never the internal `TestRuntime.lua`. Each
+module's header says what it is for and the rules it keeps, and each function's `---` comment
+what it does, so read those rather than a list here:
 
-The core owns registration, expectations and reversible setters. Its internal `TestRuntime.lua`
-owns the active test, action queue, lighting waits and ordered server calls. Feature modules add
-methods to the same `PZHarness.Test` table; require the feature used, not the internal runtime:
+| Module | What it has |
+| --- | --- |
+| `PZHarness/TestLib.lua` | Registering (`test`; its spec's `hour`, `instant`, `sandbox`, `spOnly` or `mpOnly`, `timeoutSeconds`), expectations and `need`, the restore stack (`defer`, `onTick`) and the two-sided setters (`setTime`, `setPerk`, `setSandbox`, `setMultiplier`, `setGrid`, `setMechanicsCheat`, `makeDark`, `changeItem`; `twoSided(name)` is the setter of a fixture registered with `PZHarness.twoSided`, see [two-sided fixtures](multiplayer.md#two-sided-fixtures)). Its header has the rules that keep each test independent of the ones before it. |
+| `PZHarness/TestRuntime.lua` | Loaded by `TestLib.lua`: the queue (`wait`, `waitUntil`, `waitFor`, `waitForLight`, `step`, `describeAction`) and the server channel (`server`, `serverUntil`, `give`, `count`, `batch`; [multiplayer.md](multiplayer.md#the-server-channel)). |
+| `PZHarness/TestWorld.lua` | Squares (`squares`, `square`, `where`, `at`), fixtures placed by the server or by the character as a player does, this game's own fixtures, vehicles, and walking (`standNextTo`, `goNextTo`). |
+| `PZHarness/TestLearning.lua`, `server/PZHarness/ServerLearning.lua` | Recipe names, knowing and forgetting recipes on both sides, recipe skills, level ups as the game awards them, and the AutoLearn tests (`autoLearnTests`). |
+| `PZHarness/TestCraft.lua` | Recipe inputs (`inputItem`, `inputCount`, `recipeInputs`), work tables, crafting through the game's menus (`startCraft`, `craft`) and `craftTest`; requires `TestWorld` and `TestLearning`. |
+| `PZHarness/TestBuild.lua` | Building from the build menu (`buildEntry`, `placeable`, `buildSite`, `build`); requires `TestCraft`. |
+| `PZHarness/TestMenus.lua` | Context menus: building, finding, reading, noting and choosing options; requires `TestWorld`. |
+| `PZHarness/TestReads.lua`, `server/PZHarness/ServerChecks.lua` | Reads kept on the test, server checks (`expectNoFailures`, `serverCheck`), and what the character carries on either side. |
+| `PZHarness/TestChunks.lua` | Chunk reload trips (`reloadChunk`). |
+| `shared/PZHarness/Fixtures.lua` | What both sides do, for a dev mod's server handlers too: lookups (`squareAt`, `overlaysOf`, `fieldsOf`, `ring`, `teleportToMiddle`), building and removing (`newTile`, `newBench`, `removePlaced`), and undoing (`deferOnce`, `saveOptions`). |
 
-- `PZHarness/TestWorld`: square selection, world fixtures, movement and vehicles.
-- `PZHarness/TestLearning`: recipe enumeration, learning/forgetting and skill-learning checks.
-- `PZHarness/TestCraft`: recipe inputs, work tables, craft execution and craft tests; requires
-  `TestWorld` and `TestLearning`.
-- `TestBuild` requires `TestCraft`; `TestMenus` requires `TestWorld`.
-
-`waitFor` records a timeout in its own action, before any later step or call runs; it does not
-queue another action to recheck the result.
-
-`server(self, name, args, ready, what, ms)` can also wait for a client copy: after a successful
-reply and any given items have arrived, `ready(reply)` is polled in the call's own action.
-It fails as missing `what` after `ms` real milliseconds (ten seconds by default), without running
-later steps. Failed calls never invoke `ready`. World placements use this same completion path
-with their fifteen-second copy deadline, preserving immediate single-player handles.
-
-`TestWorld` also supplies `where(square)`, a `{ x, y, z, square }` handle; `at(handleOrSquare,
-fields)`, plain coordinates with extra server arguments; and `square(self, opts, what)`, one
-reserved square or missing `what`. Square searches accept a fixture handle as `opts.near`
-without copying or mutating the options.
-
-- Registering: `test(name, spec)`, `craftTest(name, spec)`. `spec.spOnly` or `spec.mpOnly`, a reason string, keeps a test out of the other mode. A test still busy after 30 seconds of real time fails with what it was waiting on (the queued action's type, or which server answer or wait; `waitUntil(condition, maxMs, what)` names a wait), its queue is cleared, its undos run and the next test starts; `spec.timeoutSeconds` raises the limit for a test that is slow on purpose. A test whose starting square still hasn't loaded, some seconds after the test before it took the character far away, fails without running, and the next one waits for the square again.
-- Expectations: `expect`, `expectNear`, `expectEqual(label, actual, expected)` (worded as `expectNear`: "label is X, expected Y"), `need`. Once a test misses something, its later queued steps and waits don't run.
-- Restore stack, two-sided (see [two-sided fixtures](multiplayer.md#two-sided-fixtures)): `defer`, `onTick`, `setTime`, `setPerk`, `setSandbox`, `setMultiplier`, `setGrid`, `setMechanicsCheat`, `makeDark`, `changeItem`; `spec.instant` and the `perks` setting too. `setTime`'s undo puts back the date with the hour, since a clock run past midnight moves the world to the next day. A multiplayer server times every action in real time, and an instant vehicle part install or uninstall on a client stops as invalid once the server has moved the part, so a test turns `setMechanicsCheat` on around those instead. Vanilla's `ISInstallVehiclePart:new` takes its time from its caller and never asks its `getDuration`, so neither cheat shortens an install: `shortenQueuedInstalls()`, in the step that queued one (`ISVehiclePartMenu.onInstallPart`), gives it the time `getDuration` gives.
-- Queue: `wait`, `waitUntil`, `waitFor`, `waitForLight`, `step`. `wait(ticks)` counts ticks; the others count real milliseconds, since the uncapped frame rate makes ticks come faster or slower. `waitUntil(condition, maxMs, what)` ends as soon as `condition()` holds or `maxMs` pass, and validate checks what it waited for; `waitFor(self, condition, what, ms)` waits the same (ten seconds unless `ms` says otherwise), then fails the test as missing `what` if the condition never held, so a copy that never reached this client can't pass, and keeps the condition's last answer without calling it again; `waitForLight(self)` is `waitFor` for light where the character stands, which the game wants for a craft or a build and which lags the clock. The light must hold for two of the lighting thread's updates: one reading can be a square's light from before a clock change, which the next update replaces. What a step queues runs right after it, in order (vanilla's adding-actions mode), and a clear of the queue inside it (`luautils.walkAdj`) drops only that. Any other clear of the queue while the test's own waits and steps are still in it, such as a timed action that turns invalid or is refused, fails the test at once with the action that was running (a walk with where it went from and to), and validate doesn't run.
-- The server: `server(self, name, args)` calls the dev mod's handler `name` and leaves its answer in `self.server[name]` exactly as the handler returned it, so `false`, `0` and `nil` arrive as themselves; `serverUntil(self, name, args, done, maxMs)` calls it until `done(reply)`; `give(self, name, items)`; `count(self, name, types, opts)`; `batch(fn)` sends the calls `fn` queues back to back in one round trip ([multiplayer.md](multiplayer.md#the-server-channel)).
-- Reads, from `PZHarness/TestReads.lua`, which a mod's test library requires to have them: `read(self, name, args, label)` is `server` that also keeps the answer in `self.reads[label]`, when a label is given, for a test that reads one handler at several points; `readUntil(self, name, args, label, done, maxMs)` is `serverUntil` into `self.reads[label]`. Server checks (`PZHarness.checkHandler`, above): `expectNoFailures(answer)` expects a check's `failures` empty, and no answer fails too; `serverCheck(testName, name, args)` registers a test that runs one check. What the character carries: `carried(fullType)` is this client's first, in any bag, or nil; `waitForCarried(self, fullType, what)` waits for one as `waitFor`; `readCarried(self, types, fluids, label)` reads the server's copy (handler `PZHarness.carried`) into `self.reads[label]`, `"carried"` unless given, and `carriedItems(self, fullType, label)` (a list, empty without any) and `carriedFirst(self, fullType, label)` read it back, each item `{ id, condition, uses, repaired, modData, litres, tainted }`: `uses` the fraction left, `repaired` vanilla's repair count, `litres` and `tainted` a fluid container's; the answer also has `fluids`, the litres of each of `fluids` in the main inventory's containers, and `total`, how many items the main inventory holds. `fillCarried(self, fullType, fluid, litres)` empties every carried fluid container of `fullType` on the server (handler `PZHarness.fill`), fills each with `litres` of `fluid` (a FluidType name, or a mod's fluid; nil leaves them empty), and waits with `waitForFluid(self, fullType, litres)` until this client's first holds that much, or all it can, as a craft or a menu reads this client's copy. `overlaysOf(object)` is `PZHarness.Fixtures.overlaysOf` on this client.
-- Verdicts: `printVerdict(name, failures, seconds)` prints a test's PASS or FAIL line. The harness runner prints it once its leak check after the test is done ([running.md](running.md#leaks-and-desyncs)); the debug menu's runner gets it from validate.
-- Squares and fixtures: `squares`, `track`; placed by the server: `placeTile`, `placeBench`, `placeVehicle`; placed and picked up by the character, as a player does with the moveables cursor: `placeAsPlayer(self, square, itemType, sprite, modData)` (a handle `{ x, y, z, square }`, `object` once this client has it, removed when the test ends) and `pickUpAsPlayer(self, handleOrSquare, sprite)`; this game only: `tile`, `placeMoveable`, `bench`, `vehicle`; `lineUpTrailer`.
-- Crafting, from `PZHarness/TestCraft.lua`: `recipeNames`, `buildRecipeNames` (the build menu's recipes, which `getAllCraftRecipes`, and so `recipeNames`, leaves out), `learnRecipes`, `forgetRecipes`, `recipeInputs`, `addRecipeInputs` (this game only), `inputItem(input, prefer)`, `inputCount(input, item)`, `placeWorkTable`, `craftRefusal`, `startCraft`. `inputItem` is the script item `recipeInputs` picks for one of a recipe's inputs: the first of its possible items named in `prefer`, else the first that isn't a generic `Base.Moveable`; `inputCount` is how many of it `recipeInputs` gives: an input's amount, or for a drainable input that counts uses as many full items as the uses need (two sand bags for eight uses). `startCraft(self, recipe, from, bench)` only queues the native right-click or bench-window craft; it does not prepare fixtures or inputs. Any test using it that fails also reports why the game refused, at the start or, for a craft it queued and then dropped, at perform.
-- Queued crafting: `craft(self, name, from, counted, opts)` prepares and crafts recipe `name` from the first carried item of full type `from`, then counts the full types in `counted` into `self.counts.craft`, including dropped outputs. It returns whether preparation queued the craft, not whether the game will accept it. It teaches only that recipe until the test ends, sets its exact required skill levels and gives one craft's `recipeInputs` (using `opts.prefer`) into `self.items.inputs`. `opts.workTable` ensures a nearby table; `opts.bench` is `{ entity script, sprite }` for `placeBench`. `opts.ready(self)` is called synchronously to queue input changes after the give, not after the inputs have arrived; a callback that needs the client copies must queue a `step`. After those changes it waits for steady light, failing as missing if light never arrives, then uses `startCraft`. Counts are queued after the native actions, ahead of reads the caller queues after `craft`.
-- Registered crafting: `craftTest(name, spec)` registers assertions around the same queued operation. It knows all the mod's recipes (`recipePrefix`) until the test ends, restores prior knowledge on both sides, ensures a table, uses `spec.bench` when supplied, and crafts instantly unless `spec.instant` is false. Its default preparation raises skills to at least the required levels, retaining higher levels, and gives `recipeInputs` with `spec.prefer`. `spec.prepare(self, recipe)` replaces only those skill/input steps, for custom materials or intentionally insufficient skills; learning, table/bench placement, light, native crafting and counts remain common. `spec.setup(self)` runs in a queued step after preparation's calls and item arrivals; anything it queues finishes before the light wait and craft. Here a light timeout still proceeds to native refusal diagnostics. Counts include dropped items unless `spec.dropped = false` requests inventory only. `spec.after(self)` runs in a step after counts and may queue further reads before validation. Validation checks `spec.counts`, expects a refusal with `spec.refused`, then calls `spec.validate(self)`.
-- Recipe skills, from `PZHarness/TestLearning.lua` (also loaded by `TestCraft` and `TestBuild`): `setRecipeSkills(self, recipe, keepHigher)` sets both sides to the recipe's exact required levels until the test ends, even when this client's level already matches; `keepHigher = true` retains higher levels instead. `craft` and `build` use exact levels; `craftTest` uses minimum levels unless `spec.prepare` replaces preparation.
-- Learning recipes, from `PZHarness/TestLearning.lua`, which a mod's test library requires (`TestBuild.lua` requires it too), its server half `ServerLearning.lua`: each puts back on both sides, when the test ends, what it changed. `knowRecipes(self, names, known)` queues the character knowing the recipes `names` on both sides (`known = false`: forgetting them); at the end each side knows exactly what it knew before, and no longer any recipe a level up taught meanwhile, which the leak check would count. `levelUp(self, perk, levels)` queues setting the authority's `levels` (perk id -> level, at the XP that starts each) and then awarding the XP that takes `perk` (an id) one level up, as the authority awards a timed action's: the game fires `LevelPerk`, so vanilla's AutoLearn and a mod's learning on a level up run as in play; `{ before, after }`, the perk's level, lands in `self.server["PZHarness.levelUp"]`. `setLevelsQuietly(self, levels, names)` sets them with no level up, for a character who earned them before a mod was added, and answers what the authority knows of `names` right after as `known` in `self.server["PZHarness.setLevelsQuietly"]`; the server sends a client its levels at its next perk sync. Reading: `recipesKnown(names)` is which of `names` this client's copy knows, by name, judged by the recipe as the crafting menus judge it, counting its MetaRecipe (`PZHarness.Fixtures.knows(player, names)` on either side; the handler `PZHarness.recipesKnown` answers the authority's as `known`); `waitForKnown(self, names, expected)` queues waits until the authority and then this client know each of `names` that `expected` marks true, leaving each side's `recipesKnown` in `self.known` (`{ server, client }`), and `expectKnown(self, names, what, expected)` expects both to know exactly those. From the scripts: `learnableRecipeNames(prefix)`, every craftRecipe and build menu recipe starting with `prefix` (the `recipePrefix` setting by default; a test file that reads them at load names it, as the setting may register later) that has to be learned; `autoLearnLevels(names)`, each perk and level their AutoLearn skills name, `{ perk, level }` once each, and the highest; `autoLearnedAt(names, perk, level)`, which of them a character with `perk` at `level` and every other perk at 0 meets the AutoLearn skills of; `autoLearnLevelsWith(rows, perk, level)`, levels for `levelUp` or `setLevelsQuietly` with each perk of `rows` at 0 but `perk` at `level`. `autoLearnTests(prefix, names, opts)` registers a mod's tests of learning `names` by level: `prefix .. "_learning_level_up_teaches_at_the_auto_learn_level"` (each perk and level up, both sides know exactly what it earns; `opts.timeoutSeconds`) and, given `opts.catchUp` (a function sending the client's catch-up request), the multiplayer-only `prefix .. "_learning_joining_server_catches_up_earned_recipes"`.
-- Building from the build menu, from `PZHarness/TestBuild.lua`, which a mod's test library requires: `buildEntry(entity)` is the build menu entry of a game entity (its full name), or nil; `placeable(entity, square)` is whether the entity's build cursor takes the square (`ISBuildIsoEntity:isValid`, the entity's `OnIsValid` among it; inputs aside, though a hammer among the recipe's tools must be carried), nil without the entry. `buildSite(self)` is the square to build on nearest the character, or nil and missing: bare outdoor ground with open ground (`Stage.isOpenGround`) two squares all round it, as far as the build menu reaches for containers from beside it. So the build takes only what the character carries, and no wall shades the site or turns the walk beside it; a container left in reach can be out of reach once the build has walked the character, which refuses the whole build without a word (`BaseCraftingLogic.isContainersAccessible`). `build(self, entity, square, prefer, arrived, what)` builds on a `buildSite` square through the menu's own path (`ISBuildIsoEntity`, `ISBuildAction`): the character knows the recipe (`knowRecipes`) and has its levels, carries exactly its inputs (`recipeInputs` with `prefer`), goes next to the square (`goNextTo`) and waits for light, as the game refuses a build in the dark; a build the menu refuses, for its inputs or its square, is missing at once with the reason (the recipe unknown, a skill short, the dark, or its inputs), and otherwise the test waits until `arrived()` holds on this client, else misses `what`. A mod that removes what a build leaves through its own handler queues that handler before `build`. It returns the build, or nil: `types` its inputs' full types, `expected` what it should leave carried of them, and once built `face`, the upper-case name of the face it built. `expectBuildUsed(build, left)` expects `left`, `count`'s counts of `types` afterwards, to be `expected`: the kept tools still there, none of what it takes whole, and a drainable it takes uses of not counted.
-- Lookups: `player`, `objectWithSprite`, `countPairs`; `PZHarness.Fixtures` has these and `vehicleById` for server handlers too, `squareAt(at)` (the loaded square at `at`'s x, y, z, or nil), `overlaysOf(object)` (the sprite names of the overlays its tile shows, in drawing order), `fieldsOf(source, keys)` (the fields `keys` of `source`, a record's saved fields, as an answer; tables are copied, so a single-player answer keeps what they held at the read, as one that crossed the network does), `ring(x, y, r)`, which iterates (`for sx, sy in ...`) over the squares at exactly `r` squares from x, y, each once, for a search that widens ring by ring from the nearest, and `teleportToMiddle(player, x, y, z)`: `teleportTo` alone leaves the character on the square's north-west corner, from where vanilla's `walkAdj` takes a square two to the north or west as in reach, walks nowhere, and an action that needs the square adjacent stops.
-- Building and removing in a server handler, as the library's own fixtures do on either side (`PZHarness.Fixtures`): `newTile(square, sprite, modData)`, `newBench(square, entity, sprite, player)` (the bench, or nil and what is missing), `freeAdjacentSquare(here, used)`, and `removePlaced(thing)`, which removes an object through the `remove` setting, else the vanilla way, or a vehicle permanently; a server sends each to its clients.
-- Undoing in a server handler (`PZHarness.Fixtures`): `deferOnce(defer, undo)` defers `undo` and returns the function that runs it now, for a handler that puts shared state back before it answers; `undo` runs once, then or when the test ends, whichever comes first, so a handler that throws first still undoes. `saveOptions(defer, names, reapply)` saves the mod's options `names` (its table in `SandboxVars`, the `sandbox` setting) for a handler that changes them itself, and returns that function for putting them back and then calling `reapply()`, if given, to rebuild what the mod made from them. Unlike `setSandbox`, it leaves the game's `SandboxOptions` copy alone.
-- Walking: `standNextTo(square)` puts the character where vanilla's `walkAdj` would walk it, facing `square`, so the walk a menu option or an action queues first has no way to go and the turn an action's `waitToStart` waits for (`faceThisObject`, `shouldBeTurning`) is already done; walking and turning take real time, which neither the instant cheat nor the frame rate shortens. `goNextTo(self, square)` queues the same, then on a multiplayer client puts the server's copy of the character there too, so an instant action's `complete()` finds it in reach: left alone, the server hears of the move only on the client's next timed position update, up to a second later, and then walks its copy over from wherever the updates before put it (the runner's move to the test's start among them). The client sends its new position at once, and the server's copy is moved after that update has reached it, so nothing older can move it back. A test that queues an action whose `complete()` checks the character's reach goes there this way, and queues the menu's own job a step later: the character's square catches up with a teleport only on its next update, and `walkAdj` judged from the old square queues a walk to where the character already stands, whose path can fail and clear the queue. `placeAsPlayer` and `pickUpAsPlayer` do all this themselves.
-- Context menus, from `PZHarness/TestMenus.lua`, which a mod's test library requires to have them: read a menu inside one step and hide it (`hideAndChildren`) before the step ends. Building: `worldMenu(object)` and `inventoryMenu(item)` (the menu vanilla's right-click builds, or nil), `newContext()` (an empty one for a mod's own option builder), `subMenu(menu, option)`, `worldSubmenu(object, label)` (the submenu and the menu to hide), `partMenu(vehicle, part)` (the mechanics window's menu for a vehicle part). Finding: `optionNamed(menu, name)` and `optionNames(menu)` look at the top level only; `findOption(menu, matches)`, `findNamed(menu, name)`, `optionRunning(menu, handler)`, `inSubmenu(menu, nameKey, matches)` and `optionFor(menu, item)` (the option passing `item` as its third parameter, matched by id) search every submenu too: each submenu belongs to the player's root menu, so any menu of the tree finds them. `optionRunning` also finds a get-up option (`ISContextMenu.onGetUpAndThen`), which carries its handler as its first parameter. Reading: `offered(option)` (there and not greyed out), `tooltipOf(option)` (its tooltip text, `""` without one), `optionState(option)` (`{ shown, greyed, reason }`), `menuOption(build, object, name)` (the option a mod's `build(0, context, object)` adds to a fresh menu), `worldOptions(object, label, names)` (a world submenu's options by key). Noting: `noteOption(self, label, option)` notes in `self.menu[label]` what an option shows (`{ found, offered, tooltip, submenu, name }`) and returns whether it is offered; `chooseOption(self, label, option, square)` notes it and chooses it when offered, the character first stood next to `square` when given. Clicking: `choose(option)` passes all ten parameters as a click does, and runs a get-up option's handler at once, as the character already stands, where vanilla would queue it behind the test's later waits; `face(target)` turns the character to an object or square's middle at once, as an action's `waitToStart` would in real time. Queued: `useOption(self, getObject, label, find, choose)` opens the world menu of `getObject()` when its step runs, notes what `find(context)` found (`noteOption`) and, with `choose`, faces the object and chooses an offered option; `running(handler)` is a `find` for `optionRunning`; `readMenu(self, getObject, label)` puts the names of every option in `self.names[label]`. Checks on those: `expectOffered(self, label)`, `expectOptionRefused(self, label, tooltipKey)` (in the menu, greyed out, its tooltip saying `tooltipKey`'s text when given), `expectWord(self, label, word, want)` (an option's name lists `word` whole among its comma-separated words) and `expectLine(self, label, text, want)`; `want = false` expects the opposite.
-- Chunk reload trips, from `PZHarness/TestChunks.lua`, which a mod's test library requires to have them: `reloadChunk(self, at, whileAway)` queues a trip that unloads the chunk of `at` (`{ x, y, z }`) and loads it again, for what a mod's objects do while their chunk is away and what they come back as from the save. The character goes far east of `at`, stays away two seconds once this client has let the chunk go (back at once, a chunk has been seen to load with a vehicle a test had removed before the trip), and comes back to the square they stood on when the trip set off; `whileAway()`, if given, queues what happens meanwhile. A chunk that doesn't unload or load again within `CHUNK_MS` real milliseconds, or comes back without a `LoadChunk` event (from a cache, with its state), fails the test as missing it, and a test that ends with the character still away puts them back. A multiplayer server keeps chunks loaded long after the character leaves, so there the trip reloads only this client's copy, which the server sends again; a test that needs the authority's chunk gone too is `spOnly = CHUNK_RELOAD_SP_ONLY`. `CHUNK_RELOAD_SECONDS` is a `spec.timeoutSeconds` for a test with a trip, and `CHUNK_MS` serves a test's own waits for far squares to load. `teleporter(self)` returns `teleport(x, y, z)`, which moves the character on the next tick until the test ends: a teleport from inside a timed action doesn't stick.
+The runner (`PZHarness/Schedule.lua`) fails a test still busy after 30 seconds of real time with
+what it was waiting on (`describeAction`), clears its queue, runs its undos and starts the next;
+`spec.timeoutSeconds` raises the limit for a test that is slow on purpose. A test whose starting
+square still hasn't loaded some seconds after the test before took the character far away fails
+without running.
 
 ## Loot
 
@@ -359,19 +358,18 @@ report prints, stay in the dev mod.
 - The tables: `forEachItemsList(fn)` calls `fn(items, path)` for every `items` list of every room, container, bag, procedural and vehicle table. `procListUsers()` is, for each `ProceduralDistributions` list, the first procedural room container that picks it (`{ room, container }`): `ItemPickerJava.getItemContainer` finds a list only through one. `proceduralList(name, users)` is the game's parsed copy of a list, and that user, or nil. `rarityOf(fullType)` is the loot rarity option that scales an item (its name and the option), or nil and the item's loot type.
 - Options: `withMeasureOptions(options, fn)` runs `fn` with the game's sandbox options `options` (name -> value, or `DEFAULT` for the option's default) and the General debug log off, which in debug mode logs every roll into a container off the map. It reloads the loot multipliers, which the game caches, on both sides of `fn` (`ItemPickerJava.InitSandboxLootSettings`), and puts everything back even when `fn` throws, as `restoring(fn, restore)` does for a mod's own changes. A mod's own loot options in a server check go through `PZHarness.Fixtures.saveOptions`.
 - Rolling: `withParsed(containers, lists, fn)` has the game parse container tables of the dev mod's making (under a made-up room, with `lists` for the procedural ones to pick), passes `fn` the parsed copies by key, then takes them out and parses again. `rollFill(list)` is a fill that rolls a parsed table as a container fill does. `fillOnce(fill, container, read)` empties a scratch container, fills it and returns `read(container)`: by default `countItems(container)`, fullType -> count with bags' contents, and `countItems(container, matches)` counts only the types `matches(fullType)` takes. `sample(fill, samples, container, read)` fills `samples` times and gives, for each key `read` counts, the `share` of samples with one and the mean count in those, `perContainer`. Each fill's items come off the cell's processed items (`forgetItems(container)`), where `ItemContainer.AddItem` puts every new item and thousands of fills in one frame would pile up until the game runs out of memory.
-- `squareOutsideRooms(character)` is the nearest ground-floor square in no room, for a container that rolls procedural tables: only one on a square does, and one in a room counts toward the room's list limits.
+- `scratchContainer(square)` is a crate that never enters the world, to fill and read; `squareOutsideRooms(character)` is the nearest ground-floor square in no room, the square to give a container that rolls procedural tables: only one on a square does, and one in a room counts toward the room's list limits.
+- Reporting: `share(fraction, percentPlaces, oneInPlaces)` formats a share of samples as `<percent>% (1 in <n>)` with those decimals, or `none` at 0. A report prints its lines under `PZHarness.run.mark`, which `run-client.sh` reads them by.
 
 ## Capture settings
 
-Flags of a registered mode, for modes that take screenshots. They take effect just before `run`;
-`done()` puts the UI rate back before the game quits and saves its options, so `options.ini`
-never keeps it.
+A registered mode with `capture = true`, for one whose steps wait on the lighting, the zoom and the
+UI rather than on frame counts, gets these from just before `run` until `done()`, which puts the
+UI rate back before the game quits and saves its options, so `options.ini` never keeps it:
 
-| Flag | What it does |
-| --- | --- |
-| `uncapped` | Draws as many frames as the machine can, as `--test` does; [running.md](running.md#why-it-is-fast-and-what-that-costs) explains why that's safe. |
-| `clearWeather` | No cloud, fog or rain, at once and however the weather turns during the run: it stops the weather and sets the admin values of the climate's cloud, fog and precipitation floats to 0. Stopping the weather alone leaves fog to fade out over seconds. |
-| `fastUI` | Draws the UI 120 times a second, the `uiRenderFPS` option's highest. The UI draws at its own rate and the frames in between show its last drawing, so a step that waits for the UI to draw (`Events.OnPostUIDraw`) waits less. |
+- As many frames as the machine can draw, as `--test` does; [running.md](running.md#why-it-is-fast-and-what-that-costs) explains why that's safe.
+- A clear sky: no cloud, fog or rain, at once and however the weather turns during the run. It stops the weather and sets the admin values of the climate's cloud, fog and precipitation floats to 0; stopping the weather alone leaves fog to fade out over seconds.
+- The UI drawn 120 times a second, the `uiRenderFPS` option's highest. The UI draws at its own rate and the frames in between show its last drawing, so a step that waits for the UI to draw (`Events.OnPostUIDraw`) waits less.
 
 The lighting rate stays the player's (`lightFPS`, 15 by default). `setLightingFPS` takes up to
 120. At 60, with its lighting waits counted in passes, a screenshot run that waits on the lighting
@@ -388,7 +386,7 @@ A mode that takes screenshots builds its steps with `PZHarness.Capture`, from
 local Capture = require "PZHarness/Capture"
 
 function Shots.capture(selection, done)
-    local run = Capture.new("MyModShots")      -- the mode's MODE_MARK
+    local run = Capture.new()                  -- logs under the run's mark
     for _, name in ipairs(Capture.names(selection)) do
         local panel
         run:group(name)                         -- one of its MODE_GROUPS
@@ -413,7 +411,7 @@ end
   `<cachedir>/Lua/<mark>.json`, `data` with the screen's size, the shots and the groups, and calls
   `done()`. With `data` nil it writes nothing, for a mode whose screenshots are its output.
 - Waits: `Capture.drawn(n)` until the UI has drawn `n` more times (the UI draws at its own rate,
-  see `fastUI`), `Capture.zoomSettled()`, and `Capture.DRAW_FRAMES`, enough drawings or frames for
+  see [capture settings](#capture-settings)), `Capture.zoomSettled()`, and `Capture.DRAW_FRAMES`, enough drawings or frames for
   a change to reach the screen.
 - Shots: `run:addOpaque(name, regions)` saves the screen as `<mode>_<name>.png`;
   `run:addMatted(name, regions)` saves it on black and on white, as `<mode>_<name>_k.png` and
@@ -435,46 +433,71 @@ end
   one. Icons are named `icon_<Module>_<Type>` for an item, the crafting window's icon, and
   `icon_build_<recipe>` for the build menu's; `catalog:iconList()` lists every icon the entries
   name so far, for `run:addIconSheet`. `opts.prefer` lists the full types an input that takes any
-  item with a tag shows (as `PZHarness.Test.inputItem` picks), `opts.fluidContainers` the
-  container, by fluid type, a line that takes or fills any container shows, and
-  `opts.literature` the items whose names `learn.magazines` lists.
+  item with a tag shows (as `PZHarness.Test.inputItem` picks) and `opts.fluidContainers` the
+  container, by fluid type, a line that takes or fills any container shows. `learn.magazines`
+  names the items whose script teaches the recipe (`LearnedRecipes`), sorted by name, as
+  `learn.research` names those that research it.
 
 `lib/capture.py <cache dir> <mark> <captures folder>` turns a matted pair into alpha (a pixel
 that reads k on black and w on white has alpha 1 - (w - k) and colour k / a), crops every region
 and writes the rest of `<mark>.json` to the folder's `promo.json`, with the captures each group
-made. Only the groups the run shot are replaced, and a group's captures it no longer makes go. A
-mod with captures of its own defines `harness_after_<mode>` to run its own script, which imports
+made. Only the groups the run shot are replaced, and a group's captures it no longer makes go.
+
+Item models for `ItemSheet(models=True)` ([workshop-page.md](workshop-page.md#laying-out-the-images))
+come from data with a `models` list: each entry `{ name = "model_<Module>_<Type>", group, file,
+floor, window }` names the item's screenshot, a screenshot of the same floor with nothing on it,
+and the region, in UI units, the item lies in. Where the shot differs from the floor is the item:
+capture.py crops it with a margin, its longer side within `MODEL_MAX` pixels, and gives its box in
+that crop as `promo.json`'s `models`. A run that shot no models keeps the last boxes. Then
+capture.py prints `extract: no capture <name>.png` for each icon the catalog's items and recipes
+name, and with `models` each item's model, that no run has made.
+
+A mod with captures of its own defines `harness_after_<mode>` to run its own script, which imports
 `Extraction` from it, saves its images with `save(image, group, name)` and calls `finish()`.
 
 ### Staging
 
 `PZHarness.Stage`, from `PZHarness/Stage.lua`, holds what staging a world shot takes, and
-`PZHarness/StageLots.lua` adds open ground and lots to it; its waits are runSteps waits and its
-`add...` functions add steps to a run:
+`PZHarness/StageLots.lua` adds open ground, lots and places to it; its waits are runSteps waits
+and its `add...` functions add steps to a run:
 
 ```lua
 local Stage = require "PZHarness/Stage"
 require "PZHarness/StageLots"
 
-local lot
+local lots
 local groups = {
-    yard = function()
-        -- Looks around from the square (squares never seen draw dark), a step out from the closest zoom.
-        Stage.addGoTo(run, getPlayer(), { Stage.lotSquare(lot, 2, 5) }, 1)
-        run:addOpaque("yard", function()
-            return { Stage.centred("yard", Stage.lotSquares(lot)) }  -- README-wide, the lot in the middle
+    yard = {
+        places = { "yard" },
+        add = function(data)
+            -- Looks around from the square (squares never seen draw dark), a step out from the closest zoom.
+            Stage.addGoTo(run, getPlayer(), { Stage.at(lots.yard, { 2, 5 }) }, 1)
+            run:addOpaque("yard", function()
+                return { Stage.centred("yard", Stage.lotSquares(lots.yard)) }  -- README-wide, the lot in the middle
+            end)
+        end,
+    },
+}
+local places = {
+    { name = "yard", label = "yard", missing = "open ground 4x4", find = function(player, found)
+        return Stage.findLot(player, 4, 4, { trees = true, others = found, gap = 6 })
+    end },
+}
+Stage.runGroups(run, selection, {
+    groups = groups,
+    places = places,                                             -- none found fails the run with what's missing
+    catalog = Capture.newCatalog(),                              -- item and recipe names, and an `icons` group
+    items = { "MyMod.Widget" },
+    data = { strings = { modName = getText("Sandbox_MyMod") } },
+    prepare = function(chosen, found, origins)
+        lots = found
+        Stage.addWorldSettings(run, { hour = 12, origins = origins })
+        run:add(function()
+            Stage.clearLotForShots(lots.yard, 2)                 -- its trees and ground cover go
+            Stage.placeTile(Stage.lotSquare(lots.yard, 1, 1), "my_mod_tiles_0")
         end)
     end,
-}
-Stage.runGroups(run, selection, groups, function(chosen)
-    lot = Stage.findLot(getPlayer(), 4, 4, { trees = true })   -- nil fails the run with what's missing
-    if not lot then return "open ground 4x4" end
-    Stage.addWorldSettings(run, { hour = 12, origins = { Stage.lotSquare(lot, 0, 0) } })
-    run:add(function()
-        Stage.clearLotForShots(lot, 2)                           -- its trees and ground cover go
-        Stage.placeTile(Stage.lotSquare(lot, 1, 1), "my_mod_tiles_0")
-    end)
-end, data, done)
+}, done)
 ```
 
 - Finding and clearing: `closestSquare(player, accepts)` (within `SEARCH_RADIUS`, nearest first,
@@ -493,9 +516,32 @@ end, data, done)
   `findLot(player, w, h, opts)` is the closest lot `{ x, y, z, w, h }` (its north-west corner) of
   open ground with `opts`, or nil; `opts.others` lists lots it keeps `opts.gap` squares from, and
   `opts.clearance` squares round it must be open ground of any floor too, so no building or fence
-  stands at its edge. `lotSquare(lot, dx, dy, up)` is a square of it (nil if not loaded),
-  `lotSquares(lot)` all of them, as a framing takes them, and `recalcLot(lot)` recalculates it and
-  the squares beside it, so that what was set on it draws.
+  stands at its edge. A lot is also a place on its corner. `lotSquare(lot, dx, dy, up)` is a square
+  of it (nil if not loaded), `lotSquares(lot)` all of them, as a framing takes them, and
+  `recalcLot(lot)` recalculates it and the squares beside it, so that what was set on it draws.
+- Places (`PZHarness/StageLots.lua`): a place is an `origin` square and a `frame`, the directions a
+  position `{ along, out }` runs in (`GRID`: east, south); `place(origin, frame)` makes one, and
+  `at(place, position)`, `squaresAt(place, positions...)`, `loadedSquares(place, positions,
+  accepts)` and `everyAreaSquare(place, area, fn, outFrom)` (an area is `{ along = { from, to },
+  out = { from, to } }`, with `sum` and `half` a diagonal band of it) read its squares.
+  `closestPlace(player, frames, fits, others, gap)` is the closest place in the first of `frames`
+  that has one `fits(place)` takes, its origin `gap` along x or y from each of `others`'.
+  `findPlaces(player, specs, needs, mark, gap)` finds, in order, each spec `needs` names, apart
+  from those found before it, logs them on one line, and returns them by name and their origins,
+  or nil and the first one's `missing`; a spec is `{ name, label, missing, frames, fits(place,
+  player) }` or `{ name, label, missing, find(player, found) }`, `detail(place)` adding to its log
+  entry. `runGroups` calls it for a mode's `places`.
+- Spot and model shots: `addSpotShot(run, player, lot, { name, x, y, zoomSteps, hour })` walks
+  the character to a square of the lot and shoots the screen with no regions, for a mode that
+  writes no JSON. `STUDIO_PLACE` is the spec of a patch of open ground for item models, and
+  `addFloorModels(run, studio, items, models, floorSprite)` lays `floorSprite` there, drops every
+  item at once so their models load, and shoots the bare floor (`models_floor`) and each item
+  alone on it, turned `STUDIO.rotation`, at the closest zoom, adding each to `models` (the data's
+  `models` list, see above).
+- Dressing: `dress(player, look)` sets `female`, `hair`, `beard` ("" for none) and `hairColour` if
+  given, and with `clothes` (full types, made once per look) or `ownClothes` (what the character
+  wore before a look first changed it) wears only those and holds `weapon` (made once) or nothing;
+  `addOutfit(run, player, look)` adds it as a step.
 - Tiles and clearing: `placeTile(square, sprite, modData)` places a tile at once on this side, as
   `PZHarness.Fixtures.newTile` does, and recalculates its neighbours so it draws (nothing removes
   it, unlike a test's `T.placeTile`); `clearToFloor(square, keeps)` takes every object but the
@@ -528,10 +574,15 @@ end, data, done)
   a window that closes out of reach), and `addMenuShot(run, name, open)` a context menu, `open()`
   returning its menus, the top one first, their submenus opened with `openSubMenu(menu, name)`,
   vanilla's debug options hidden.
-- `runGroups(run, selection, groups, prepare, data, done)` runs a capture mode's groups: it fails a
-  selection that names a group `groups` lacks, calls `prepare(chosen)`, which finds and builds what
-  the groups need and returns why it can't, hides the UI, puts the mouse in a corner, where the
-  world outlines nothing and no menu follows it, adds each group's steps under `run:group`, logs
-  `<mark> TIME <group> <seconds> s` for each and the total, and runs the run. For `prepare`,
-  `groupNeeds(groups, chosen, key)` gives the set (name → true) of every name in the `key` list of
-  each chosen group's entry in `groups`, so that a run looks only for what its groups need.
+- `runGroups(run, selection, mode, done)` runs a capture mode's groups. `mode.groups` maps each
+  name to `{ add(data), places }`; it fails a selection that names a group it lacks, and any run
+  whose groups (the catalog's `icons` among them) include one the conf's `MODE_GROUPS_<mode>`
+  leaves out, which a full run would never shoot. With
+  `mode.places` it finds, `mode.gap` apart, only the places the chosen groups name (findPlaces) and
+  fails the run with `within SEARCH_RADIUS squares, no <missing>` if one isn't there. With
+  `mode.catalog`, the data holds the catalog's `items` of `mode.items` and its `recipes`, and the
+  group `icons` shoots their icons. Then `mode.prepare(chosen, places, origins)` adds the steps
+  that set and build the world and returns why the run can't go on, if it can't. It hides the UI,
+  puts the mouse in a corner, where the world outlines nothing and no menu follows it, adds each
+  group's steps under `run:group`, logs `<mark> TIME <group> <seconds> s` for each and the total,
+  and runs the run with `mode.data`.

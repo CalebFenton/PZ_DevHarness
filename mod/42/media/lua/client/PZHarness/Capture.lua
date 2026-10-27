@@ -5,6 +5,7 @@
 -- pages are laid out from (Capture.newCatalog) and the icons they name (Run:addIconSheet).
 
 require "ISUI/ISPanel"
+require "PZHarness/Run"
 require "PZHarness/TestCraft"
 
 PZHarness = PZHarness or {}
@@ -186,12 +187,12 @@ end
 local Run = {}
 Run.__index = Run
 
---- A run of steps that logs under `mark`, with the shots it names and their groups, so
---- lib/capture.py replaces only the captures of groups this run shot. Shot files start with
---- `prefix` (mode name and "_"), which run-client.sh clears before a run of the mode.
-function Capture.new(mark)
-    return setmetatable({ mark = mark, prefix = PZHarness.run.mode .. "_", steps = {}, shots = {}, groups = {},
-        tinted = {} }, Run)
+--- A run of steps that logs under the run's mark (PZHarness.run.mark), with the shots it names and
+--- their groups, so lib/capture.py replaces only the captures of groups this run shot. Shot files
+--- start with `prefix` (mode name and "_"), which run-client.sh clears before a run of the mode.
+function Capture.new()
+    return setmetatable({ mark = PZHarness.run.mark, prefix = PZHarness.run.mode .. "_", steps = {}, shots = {},
+        groups = {}, tinted = {} }, Run)
 end
 
 function Run:add(step)
@@ -359,12 +360,11 @@ Catalog.__index = Catalog
 --- The item and recipe entries a mod's pages are laid out from, in the game's language, and the
 --- icons they name, for Run:addIconSheet. `opts.prefer`: the full types an input that takes any
 --- item with a tag shows, as PZHarness.Test.inputItem picks; `opts.fluidContainers`: by fluid type,
---- the container a line that takes or fills any fluid container shows; `opts.literature`: the
---- full types of the items that teach recipes.
+--- the container a line that takes or fills any fluid container shows.
 function Capture.newCatalog(opts)
     opts = opts or {}
-    return setmetatable({ prefer = opts.prefer or {}, fluidContainers = opts.fluidContainers or {},
-        literature = opts.literature or {}, icons = {}, order = {} }, Catalog)
+    return setmetatable({ prefer = opts.prefer or {}, fluidContainers = opts.fluidContainers or {}, icons = {},
+        order = {} }, Catalog)
 end
 
 -- Registers `texture` for the icon sheet as `key`, named `name`, once.
@@ -464,42 +464,41 @@ local function skillList(count, get)
     return skills
 end
 
--- The names of the literature that teaches the recipe `name`.
-function Catalog:teaching(name)
-    local found = {}
-    for _, fullType in ipairs(self.literature) do
-        local learned = getScriptManager():getItem(fullType):getLearnedRecipes()
-        for i = 0, (learned and learned:size() or 0) - 1 do
-            if learned:get(i) == name then
-                table.insert(found, getItemNameFromFullType(fullType))
-            end
+-- By recipe, the names of the items whose script lists it in listOf(script), sorted.
+local function recipeIndex(listOf)
+    local index = {}
+    local scripts = getScriptManager():getAllItems()
+    for i = 0, scripts:size() - 1 do
+        local script = scripts:get(i)
+        local recipes = listOf(script)
+        for j = 0, (recipes and recipes:size() or 0) - 1 do
+            local recipe = recipes:get(j)
+            index[recipe] = index[recipe] or {}
+            table.insert(index[recipe], getItemNameFromFullType(script:getFullName()))
         end
     end
-    return found
+    for _, names in pairs(index) do
+        table.sort(names)
+    end
+    return index
 end
 
--- The names of the items that research each recipe, by recipe: the ones whose script lists it
--- among its ResearchableRecipes, which the game extends with every recipe's own outputs
--- (OutputMapper). Built once, since it walks every item script.
-local researchers
+-- The items that teach each recipe when read (LearnedRecipes) and the ones that research it (their
+-- ResearchableRecipes, which the game extends with every recipe's own outputs, OutputMapper), by
+-- recipe. Each built once, since it walks every item script.
+local teachers, researchers
+
+local function taughtBy(name)
+    teachers = teachers or recipeIndex(function(script)
+        return script:getLearnedRecipes()
+    end)
+    return teachers[name] or {}
+end
 
 local function researchedBy(name)
-    if not researchers then
-        researchers = {}
-        local scripts = getScriptManager():getAllItems()
-        for i = 0, scripts:size() - 1 do
-            local script = scripts:get(i)
-            local recipes = script:hasResearchableRecipes() and script:getResearchableRecipes()
-            for j = 0, (recipes and recipes:size() or 0) - 1 do
-                local recipe = recipes:get(j)
-                researchers[recipe] = researchers[recipe] or {}
-                table.insert(researchers[recipe], getItemNameFromFullType(script:getFullName()))
-            end
-        end
-        for _, names in pairs(researchers) do
-            table.sort(names)
-        end
-    end
+    researchers = researchers or recipeIndex(function(script)
+        return script:hasResearchableRecipes() and script:getResearchableRecipes()
+    end)
     return researchers[name] or {}
 end
 
@@ -513,7 +512,7 @@ function Catalog:recipe(name, build)
         skills = skillList(recipe:getRequiredSkillCount(), function(i) return recipe:getRequiredSkill(i) end),
         learn = {
             needed = recipe:needToBeLearn(),
-            magazines = self:teaching(name),
+            magazines = taughtBy(name),
             auto = skillList(recipe:getAutoLearnAnySkillCount(), function(i) return recipe:getAutoLearnAnySkill(i) end),
             autoAll = skillList(recipe:getAutoLearnAllSkillCount(), function(i) return recipe:getAutoLearnAllSkill(i) end),
             research = researchedBy(name),
