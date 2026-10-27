@@ -64,6 +64,20 @@ function QA.isKnown(fullType)
     return getScriptManager():FindItem(fullType) ~= nil
 end
 
+--- Every item script of the script module `module` by full type, sorted, so what is laid out or
+--- checked from it comes out the same each run.
+function QA.itemsOfModule(module)
+    local found, items = {}, getScriptManager():getAllItems()
+    for i = 0, items:size() - 1 do
+        local item = items:get(i)
+        if item:getModuleName() == module then
+            table.insert(found, item:getFullName())
+        end
+    end
+    table.sort(found)
+    return found
+end
+
 --- A new item of `fullType`, its fluid container filled with the Fluid `fluid` if given; nil for
 --- a type the game doesn't have.
 function QA.newItem(fullType, fluid)

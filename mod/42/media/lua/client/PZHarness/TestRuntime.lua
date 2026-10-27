@@ -469,13 +469,11 @@ end
 --- equip = "primary", "secondary" or "both" }. Queued like T.server; this client's copies land in
 --- `self.items[name]`, `count` of each in the order given. In multiplayer the server makes them,
 --- sends them here and then puts them on and in hand, so actions that run on the server find them.
---- The runner empties the inventory before the next test.
+--- Outside T.batch nothing queued after it goes out before this client has its copies: a later
+--- call, or an action, that used the items up on the server first would leave the copies never
+--- coming. The runner empties the inventory before the next test.
 function T.give(self, name, items)
-    local dresses = false
-    for _, item in ipairs(items) do
-        dresses = dresses or item.worn or item.equip ~= nil
-    end
-    queueCall(self, "PZHarness.give", { items = items }, name, nil, not dresses)
+    queueCall(self, "PZHarness.give", { items = items }, name, nil, false)
 end
 
 --- Queues a count of each of `types` in the inventory of the server's copy of the character, bags

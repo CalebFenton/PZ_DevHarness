@@ -2,6 +2,8 @@ require "PZHarness/TestWorld"
 require "ISUI/ISContextMenu"
 require "ISUI/ISWorldObjectContextMenu"
 require "ISUI/ISInventoryPaneContextMenu"
+require "ISUI/ISRichTextPanel"
+require "ISUI/ISToolTip"
 
 -- Context-menu readers for tests: build the menu a right-click builds, find an option in it, read
 -- what it shows and choose it as a click does. A test reads a menu inside one step and hides it
@@ -301,4 +303,34 @@ function T.expectOptionRefused(self, label, tooltipKey)
                 label .. ": the tooltip doesn't say " .. getText(tooltipKey) .. ": " .. seen.tooltip)
         end
     end
+end
+
+-- Tooltips ------------------------------------------------------------------------------------
+
+--- The places where rich text `text`, laid out as a tooltip lays it out, shows two runs of words
+--- with no gap between them, each as "before|after"; empty when none do. The game's rich text
+--- ends a run at every tag and starts the next where the last one's letters end, dropping the
+--- space before the tag (ISRichTextPanel.paginate), so a colour change mid-line runs the words
+--- together unless a <SPACE> tag keeps them apart.
+function T.runTogether(text)
+    local panel = ISRichTextPanel:new(0, 0, 2000, 100)
+    panel.defaultFont = ISToolTip.GetFont()
+    panel.text = text
+    panel:paginate()
+    local count = 0
+    for i in pairs(panel.lines) do
+        count = math.max(count, i)
+    end
+    local touching, previous = {}, nil
+    for i = 1, count do
+        local run = panel.lines[i]
+        if run and run ~= "" then
+            local x, y = panel.lineX[i], panel.lineY[i]
+            if previous and previous.y == y and x <= previous.right then
+                table.insert(touching, previous.run .. "|" .. run)
+            end
+            previous = { run = run, y = y, right = x + getTextManager():MeasureStringX(panel.defaultFont, run) }
+        end
+    end
+    return touching
 end

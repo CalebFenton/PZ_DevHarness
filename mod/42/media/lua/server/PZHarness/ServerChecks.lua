@@ -61,6 +61,20 @@ handler("PZHarness.carried", function(player, args)
     return { items = items, fluids = fluids, total = carried:size() }
 end)
 
+-- T.readCharacter: the character as the authority has it: the stats `args.stats` (CharacterStat
+-- field names) in `stats`, and the XP in the perks `args.perks` (Perks field names) in `xp`, by name.
+handler("PZHarness.character", function(player, args)
+    local stats, xp = player:getStats(), player:getXp()
+    local reply = { stats = {}, xp = {} }
+    for _, name in ipairs(args.stats or {}) do
+        reply.stats[name] = stats:get(PZHarness.need(CharacterStat[name], "the character stat " .. tostring(name)))
+    end
+    for _, name in ipairs(args.perks or {}) do
+        reply.xp[name] = xp:getXP(PZHarness.need(Perks[name], "the perk " .. tostring(name)))
+    end
+    return reply
+end)
+
 -- T.fillCarried: empties the fluid container of every carried item of full type `args.type`, bags
 -- included, fills it with `args.litres` of `args.fluid` (none when nil), and sends the item to the
 -- character's client. Answers how many it `filled`.

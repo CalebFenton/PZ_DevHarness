@@ -64,10 +64,10 @@ early when `isClient()`) is empty, so what only the authority can do goes throug
   advances a sequential queue head rather than searching all pending requests for each answer.
 - A round trip takes about 25 ms, so a call need not wait for the answer before it when nothing
   in between happens on this client: one whose `args` is a table goes out as soon as only waits
-  for answers that change nothing on the server are queued before it (the setters', and `T.give`'s
-  and `T.count`'s unless the items go on or in hand), and its answer still lands in its turn. A
-  call that uses up items a `T.give` before it gave can so reach the server before they reach this
-  client, and the give's wait for its copies then never ends: queue a `T.step` between them.
+  for answers that change nothing on the server are queued before it (the setters' and
+  `T.count`'s), and its answer still lands in its turn. Outside a batch nothing queued after a
+  `T.give` goes out before this client has its copies: a call that used up the items could reach
+  the server first, and the give's wait for its copies would then never end.
   `T.batch(fn)` sends every such call that `fn` queues together, when the first one's turn comes,
   and its steps and waits read each answer in its turn; it is for calls a test makes back to back,
   since the server has run them all before anything `fn` queued between them happens here.
@@ -129,10 +129,24 @@ player behaves as before:
   made in between would never reach the copy.
   `placeAsPlayer` gives the item (`give`), and the character places it with the moveables action,
   whose `complete()` the server carries out; `PZHarness.trackPlaced` then removes it on the server
-  when the test ends, as above.
+  when the test ends, as above. `T.build` and `T.trackSquare` have the server note the looks of
+  what stands on a square and, when the test ends, remove whatever stands there that it didn't
+  note: by look rather than by object, so an OnCreate that swapped the object, or a chunk that
+  loaded again with a new copy, still goes. A server handler does the same for what it places with
+  `PZHarness.trackSquare(defer, player, at)`.
+  A running generator taken away while this client's copy of its square holds other objects keeps
+  its squares powered here: the switch-off names it by its place on the square and misses.
+  `T.setGrid(self, false)` and a dev mod's generator fixture clear such power with
+  `PZHarness.Fixtures.releaseGeneratorPower(x, y, z, going)`.
   `T.placeWorkTable`, `T.learnRecipes` and `T.forgetRecipes` work outside tests too, as in a
   scenario's onStart; `PZHarness.ServerCalls.callOutsideTest(name, args, onReply)` calls any
   handler there.
+- Records and jobs: the record kit (`TestRecords.lua`, `ServerRecords.lua`) places, sets, fills,
+  ages, reads and reloads a mod's Global Object System records on the server, and
+  `recordSummary`/`waitForSummary` read this client's copy of their summary; the job kit
+  (`TestJobs.lua`, `ServerJobs.lua`) has the server's character do a job of the mod's job action,
+  with reads before and after in the same call, so the test sees what the authority refuses or
+  leaves with no tick in between.
 - Learning (`TestLearning.lua`, its handlers in `ServerLearning.lua`): `knowRecipes` changes this
   client's copy in its turn and then the server's, and each side puts back its own list when the
   test ends, since the server never sends a client what it forgets. `levelUp` and

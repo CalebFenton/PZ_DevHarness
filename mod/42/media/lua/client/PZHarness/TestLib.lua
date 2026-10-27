@@ -2,6 +2,7 @@ require "Tests/TimedActionsTests"
 require "PZHarness/Run"
 require "PZHarness/Fixtures"
 require "PZHarness/Checks"
+require "PZHarness/Rolls"
 local Report = require "PZHarness/Report"
 
 -- The generic half of a mod's test library. A mod's own library inherits from it
@@ -169,31 +170,14 @@ function T.shortenQueuedInstalls()
     end
 end
 
--- In multiplayer a generator taken away while this client's copy of its square holds a different
--- list of objects (a test's own objects come and go fast) keeps its squares powered here: the
--- switch-off names it by its place on the square and misses, and the chunks drop a generator's
--- squares only when they load again (IsoChunk.checkForMissingGenerators). So with the grid off a
--- test starts with no power but what it brings itself.
-local function dropStaleGeneratorPower()
-    local square = T.player():getCurrentSquare()
-    if not square then return end
-    local cell, reach = getCell(), math.floor(SandboxVars.GeneratorTileRange / 8) + 2
-    local wx, wy = math.floor(square:getX() / 8), math.floor(square:getY() / 8)
-    for x = wx - reach, wx + reach do
-        for y = wy - reach, wy + reach do
-            local chunk = cell:getChunk(x, y)
-            if chunk then
-                chunk:checkForMissingGenerators()
-            end
-        end
-    end
-end
-
---- The power grid on or off. Off, it also clears power a generator taken away left behind.
+--- The power grid on or off. Off, it also clears the power generators taken away left behind
+--- (PZHarness.Fixtures.releaseGeneratorPower), so with the grid off a test starts with no power but
+--- what it brings itself.
 function T.setGrid(self, on)
     setGrid(self, { on = on })
-    if not on then
-        dropStaleGeneratorPower()
+    local square = not on and T.player():getCurrentSquare()
+    if square then
+        PZHarness.Fixtures.releaseGeneratorPower(square:getX(), square:getY(), square:getZ())
     end
 end
 
@@ -211,6 +195,37 @@ end
 function T.changeItem(self, item, changes)
     PZHarness.Fixtures.changeItem(item, changes)
     Runtime.alsoOnServer(self, "PZHarness.changeItem", { id = item:getID(), changes = changes })
+end
+
+--- Fails the test unless timed actions take their time, for a test that times one.
+function T.needActionTime(self)
+    return T.need(self, not T.player():isTimedActionInstant(),
+        "the debug option Cheats > Timed Action > Instant off, which makes every action instant")
+end
+
+--- Queues the authority's copy of the character's stat `stat` (a CharacterStat field name) at
+--- `value`, sent to this client, until the test ends.
+function T.setStat(self, stat, value)
+    T.server(self, "PZHarness.setStat", { stat = stat, value = value })
+end
+
+--- Queues taking the character's items `ids` (item ids, if given) and every `fullType` (if given)
+--- away on the authority, as the server takes an item, which this client then loses too; how many
+--- lands in self.server["PZHarness.takeItems"].taken.
+function T.takeItems(self, ids, fullType)
+    T.server(self, "PZHarness.takeItems", { ids = ids, type = fullType })
+end
+
+-- Rolls
+
+--- How far below a chance a roll that just hits it falls (PZHarness.Rolls.UNDER).
+T.UNDER = PZHarness.Rolls.UNDER
+
+--- Queues setting the authority's roll (the `chance` test setting's) until the test ends: `rolls`
+--- a number, every roll; or a list, the next rolls in order, failing the call that draws one more.
+--- So a test checks either side of a chance in one try each.
+function T.forceRoll(self, rolls)
+    T.server(self, "PZHarness.forceRoll", { rolls = rolls })
 end
 
 -- Registering tests

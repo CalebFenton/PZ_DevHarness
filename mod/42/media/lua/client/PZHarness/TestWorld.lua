@@ -68,9 +68,31 @@ function T.square(self, opts, what)
     return found and found[1]
 end
 
---- A fixture handle of `square`.
+--- A fixture handle of `square`. Handles are this shape throughout: the square's x, y, z and
+--- square, and as a fixture fills them in, `kind` (a `records` kind or job feature), `sprite` and
+--- `object`, this client's copy (T.copyOf).
 function T.where(square)
     return { x = square:getX(), y = square:getY(), z = square:getZ(), square = square }
+end
+
+--- This client's copy of what the handle `handle` names on its square: the object drawn as
+--- `sprite`, else as handle.sprite, else of the record kind handle.kind (its owner's
+--- feature.isObject, the `records` test setting); or nil.
+function T.copyOf(handle, sprite)
+    local square = getSquare(handle.x, handle.y, handle.z)
+    sprite = sprite or handle.sprite
+    if sprite then
+        return T.objectWithSprite(square, sprite)
+    end
+    local records = PZHarness.testSettings.records
+    local isObject = records and records[handle.kind] and records[handle.kind].owner().feature.isObject
+    local objects = isObject and square and square:getObjects()
+    for i = 0, (objects and objects:size() or 0) - 1 do
+        if isObject(objects:get(i)) then
+            return objects:get(i)
+        end
+    end
+    return nil
 end
 
 --- Plain coordinates of a handle or square, with the server arguments in `fields`.
@@ -91,8 +113,69 @@ end
 --- Removes `thing` (an IsoObject or a vehicle) when the test ends, the way the game does, so the
 --- mods' removal handlers run (PZHarness.Fixtures.removePlaced). Returns `thing`.
 function T.track(self, thing)
-    T.defer(self, function() PZHarness.Fixtures.removePlaced(thing) end)
+    T.defer(self, function() PZHarness.Fixtures.removePlaced(thing, T.player()) end)
     return thing
+end
+
+--- Queues removing, when the test ends, what then stands on `at`'s square (a handle or square)
+--- that doesn't now, the way the game removes it (PZHarness.Fixtures.removeNewOn): for what a test
+--- puts there by other means than a fixture, such as a job, whatever its OnCreate swapped in.
+function T.trackSquare(self, at)
+    T.server(self, "PZHarness.trackSquare", T.at(at))
+end
+
+--- Queues an `fullType` holding `uses` (its share of full; as made if nil) dropped on the floor of
+--- `at`'s square (a handle or square) by the authority, as a player drops it, for everyone to see.
+--- It goes when the test ends.
+function T.floorItem(self, at, fullType, uses)
+    T.server(self, "PZHarness.floorItem", T.at(at, { type = fullType, uses = uses }))
+end
+
+--- Queues the authority taking the items lying on `squares` (handles or squares) off the floor, as
+--- a player picking them up leaves none behind; they land in self.reads[label].items (when given),
+--- each { type, uses (a drainable's), modData (its plain values) }.
+function T.takeFloorItems(self, squares, label)
+    local at = {}
+    for i, square in ipairs(squares) do
+        at[i] = T.at(square)
+    end
+    T.server(self, "PZHarness.takeFloorItems", { squares = at })
+    if label then
+        self.reads = self.reads or {}
+        T.step(function() self.reads[label] = self.server["PZHarness.takeFloorItems"] end)
+    end
+end
+
+--- Queues a wooden floor one level above `at`'s square laid by the authority, as a player roofs a
+--- yard, until the test ends; whether the square below is still outdoors lands in
+--- self.reads[label].outside (when given).
+function T.floorAbove(self, at, label)
+    T.server(self, "PZHarness.floorAbove", T.at(at))
+    if label then
+        self.reads = self.reads or {}
+        T.step(function() self.reads[label] = self.server["PZHarness.floorAbove"] end)
+    end
+end
+
+--- Queues a tile of `sprite` on each of the eight squares around `at` on level `level`, laid by
+--- the authority until the test ends, the squares made where that level has none.
+function T.ringOfTiles(self, at, level, sprite)
+    T.server(self, "PZHarness.ringOfTiles", T.at(at, { level = level, sprite = sprite }))
+end
+
+--- Queues reading the modData key `key` of the authority's object drawn as `sprite` on `at`'s
+--- square into self.reads[label].value.
+function T.readModData(self, at, sprite, key, label)
+    T.server(self, "PZHarness.objectModData", T.at(at, { sprite = sprite, key = key }))
+    self.reads = self.reads or {}
+    T.step(function() self.reads[label] = self.server["PZHarness.objectModData"] end)
+end
+
+--- Queues reads of the authority's world update count until it passes `frame()` (an earlier
+--- answer's): every object there has had an update since, which a multiplayer server runs on its
+--- own clock (PZHarness.worldFrame).
+function T.waitForFrameAfter(self, frame)
+    T.serverUntil(self, "PZHarness.worldFrame", {}, function(now) return now.frame > frame() end)
 end
 
 --- A tile object of `sprite` on `square`, with `modData`.
@@ -231,6 +314,27 @@ function T.goNextTo(self, square)
         return here ~= nil and here:getX() == at.x and here:getY() == at.y
     end, RECEIVE_MS)
     T.server(self, "PZHarness.moveTo", function() return at end)
+end
+
+--- Stands the character next to `square` so vanilla's walkAdj has nowhere to go, then makes that
+--- walk, as a menu does before an action: a multiplayer server refuses a job from afar. Missing
+--- "a walk to `what`" if it can't.
+function T.walkTo(self, square, what)
+    T.standNextTo(square)
+    return T.need(self, luautils.walkAdj(T.player(), square, true), "a walk to " .. what)
+end
+
+--- Queues a job at `square`: the character goes next to it (T.goNextTo) unless it already stands
+--- where the last T.doJob put it, then `makeAction()`'s timed action is queued. Decided when the
+--- queue reaches it, so a teleport between jobs counts.
+function T.doJob(self, square, makeAction)
+    T.step(function()
+        if self.jobSquare ~= square or self.jobStand ~= T.player():getCurrentSquare() then
+            T.goNextTo(self, square)
+            T.step(function() self.jobSquare, self.jobStand = square, T.player():getCurrentSquare() end)
+        end
+        T.step(function() ISTimedActionQueue.add(makeAction()) end)
+    end)
 end
 
 -- Queues the moveables action `mode` ("place" or "pickup") of `sprite` on `square` the way the

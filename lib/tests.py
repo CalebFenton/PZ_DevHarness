@@ -110,11 +110,13 @@ def lines(text):
 
 
 def repo_files(conf):
-    """Every file of the repository and the harness submodule, tracked or untracked."""
-    files = lines(git(conf.repo, "ls-files", "--cached", "--others", "--exclude-standard"))
-    files += [f"{conf.submodule}/{f}" for f in
-              lines(git(conf.harness, "ls-files", "--cached", "--others", "--exclude-standard"))]
-    return files
+    """Every file of the repository and the harness submodule, tracked or untracked, but not one
+    deleted from the working tree and not yet from the index."""
+    def present(directory):
+        deleted = set(lines(git(directory, "ls-files", "--deleted")))
+        return [f for f in lines(git(directory, "ls-files", "--cached", "--others", "--exclude-standard"))
+                if f not in deleted]
+    return present(conf.repo) + [f"{conf.submodule}/{f}" for f in present(conf.harness)]
 
 
 def check(conf):

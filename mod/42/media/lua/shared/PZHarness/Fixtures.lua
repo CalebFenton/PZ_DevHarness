@@ -26,10 +26,17 @@ PZHarness.testSettings = PZHarness.testSettings or {}
 --- - `recipePrefix`: the name prefix of the mod's craftRecipes, for the recipe helpers.
 --- - `isFreeSquare(square, indoors)`: where T.squares may put a fixture; by default a walkable
 ---   square without a vehicle, indoors or outdoors as asked.
---- - `remove(object)`: removes a placed object of the mod the way the mod does, returning true;
----   anything it returns false for goes the vanilla way (Fixtures.removePlaced).
---- - `spawnVehicle(script, square, facing, args)`: makes the vehicles T.placeVehicle asks for, with
----   the test's `opts.args`, returning one, or nil to leave it to addVehicleDebug.
+--- - `remove(object, player)`: removes a placed object of the mod the way the mod does, returning
+---   true; anything it returns false for goes the vanilla way (Fixtures.removePlaced). `player` is
+---   the character whose test placed it, when the remover knows it.
+--- - `spawnVehicle(script, square, facing, args, defer)`: makes the vehicles T.placeVehicle asks
+---   for, with the test's `opts.args`, returning one, or nil to leave it to addVehicleDebug;
+---   `defer` takes undos, as a handler's does.
+--- - `chance()`: the mod's roll module, whose `roll()` every chance of the mod draws through
+---   (PZHarness.Rolls).
+--- - `records`: the kinds of Global Object System record the record kit drives
+---   (server/PZHarness/ServerRecords.lua), by kind name.
+--- - `jobAction()`: the mod's job action class, for the job kit (server/PZHarness/ServerJobs.lua).
 --- - `leakRadius`, `leakLevels`, `leakIgnore`: the runner's leak check (docs/running.md).
 --- Hooks that call the dev mod's client or server modules look them up when they run, since those
 --- load after shared Lua, and each side loads only its own.
@@ -103,6 +110,41 @@ function Fixtures.deferOnce(defer, undo)
     end
     defer(once)
     return once
+end
+
+-- What stood at each table's key before the first replacement still standing there, and how many
+-- stand (Fixtures.replace).
+local originals = {}
+
+--- Sets `target[key]` to `value`, a production function or field a test stands in for, and returns
+--- the function that puts back what stood there before; Fixtures.deferOnce says when it runs.
+--- Replacements of one key stack: undone newest first, each puts back the one before it.
+--- A caller that looks the key up on its table as it runs sees the replacement.
+function Fixtures.replace(defer, target, key, value)
+    local byKey = originals[target] or {}
+    originals[target] = byKey
+    local entry = byKey[key] or { value = target[key], standing = 0 }
+    byKey[key] = entry
+    entry.standing = entry.standing + 1
+    local before = target[key]
+    target[key] = value
+    return Fixtures.deferOnce(defer, function()
+        target[key] = before
+        entry.standing = entry.standing - 1
+        if entry.standing == 0 then
+            byKey[key] = nil
+        end
+    end)
+end
+
+--- What stood at `target[key]` before any replacement still standing (Fixtures.replace): the
+--- game's own, for a replacement that has to give way to it at once.
+function Fixtures.original(target, key)
+    local entry = originals[target] and originals[target][key]
+    if entry then
+        return entry.value
+    end
+    return target[key]
 end
 
 --- Saves the options `names` of the mod's table in SandboxVars (the `sandbox` test setting) for a
@@ -419,6 +461,45 @@ function Fixtures.ring(x, y, r)
     end
 end
 
+--- The def of the building nearest x, y on the ground level, within `radius` squares, that
+--- `accept(def)`, if given, takes; nil if there is none.
+function Fixtures.buildingNear(x, y, radius, accept)
+    for r = 0, radius do
+        for sx, sy in Fixtures.ring(x, y, r) do
+            local square = getSquare(sx, sy, 0)
+            local building = square and square:getBuilding()
+            local def = building and building:getDef()
+            if def and (not accept or accept(def)) then
+                return def
+            end
+        end
+    end
+    return nil
+end
+
+--- The items lying on `squares` (a list), as a set of their world objects, each to its square.
+function Fixtures.worldItems(squares)
+    local found = {}
+    for _, square in ipairs(squares) do
+        local objects = square:getWorldObjects()
+        for i = 0, objects:size() - 1 do
+            found[objects:get(i)] = square
+        end
+    end
+    return found
+end
+
+--- The keys of the set `now` that the set `before` lacks, as a list.
+function Fixtures.newSince(before, now)
+    local new = {}
+    for key in pairs(now) do
+        if not before[key] then
+            table.insert(new, key)
+        end
+    end
+    return new
+end
+
 --- Turns `car` and `trailer` square to `facing` ("N", "E", "S" or "W") and moves the trailer so its
 --- coupler sits on the car's tow bar: vanilla hitches only with the two points within a square and
 --- the vehicles near parallel (BaseVehicle.canAttachTrailer), and addVehicleDebug skews headings at
@@ -492,8 +573,9 @@ end
 
 --- Removes what a test placed (an IsoObject or a vehicle) the way the game does, so the mods'
 --- removal handlers run, and a server sends the removal to its clients: the dev mod's `remove`
---- setting first, then vanilla's. Does nothing to an object already gone from its square.
-function Fixtures.removePlaced(thing)
+--- setting first, given `player`, the character whose test placed it, if known; then vanilla's.
+--- Does nothing to an object already gone from its square.
+function Fixtures.removePlaced(thing, player)
     if instanceof(thing, "BaseVehicle") then
         thing:permanentlyRemove()
         return
@@ -502,7 +584,7 @@ function Fixtures.removePlaced(thing)
         return
     end
     local remove = PZHarness.testSettings.remove
-    if remove and remove(thing) then
+    if remove and remove(thing, player) then
         return
     end
     -- Squares stay powered by a running generator that leaves them.
@@ -510,6 +592,70 @@ function Fixtures.removePlaced(thing)
         thing:setActivated(false)
     end
     thing:getSquare():transmitRemoveItemFromSquare(thing)
+end
+
+-- What an object on a square is drawn as, to tell it from the others there.
+local function lookOf(object)
+    local sprite = object:getSprite()
+    return sprite and sprite:getName() or object:getObjectName()
+end
+
+--- How many objects of each look (sprite name, else class) stand on `square`, for
+--- Fixtures.removeNewOn.
+function Fixtures.looksOn(square)
+    local looks = {}
+    local objects = square:getObjects()
+    for i = 0, objects:size() - 1 do
+        local look = lookOf(objects:get(i))
+        looks[look] = (looks[look] or 0) + 1
+    end
+    return looks
+end
+
+--- Removes (Fixtures.removePlaced, for `player`) every object on `square` past the looks `before`
+--- (Fixtures.looksOn) counted there. By look rather than by object, so it finds what a build's
+--- OnCreate swapped in, and a copy a chunk that unloaded and loaded again holds.
+function Fixtures.removeNewOn(square, before, player)
+    local left, new = {}, {}
+    for look, count in pairs(before) do
+        left[look] = count
+    end
+    local objects = square:getObjects()
+    for i = 0, objects:size() - 1 do
+        local object = objects:get(i)
+        local look = lookOf(object)
+        if (left[look] or 0) > 0 then
+            left[look] = left[look] - 1
+        else
+            table.insert(new, object)
+        end
+    end
+    for i = #new, 1, -1 do
+        Fixtures.removePlaced(new[i], player)
+    end
+end
+
+--- Lets this side's chunks near x, y, z go of power that generators no longer there, or no longer
+--- running, left behind (IsoChunk.checkForMissingGenerators), and of the generator at `going`
+--- ({ x, y, z }), if given, which is about to go. A multiplayer client's switch-off of a generator
+--- names it by its place on the square and can miss a copy whose square lists other objects (a
+--- test's own objects come and go fast); the chunks then keep its squares powered until they load
+--- again. A running generator's place is listed in every chunk its reach touches.
+function Fixtures.releaseGeneratorPower(x, y, z, going)
+    local size = getChunkSizeInSquares()
+    local reach = math.floor(SandboxVars.GeneratorTileRange / size) + 2
+    local cx, cy, cell = math.floor(x / size), math.floor(y / size), getCell()
+    for wx = cx - reach, cx + reach do
+        for wy = cy - reach, cy + reach do
+            local chunk = cell:getChunk(wx, wy)
+            if chunk then
+                if going then
+                    chunk:removeGeneratorPos(going.x, going.y, going.z)
+                end
+                chunk:checkForMissingGenerators()
+            end
+        end
+    end
 end
 
 local function isWorkTable(object)

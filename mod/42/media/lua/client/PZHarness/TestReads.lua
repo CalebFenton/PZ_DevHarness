@@ -35,6 +35,29 @@ function T.readUntil(self, name, args, label, done, maxMs)
     T.step(function() self.reads[label] = self.server[name] end)
 end
 
+--- The first entry of `list` whose field `key` is `value`, or nil.
+function T.findIn(list, key, value)
+    for _, entry in ipairs(list or {}) do
+        if entry[key] == value then
+            return entry
+        end
+    end
+    return nil
+end
+
+--- Queues reading the authority's copy of the character into self.reads[label]: the stats
+--- `what.stats` (CharacterStat field names) in `stats` and the XP in the perks `what.perks` (Perks
+--- field names) in `xp`, by name.
+function T.readCharacter(self, label, what)
+    T.read(self, "PZHarness.character", { stats = what.stats, perks = what.perks }, label)
+end
+
+--- Queues an award of `xp` in `perk` (a Perks field name) to the authority's copy of the character,
+--- as a craft awards it; the XP gained lands in self.reads[label] as `gained`.
+function T.xpAward(self, perk, xp, label)
+    T.read(self, "PZHarness.xpAward", { perk = perk, xp = xp }, label)
+end
+
 --- Expects a server check's answer ({ failures = { message, ... } }, PZHarness.checkHandler) to
 --- have found nothing wrong; no answer at all fails too.
 function T.expectNoFailures(answer)

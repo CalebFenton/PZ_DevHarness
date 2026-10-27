@@ -93,11 +93,10 @@ end
 --- ends), carries exactly its inputs (T.recipeInputs with `prefer`: enough full drainables for an
 --- input's uses), stands next to the square on both sides (T.goNextTo) once it is light there
 --- (T.waitForLight), and builds; then the build waits until `arrived()` holds on this client, else
---- misses `what`. A build the menu refuses, for its inputs or its square, is missing at once.
---- A mod that tracks what the build leaves, for removal when the test ends, queues its handler
---- before this. Returns the build, or nil: `types` the full types of its inputs, `expected` what it
---- should leave carried of them (T.expectBuildUsed), and once it has run `face` the face it built
---- (its upper-case name).
+--- misses `what`. A build the menu refuses, for its inputs or its square, is missing at once. What
+--- the build leaves on the square goes when the test ends (T.trackSquare). Returns the build, or
+--- nil: `types` the full types of its inputs, `expected` what it should leave carried of them
+--- (T.expectBuildUsed), and once it has run `face` the face it built (its upper-case name).
 function T.build(self, entity, square, prefer, arrived, what)
     local info = T.need(self, T.buildEntry(entity), "the build menu entry of " .. entity)
     local recipe = info and info:getRecipe() and info:getRecipe():getCraftRecipe()
@@ -116,6 +115,7 @@ function T.build(self, entity, square, prefer, arrived, what)
         end
         table.insert(result.types, entry.type)
     end
+    T.trackSquare(self, square)
     T.knowRecipes(self, { recipe:getName() })
     T.setRecipeSkills(self, recipe)
     T.give(self, "materials", inputs)
