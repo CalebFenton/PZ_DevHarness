@@ -130,7 +130,8 @@ end)
 handler("PZHarness.setRecord", function(_, args)
     local record = Records.at(args)
     Records.set(record, args.fields, args.ago, 0)
-    record:afterChange()
+    -- The record's class is the mod's, which a mod without records (and its static check) lacks.
+    record.afterChange(record)
     return {}
 end)
 
