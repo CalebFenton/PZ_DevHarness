@@ -41,14 +41,6 @@ function T.learnRecipes(player, prefix)
     Runtime.outside("PZHarness.learnRecipes", { names = names })
 end
 
---- The opposite of T.learnRecipes. The server sends a client the recipes it learns but never the
---- ones it forgets (SyncPlayerFieldsPacket), so both sides forget them.
-function T.forgetRecipes(player, prefix)
-    local names = T.recipeNames(prefix)
-    PZHarness.Fixtures.forgetRecipes(player, names)
-    Runtime.outside("PZHarness.forgetRecipes", { names = names })
-end
-
 --- Queues making this client's and the server's copy of the character know (`known`, true when
 --- nil) or forget the recipes `names`. When the test ends each side knows exactly the recipes it
 --- knew before, including those a level up taught meanwhile, which the leak check counts. Queued

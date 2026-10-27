@@ -259,7 +259,6 @@ end
 
 --- A crate that never enters the world, to fill and read. Give it a square from
 --- Loot.squareOutsideRooms to roll procedural tables into it, or nil for anything else.
----@param square IsoGridSquare?
 function Loot.scratchContainer(square)
     return ItemContainer.new("crate", square, nil)
 end

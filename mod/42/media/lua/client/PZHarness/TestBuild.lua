@@ -95,26 +95,14 @@ end
 --- (T.waitForLight), and builds; then the build waits until `arrived()` holds on this client, else
 --- misses `what`. A build the menu refuses, for its inputs or its square, is missing at once. What
 --- the build leaves on the square goes when the test ends (T.trackSquare). Returns the build, or
---- nil: `types` the full types of its inputs, `expected` what it should leave carried of them
---- (T.expectBuildUsed), and once it has run `face` the face it built (its upper-case name).
+--- nil; once it has run, its `face` is the face it built (its upper-case name).
 function T.build(self, entity, square, prefer, arrived, what)
     local info = T.need(self, T.buildEntry(entity), "the build menu entry of " .. entity)
     local recipe = info and info:getRecipe() and info:getRecipe():getCraftRecipe()
     if not T.need(self, recipe, "the build recipe of " .. entity) then return nil end
     local inputs, unmatched = T.recipeInputs(recipe, prefer)
     if not T.need(self, #unmatched == 0, "an item for " .. table.concat(unmatched, "; ")) then return nil end
-    -- What a build should leave carried: its kept tools, and none of the items it takes whole.
-    -- A drainable it takes uses of stays part-used, so isn't counted.
-    local result = { expected = {}, types = {} }
-    for i, entry in ipairs(inputs) do
-        local input = recipe:getInputs():get(i - 1)
-        if input:isKeep() then
-            result.expected[entry.type] = entry.count
-        elseif input:isItemCount() or not getScriptManager():FindItem(entry.type):isItemType(ItemType.DRAINABLE) then
-            result.expected[entry.type] = 0
-        end
-        table.insert(result.types, entry.type)
-    end
+    local result = {}
     T.trackSquare(self, square)
     T.knowRecipes(self, { recipe:getName() })
     T.setRecipeSkills(self, recipe)
@@ -138,13 +126,4 @@ function T.build(self, entity, square, prefer, arrived, what)
     end)
     T.waitFor(self, arrived, what)
     return result
-end
-
---- Expects T.build's `build` to have taken what it takes while keeping its tools, by `left`
---- (T.count's counts of its `types` once it built).
-function T.expectBuildUsed(build, left)
-    for fullType, count in pairs(build and build.expected or {}) do
-        local carried = left and left[fullType] or 0
-        T.expect(carried == count, "building left " .. carried .. " " .. fullType .. ", not " .. count)
-    end
 end

@@ -1,15 +1,13 @@
 require "PZHarness/TestWorld"
 require "PZHarness/TestReads"
 
--- Development only, not published. The job kit: a job of the mod's job action (the `jobAction`
--- test setting) done on the authority by the server's character, as the server does the one a
--- client's action asks for, to see the authority refuse, on its own, what a menu would have greyed
--- out, or what a job leaves in the same call (server/PZHarness/ServerJobs.lua). Answers are
--- { ok, reason }, which T.expectOk and T.expectRefused check.
+-- Development only, not published. The job kit (server/PZHarness/ServerJobs.lua): a job of the
+-- mod's job action (the `jobAction` test setting) done on the authority by the server's character,
+-- as the server does the one a client's action asks for, to see the authority refuse on its own
+-- what a menu would have greyed out, or what a job leaves in the same call.
 local T = PZHarness.Test
 
--- A job's `with` as the server's handler takes it: a fixture handle with a `kind` becomes that
--- feature's target at its place; anything else goes as it is.
+-- A job's `with` as the server's handler takes it (T.job).
 local function plainWith(with)
     if type(with) == "table" and with.kind and with.x then
         return T.at(with, { feature = with.kind })

@@ -2,10 +2,9 @@ require "PZHarness/TestLib"
 require "PZHarness/TestReads"
 require "PZHarness/Fixtures"
 
--- Trips away from the test's ground: the chunk reload trip, where the character goes far enough
--- away that this client saves a chunk and lets it go, then comes back and loads it again, for tests
--- of what a mod's objects do while their chunk is away and what they come back as; and visits to
--- far places, for what the authority does with a place once it has loaded.
+-- The chunk reload trip: the character goes far enough away that this client saves a chunk and
+-- lets it go, then comes back and loads it again, for tests of what a mod's objects do while their
+-- chunk is away and what they come back as. And visits to far places.
 local T = PZHarness.Test
 
 -- How far east of the chunk the character goes, in squares: well past a client's chunk map.

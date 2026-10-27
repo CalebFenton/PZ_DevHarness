@@ -315,10 +315,6 @@ finish_games() {
     release_game_lock
 }
 
-# A kept game's reruns (run-client.sh --stay). They read run-client.sh's CACHE, MP, SERVER_CACHE,
-# the run's SELECTION and settings, and its files in <cachedir>/Lua: HARNESS_FILE, which the game
-# read at its start, and REQUEST_FILE, which asks it to rerun (client/PZHarness/Run.lua).
-
 # Whether $1, relative to the dev mod, is one of the files a rerun loads again.
 reloaded() {
     local pattern
@@ -392,36 +388,27 @@ request_rerun() {
     mv "$REQUEST_FILE.tmp" "$REQUEST_FILE" # whole, so the game never reads half a request
 }
 
-# Runs the conf's PRECHECK, by default the mod's dev/static-check.sh if it has one, from the
-# repository, and fails the script if it fails, before it spends a game on code it rejects.
+# Runs the mod's dev/static-check.sh and fails the script if it fails, before it spends a game on
+# code it rejects.
 run_precheck() {
-    if ! declare -p PRECHECK > /dev/null 2>&1; then
-        PRECHECK=()
-        [ ! -x "$REPO/dev/static-check.sh" ] || PRECHECK=(dev/static-check.sh)
-    fi
-    [ ${#PRECHECK[@]} -gt 0 ] || return 0
-    if ! (cd "$REPO" && "${PRECHECK[@]}"); then
-        echo "FAIL: PRECHECK (${PRECHECK[*]}) failed, so no game started" >&2
+    if ! (cd "$REPO" && dev/static-check.sh); then
+        echo "FAIL: dev/static-check.sh failed, so no game started" >&2
         exit 1
     fi
 }
 
-# Test selection ----------------------------------------------------------------------------------
-
-# Runs lib/tests.py, which owns the conf's TEST_MAP (docs/adopting.md) and the test selections of
-# run-client.sh --changed and --failed and the suspects of a failure, with the conf and the batch
-# (tests.py batch) it needs. `tests_py check` fails, saying how to fix each, while TEST_MAP misses a
-# file of the mod or the dev mod or has a glob that matches no file.
+# Runs lib/tests.py, which owns the conf's TEST_MAP (docs/adopting.md), with the conf and the batch
+# (tests.py batch) it reads.
 tests_py() {
     local vars=(REPO="$REPO" HARNESS="$HARNESS" MOD_DIR="$MOD_DIR" DEV_MOD_DIR="$DEV_MOD_DIR"
-        HARNESS_MOD_DIR="$HARNESS_MOD_DIR" RUNS_FAILED="$RUNS_FAILED" SINCE="${SINCE:-}"
+        HARNESS_MOD_DIR="$HARNESS_MOD_DIR" RUNS_FAILED="$RUNS_FAILED"
         LIBRARY_IDS="${LIBRARY_IDS[*]+${LIBRARY_IDS[*]}}" BATCH_BASE="${BATCH_BASE:-}"
         BATCH_HEAD="${BATCH_HEAD:-}" HARNESS_BASE="${HARNESS_BASE:-}" HARNESS_HEAD="${HARNESS_HEAD:-}"
         BATCH_BASE_SAID="${BATCH_BASE_SAID:-}" PYTHONDONTWRITEBYTECODE=1)
     if declare -p TEST_MAP > /dev/null 2>&1; then
         vars+=(TEST_MAP="$(printf '%s\n' ${TEST_MAP[@]+"${TEST_MAP[@]}"})")
     fi
-    env -u TEST_MAP "${vars[@]}" python3 "$HARNESS/lib/tests.py" "$@"
+    env "${vars[@]}" python3 "$HARNESS/lib/tests.py" "$@"
 }
 
 # Run timing --------------------------------------------------------------------------------------
@@ -539,9 +526,6 @@ prepare_server() {
     rm -rf "$CACHE/Saves/Multiplayer/$SERVER_NAME"
 }
 
-# The client cache of run-client.sh: your game settings, the mods to load and the run's file,
-# HARNESS_FILE, from run-client.sh's MODE, SELECTION and settings. Clears the other files in
-# <cachedir>/Lua the last run left (client/PZHarness/Run.lua).
 prepare_cache() {
     # Reuse your game settings (resolution, language, accepted terms of service) so a fresh cache
     # dir doesn't stop at first-run screens.
@@ -567,8 +551,7 @@ prepare_cache() {
     rm -f "$REQUEST_FILE" "$CONNECT_FILE" "$TRACE_FILE" "$TEST_FILES_FILE"
     # Written when playing by hand too: the tests take their console tag from it. A --test world
     # is quiet (QUIET_WORLD) and has the mod's TEST_SANDBOX options; the runner sets them before the
-    # scenario's own setSandbox, which may override them. A mode with groups gets the conf's
-    # MODE_GROUPS_<mode> too, all of them whatever the selection.
+    # scenario's own setSandbox, which may override them.
     local quiet= groups_var="MODE_GROUPS_$MODE"
     if [ "$MODE" = test ]; then
         quiet=$(IFS=,; echo "${QUIET_WORLD[*]+${QUIET_WORLD[*]}}${TEST_SANDBOX[*]+,${TEST_SANDBOX[*]}}")
@@ -599,11 +582,11 @@ prepare_cache() {
     fi
 }
 
-# The server of run-client.sh --mp, in SERVER_CACHE on SERVER_PORT, started: the client's mods, no
-# zombies, a quiet world with the mod's TEST_SANDBOX options, not paused while nobody plays, open
-# to the client without a whitelist, on its own ports. Every harness test world has no zombies, so
-# nothing attacks the character during the tests. The server runs its sandbox file as Lua, so the
-# lines go after the conf's hook's, and set an option only where the hook set nothing.
+# The server of --mp: the client's mods, no zombies, a quiet world with the mod's TEST_SANDBOX
+# options, not paused while nobody plays, open to the client without a whitelist, on its own ports.
+# Every harness test world has no zombies, so nothing attacks the character during the tests. The
+# server runs its sandbox file as Lua, so the lines go after the conf's hook's, and set an option
+# only where the hook set nothing.
 prepare_mp_server() {
     local client_cache=$CACHE sandbox option key
     CACHE=$SERVER_CACHE
@@ -652,19 +635,6 @@ start_server() {
 
 server_started() {
     grep -q "SERVER STARTED" "$SERVER_LOG" 2>/dev/null
-}
-
-# Waits until the server of start_server has started, at most $1 seconds; fails if it stops or
-# the time runs out first.
-wait_server_started() {
-    local waited=0
-    until server_started; do
-        if [ "$waited" -ge "$1" ] || ! kill -0 "$SERVER_PID" 2>/dev/null; then
-            return 1
-        fi
-        sleep 1
-        waited=$((waited + 1))
-    done
 }
 
 # Asks the server to save and exit, through its console if this script started it.

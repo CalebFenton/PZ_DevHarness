@@ -3,9 +3,9 @@ require "PZHarness/TestReads"
 
 -- Development only, not published. The record kit: fixtures, sets and reads of the records of a
 -- mod's Global Object Systems, which live on the authority, for every kind the `records` test
--- setting names (server/PZHarness/ServerRecords.lua says what a kind gives). A record handle is a
--- T.where handle with its `kind`; `object` is this client's copy of its tile once it has one. The
--- reads land in self.reads[label] when given, and in handle.state, the last the test read of it.
+-- setting names (server/PZHarness/ServerRecords.lua). A record handle is a T.where handle with its
+-- `kind`. The reads land in self.reads[label] when given, and in handle.state, the last the test
+-- read of it.
 local T = PZHarness.Test
 
 -- The server args of the record `handle`: its kind and place, with `extra`'s fields.
@@ -15,10 +15,10 @@ local function recordArgs(handle, extra)
     return args
 end
 
--- Queues the server handler `name` on the record `handle` with `extra`'s args; its answer lands in
--- self.reads[label] when given and in handle.state.
-local function readOn(self, handle, name, extra, label)
-    T.read(self, name, recordArgs(handle, extra), label)
+--- Queues the handler `name` on the record `handle`, with `args` (a table) added to its kind and
+--- place; the answer, the record's state, lands as T.readRecord's.
+function T.onRecord(self, handle, name, args, label)
+    T.read(self, name, recordArgs(handle, args), label)
     T.step(function() handle.state = self.server[name] end)
 end
 
@@ -38,13 +38,12 @@ function T.waitForSummary(self, handle, check, what)
 end
 
 --- Queues a record of `kind` built by its kind's `build` on the tile `tile` (whatever the kind
---- takes) on `opts.square`, else on a free square (outdoors unless `opts.indoors`) near
---- `opts.near`, at least `opts.minDistance` away; removed with its record when the test ends; and
---- a wait for this client's copy with its summary. Returns its handle, or nil without a square.
+--- takes) on `opts.square`, else on T.square(self, opts); removed with its record when the test
+--- ends; and a wait for this client's copy with its summary. Returns its handle, or nil without a
+--- square.
 function T.placeRecord(self, kind, tile, opts)
     opts = opts or {}
-    local square = opts.square or T.square(self, { indoors = opts.indoors, near = opts.near, minDistance = opts.minDistance },
-        "a free square for a " .. kind)
+    local square = opts.square or T.square(self, opts, "a free square for a " .. kind)
     if not square then return nil end
     local handle = T.where(square)
     handle.kind = kind
@@ -71,7 +70,7 @@ end
 --- Queues the record's own pass, as though `hours` had passed since its last, loaded or not; its
 --- read after lands as T.readRecord's.
 function T.ageRecord(self, handle, hours, label)
-    readOn(self, handle, "PZHarness.ageRecord", { hours = hours }, label)
+    T.onRecord(self, handle, "PZHarness.ageRecord", { hours = hours }, label)
 end
 
 --- Queues a read of the record: its saved fields, whether its tile is `loaded`, and while it is
@@ -79,7 +78,7 @@ end
 --- last pass is first put that many hours before now, as a record no pass has reached for that
 --- long looks.
 function T.readRecord(self, handle, label, rewind)
-    readOn(self, handle, "PZHarness.readRecord", { rewind = rewind }, label)
+    T.onRecord(self, handle, "PZHarness.readRecord", { rewind = rewind }, label)
 end
 
 --- Queues the record saved and loaded again, as quitting and continuing the game leaves it, with
@@ -87,12 +86,6 @@ end
 --- call; the answer { before, after, state } lands in self.reads[label] when given.
 function T.reloadRecord(self, handle, label, reads)
     T.read(self, "PZHarness.reloadRecord", recordArgs(handle, { reads = reads }), label)
-end
-
---- Queues the dev mod's handler `name` on the record `handle`, with `args` (a table) added to its
---- kind and place; the answer, the record's state, lands as T.readRecord's.
-function T.onRecord(self, handle, name, args, label)
-    readOn(self, handle, name, args, label)
 end
 
 return T

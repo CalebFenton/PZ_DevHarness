@@ -1,9 +1,5 @@
 """The checks on the mod's texture packs (Mod.sprites) and on the tiles of the tilesets its
-mod.info names with tiledef= (Mod.tilesets).
-
-check.py imports this after the rules_*.py modules, so these run after the checks there and before
-any plugin's.
-"""
+mod.info names with tiledef= (Mod.tilesets)."""
 from moddata import check, has_entry, has_text, item_exists
 
 

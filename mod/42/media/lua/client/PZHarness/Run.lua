@@ -1,7 +1,5 @@
 -- Development only, not published. The files bin/run-client.sh and the harness Lua talk through, in
--- <cachedir>/Lua: the run it asked for (PZHarness.txt, read once at load into PZHarness.run), a
--- --stay rerun request, the --mp server to join, and the tests' files, which the script reads back
--- for the suspects of a failure.
+-- <cachedir>/Lua.
 
 PZHarness = PZHarness or {}
 local Run = {}
@@ -32,9 +30,8 @@ function Run.readKeys(name)
     return keys
 end
 
--- The run run-client.sh asked for: mode, selection, stay, mp, console mark and tag, the test
--- options and the --test world's sandbox options (`quiet`). Without the file, as in a game the
--- script didn't start, there is no mode and the tests print under a generic tag.
+-- The run run-client.sh asked for. Without the file, as in a game the script didn't start, there
+-- is no mode and the tests print under a generic tag.
 local function readRun()
     local run = { mode = "", selection = "", stay = false, mp = false, mark = "PZHarness", tag = "PZHarness" }
     for key, value in pairs(Run.readKeys("PZHarness.txt") or {}) do

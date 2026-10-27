@@ -1,7 +1,4 @@
--- Development only, not published. Staging for capture modes (docs/adopting.md, "Staging"):
--- finding a place near the character and clearing it, walking the character to a shot and
--- letting the lighting settle, framing what a shot shows, the world every shot is taken in, the
--- window and menu shots, dressing the character, and the driver that runs a mode's groups.
+-- Development only, not published. Staging for capture modes (docs/adopting.md, "Staging").
 -- PZHarness/StageLots.lua adds open ground, lots and places; PZHarness/Capture.lua runs the steps.
 
 require "PZHarness/Fixtures"
@@ -496,12 +493,10 @@ end
 
 -- Dressing ---------------------------------------------------------------------------------------
 
--- The items each look wears and holds, made the first time it is worn, by look; and the clothes
--- the character wore before a look first changed them.
-local lookItems = setmetatable({}, { __mode = "k" })
-local ownClothes
+-- The items each look wears and holds, made the first time it is worn; and the clothes the
+-- character wore before a look first changed them.
+local lookItems, ownClothes = {}, nil
 
--- The items of `look`, made once: { clothes, weapon }.
 local function itemsOf(player, look)
     local items = lookItems[look]
     if not items then
@@ -516,25 +511,20 @@ local function itemsOf(player, look)
     return items
 end
 
---- Dresses `player` in `look` at once. `female`, `hair` and `beard` (model names, "" for none) and
---- `hairColour` change only if given. With `clothes` (full types, made once per look) or
---- `ownClothes` (what it wore before a look first changed its clothes) it wears only those and
---- holds `weapon` (a full type, made once; in both hands if two-handed) or nothing; without
---- either its clothes and hands stay.
+--- Dresses `player` in `look` at once. With `hair` (a model name) it takes `female`, that hair,
+--- `hairColour` if given, and no beard. With `clothes` (full types) or `ownClothes` (what it wore
+--- before a look first changed its clothes) it wears only those and holds `weapon` (a full type;
+--- in both hands if two-handed) or nothing; without either its clothes and hands stay.
 function Stage.dress(player, look)
-    if look.female ~= nil then
+    if look.hair then
         player:setFemale(look.female)
         player:getDescriptor():setFemale(look.female)
-    end
-    local visual = player:getHumanVisual()
-    if look.hair then
+        local visual = player:getHumanVisual()
         visual:setHairModel(look.hair)
-    end
-    if look.beard then
-        visual:setBeardModel(look.beard)
-    end
-    if look.hairColour then
-        visual:setHairColor(look.hairColour)
+        visual:setBeardModel("")
+        if look.hairColour then
+            visual:setHairColor(look.hairColour)
+        end
     end
     if look.clothes or look.ownClothes then
         if not ownClothes then
@@ -557,14 +547,6 @@ function Stage.dress(player, look)
     player:resetModel()
 end
 
---- Adds the step that dresses `player` in `look` (Stage.dress) and lets the world draw it.
-function Stage.addOutfit(run, player, look)
-    run:add(function()
-        Stage.dress(player, look)
-        return Capture.DRAW_FRAMES
-    end)
-end
-
 -- The groups ---------------------------------------------------------------------------------------
 
 -- Adds a step that starts a clock, and returns a function that adds a step logging, as
@@ -582,30 +564,27 @@ local function addTimer(run, label)
 end
 
 --- Shoots the groups of `mode.groups` named in `selection` (comma-separated, in the order to shoot
---- them, as the harness gives a capture mode its MODE_GROUPS) with `run`, then writes the data and
---- calls done (Run:run). A group missing from the conf's MODE_GROUPS (PZHarness.run.groups) fails
---- the run, as a full run would never shoot it. `mode`:
---- - `groups`: by name, { add(data), places }: what adds the group's steps, and the names of the
----   places it needs;
---- - `places`: Stage.findPlaces specs (PZHarness/StageLots.lua), at least `gap` apart; only those
----   the chosen groups need are looked for, so one group can't fail for want of another's;
---- - `catalog`: a Capture catalog; the data holds its entries of `items` and its recipes, and the
----   built-in group `icons` shoots the icons they name;
---- - `data`: what else the data holds;
---- - `prepare(chosen, places, origins)`: runs once the places are found, adding the steps that set
----   the world (Stage.addWorldSettings), and returns nil, or why the run can't go on.
+--- them) with `run`, then writes `mode.data` and calls done (Run:run). A group the conf's
+--- MODE_GROUPS leaves out fails the run, as a full run would never shoot it. `mode`:
+--- - `groups`: by name, { add(data), places }, the names of the places it needs;
+--- - `places`: Stage.findPlaces specs, `gap` apart; only those the chosen groups need are looked
+---   for, so one group can't fail for want of another's;
+--- - `catalog`: the data holds its entries of `items` and its recipes, and the group `icons`
+---   shoots their icons;
+--- - `prepare(chosen, places, origins)`: adds the steps that set the world, and returns nil, or
+---   why the run can't go on.
 --- The UI is hidden and the mouse put in a corner, where it hovers over nothing a shot shows: the
 --- world outlines what it is over, and menus follow it. Each group's time and the total are logged.
 function Stage.runGroups(run, selection, mode, done)
-    local data, catalog = mode.data or {}, mode.catalog
+    local data, catalog = mode.data, mode.catalog
     local groups = {}
     for name, group in pairs(mode.groups) do
         groups[name] = group
     end
     if catalog then
-        data.items = catalog:items(mode.items or {})
+        data.items = catalog:items(mode.items)
         data.recipes = catalog:recipes()
-        groups.icons = groups.icons or { add = function() run:addIconSheet("icons", catalog:iconList()) end }
+        groups.icons = { add = function() run:addIconSheet("icons", catalog:iconList()) end }
     end
     local listed = {}
     for _, name in ipairs(Capture.names(PZHarness.run.groups)) do
@@ -639,7 +618,7 @@ function Stage.runGroups(run, selection, mode, done)
         end
         places, origins = found, second
     end
-    local missing = mode.prepare and mode.prepare(chosen, places, origins)
+    local missing = mode.prepare(chosen, places, origins)
     if missing then
         run:fail(missing)
         return

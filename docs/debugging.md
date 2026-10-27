@@ -9,7 +9,7 @@ and spend one run on them, and make each run able to tell you something the last
 ## What to run when
 
 1. After every edit, `dev/static-check.sh` ([static-check.md](static-check.md); it takes seconds
-   and needs no game). The conf's `PRECHECK` runs it before every game run as well.
+   and needs no game). Every game run of the harness runs it first as well.
 2. Make a batch of changes, committing each logical change on its own, then spend one run on the
    tests the whole batch reaches:
 

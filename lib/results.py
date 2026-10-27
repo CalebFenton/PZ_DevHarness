@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""The result lines of a --test run in its console log, read in one place for bin/run-client.sh
-and lib/tests.py. client/PZHarness/Report.lua writes them; docs/running.md lists them. Each line
-the game logs ends "> <text>", after the logger's own prefix.
+"""The one reader of a --test run's result lines (client/PZHarness/Schedule.lua and Report.lua
+write them; docs/running.md lists them), for bin/run-client.sh and lib/tests.py. Each line the game
+logs ends "> <text>", after the logger's own prefix.
 
     results.py counts <log> <tag>             the DONE line's "passed=<n> failed=<n> skipped=<n>"
-    results.py times <log> <tag> <at> <mode>  a RUNS_TESTS_LOG line per PASS, FAIL or SKIP line
+    results.py times <log> <tag> <at> <mode>  a RUNS_TESTS_LOG line per timed PASS, FAIL or SKIP line
     results.py verdict <log> <tag>            the run's verdict from its DONE line; exits 1 on FAIL
 """
 from __future__ import annotations
@@ -18,19 +18,13 @@ TOOK = re.compile(r"\(([0-9.]+) s\)$")
 
 
 @dataclass
-class Test:
-    name: str
-    status: str  # pass, fail or skip
-    seconds: str | None  # as the line gives it; None on a line without the time
-
-
-@dataclass
 class Results:
     started: bool = False
     # The last DONE line's passed, failed and skipped, or None without one.
     done: tuple[int, int, int] | None = None
-    # One per PASS, FAIL or SKIP line, in order: a test REPEAT runs n times has n.
-    tests: list[Test] = field(default_factory=list)
+    # (name, status, seconds) per PASS, FAIL or SKIP line with its time: a test REPEAT runs n
+    # times has n.
+    timed: list[tuple[str, str, str]] = field(default_factory=list)
     # The tests that failed, or were running when the game stopped; a FAIL line for a name no
     # TEST line announced, such as a call outside any test, isn't a test.
     failed: set[str] = field(default_factory=set)
@@ -64,7 +58,8 @@ def parse(path, tag):
         elif kind in ("PASS", "FAIL", "SKIP"):
             name = re.split(r"[: ]", rest, maxsplit=1)[0]
             took = TOOK.search(text)
-            results.tests.append(Test(name, kind.lower(), took.group(1) if took else None))
+            if took:
+                results.timed.append((name, kind.lower(), took.group(1)))
             if kind == "FAIL" and name in ran:
                 results.failed.add(name)
             if kind == "PASS" or (kind == "FAIL" and name == current):
@@ -74,41 +69,26 @@ def parse(path, tag):
     return results
 
 
-def counts(results):
-    if results.done is None:
-        return ""
-    return "passed=%d failed=%d skipped=%d" % results.done
-
-
-def verdict(results):
-    """("PASS", 0) once at least one test passed and none failed, else the failure and 1."""
-    if results.done is None:
-        return "FAIL: not every test passed", 1
-    passed, failed, skipped = results.done
-    if passed == 0 and failed == 0:
-        return f"FAIL: no test ran in this mode ({skipped} skipped)", 1
-    if passed == 0 or failed > 0:
-        return "FAIL: not every test passed", 1
-    return "PASS", 0
-
-
 def main(argv):
     command, log, tag = argv[1], argv[2], argv[3]
     results = parse(log, tag)
     if command == "counts":
-        print(counts(results))
+        if results.done:
+            print("passed=%d failed=%d skipped=%d" % results.done)
     elif command == "times":
         at, mode = argv[4], argv[5]
-        for test in results.tests:
-            if test.seconds is not None:
-                print(f"{at} mode={mode} test={test.name} status={test.status} seconds={test.seconds}")
-    elif command == "verdict":
-        line, status = verdict(results)
-        print(line)
-        return status
+        for name, status, seconds in results.timed:
+            print(f"{at} mode={mode} test={name} status={status} seconds={seconds}")
     else:
-        print(f"results.py: unknown command {command}", file=sys.stderr)
-        return 2
+        passed, failed, skipped = results.done or (0, 1, 0)
+        if passed == 0 and failed == 0:
+            print(f"FAIL: no test ran in this mode ({skipped} skipped)")
+        elif passed == 0 or failed > 0:
+            print("FAIL: not every test passed")
+        else:
+            print("PASS")
+            return 0
+        return 1
     return 0
 
 

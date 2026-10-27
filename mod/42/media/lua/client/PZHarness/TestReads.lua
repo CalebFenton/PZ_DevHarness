@@ -49,7 +49,7 @@ end
 --- `what.stats` (CharacterStat field names) in `stats` and the XP in the perks `what.perks` (Perks
 --- field names) in `xp`, by name.
 function T.readCharacter(self, label, what)
-    T.read(self, "PZHarness.character", { stats = what.stats, perks = what.perks }, label)
+    T.read(self, "PZHarness.character", what, label)
 end
 
 --- Queues an award of `xp` in `perk` (a Perks field name) to the authority's copy of the character,

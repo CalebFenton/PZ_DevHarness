@@ -1,8 +1,8 @@
 -- Development only, not published. What the test library's two-sided fixtures do to one side's
 -- copy of the game, shared so the client (TestLib.lua) and server (ServerFixtures.lua) make the
 -- same change and dev mod server handlers get the lookups too. Each setter returns its undo. The
--- dev mod's test settings live here for the same reason, and the two-sided fixtures themselves
--- (PZHarness.twoSided).
+-- dev mod's test settings and the two-sided fixtures (Fixtures.TWO_SIDED) live here for the same
+-- reason.
 
 PZHarness = PZHarness or {}
 local Fixtures = {}
@@ -44,32 +44,12 @@ function PZHarness.registerTests(settings)
     PZHarness.testSettings = settings
 end
 
--- The two-sided fixtures by name (PZHarness.twoSided).
-Fixtures.TWO_SIDED = {}
-
---- Registers the two-sided fixture `name`: `apply(player, args)` changes one side's copy and
---- returns the undo, or nil and what is missing (a noun phrase). The server serves it as the
---- handler "PZHarness.<name>" (ServerFixtures.lua), and PZHarness.Test.twoSided(name) gives the
---- client's setter, which applies it to this game's copy and, on a multiplayer client, has the
---- server apply it to its own; each side undoes its change when the test ends. Call it from
---- shared Lua, so a multiplayer server, which loads no client Lua, has it too.
-function PZHarness.twoSided(name, apply)
-    Fixtures.TWO_SIDED[name] = apply
-end
-
---- Calls the dev mod's `sandboxChanged` setting, if any, after a sandbox option changed.
-function Fixtures.sandboxChanged()
-    if PZHarness.testSettings.sandboxChanged then
-        PZHarness.testSettings.sandboxChanged()
-    end
-end
-
 -- The Shoddy Table players build, a crafting surface.
 Fixtures.WORK_TABLE_SPRITE = "carpentry_01_60"
 
---- The table holding sandbox option `key`: SandboxVars[modTable] if it has the option, else
---- SandboxVars if the game has it, else nil; and the option's full name ("Table.Key" or "Key").
-function Fixtures.sandboxOptions(modTable, key)
+-- The table holding sandbox option `key`: SandboxVars[modTable] if it has the option, else
+-- SandboxVars if the game has it, else nil; and the option's full name ("Table.Key" or "Key").
+local function sandboxOptions(modTable, key)
     local mod = modTable and SandboxVars[modTable]
     if mod and mod[key] ~= nil then
         return mod, modTable .. "." .. key
@@ -79,20 +59,27 @@ function Fixtures.sandboxOptions(modTable, key)
     end
 end
 
---- Sets option `key` in `options` and in the game's own copy of option `name` (SandboxOptions),
---- which the game's Java reads instead of SandboxVars (IsoGenerator's GeneratorFuelConsumption,
---- for one), and calls `changed()`, if given, after the change and after the undo.
-function Fixtures.setSandbox(options, name, key, value, changed)
+-- Calls the dev mod's `sandboxChanged` setting, if any, after a sandbox option changed.
+local function sandboxChanged()
+    if PZHarness.testSettings.sandboxChanged then
+        PZHarness.testSettings.sandboxChanged()
+    end
+end
+
+-- Sets option `key` in `options` and in the game's own copy of option `name` (SandboxOptions),
+-- which the game's Java reads instead of SandboxVars (IsoGenerator's GeneratorFuelConsumption,
+-- for one), and calls sandboxChanged after the change and after the undo.
+local function setSandbox(options, name, key, value)
     local sandboxOption = getSandboxOptions():getOptionByName(name)
     local option = sandboxOption and sandboxOption:asConfigOption()
     local saved, savedOption = options[key], option and option:getValueAsObject()
     options[key] = value
     if option then option:setValueFromObject(value) end
-    if changed then changed() end
+    sandboxChanged()
     return function()
         options[key] = saved
         if option then option:setValueFromObject(savedOption) end
-        if changed then changed() end
+        sandboxChanged()
     end
 end
 
@@ -112,39 +99,12 @@ function Fixtures.deferOnce(defer, undo)
     return once
 end
 
--- What stood at each table's key before the first replacement still standing there, and how many
--- stand (Fixtures.replace).
-local originals = {}
-
 --- Sets `target[key]` to `value`, a production function or field a test stands in for, and returns
 --- the function that puts back what stood there before; Fixtures.deferOnce says when it runs.
---- Replacements of one key stack: undone newest first, each puts back the one before it.
---- A caller that looks the key up on its table as it runs sees the replacement.
 function Fixtures.replace(defer, target, key, value)
-    local byKey = originals[target] or {}
-    originals[target] = byKey
-    local entry = byKey[key] or { value = target[key], standing = 0 }
-    byKey[key] = entry
-    entry.standing = entry.standing + 1
     local before = target[key]
     target[key] = value
-    return Fixtures.deferOnce(defer, function()
-        target[key] = before
-        entry.standing = entry.standing - 1
-        if entry.standing == 0 then
-            byKey[key] = nil
-        end
-    end)
-end
-
---- What stood at `target[key]` before any replacement still standing (Fixtures.replace): the
---- game's own, for a replacement that has to give way to it at once.
-function Fixtures.original(target, key)
-    local entry = originals[target] and originals[target][key]
-    if entry then
-        return entry.value
-    end
-    return target[key]
+    return Fixtures.deferOnce(defer, function() target[key] = before end)
 end
 
 --- Saves the options `names` of the mod's table in SandboxVars (the `sandbox` test setting) for a
@@ -269,23 +229,25 @@ function Fixtures.setMechanicsCheat(player, on)
     return function() player:setMechanicsCheat(saved) end
 end
 
--- The test library's two-sided setters (TestLib.lua), each the args its client setter sends.
-PZHarness.twoSided("setTime", function(_, args) return Fixtures.setTime(args.hour) end)
-PZHarness.twoSided("setMultiplier", function(_, args) return Fixtures.setMultiplier(args.multiplier) end)
-PZHarness.twoSided("setGrid", function(_, args) return Fixtures.setGrid(args.on) end)
-PZHarness.twoSided("setPerk", function(player, args)
-    return Fixtures.setPerk(player, Perks.FromString(args.perk), args.level)
-end)
-PZHarness.twoSided("setInstant", function(player, args) return Fixtures.setInstant(player, args.on) end)
-PZHarness.twoSided("setMechanicsCheat", function(player, args) return Fixtures.setMechanicsCheat(player, args.on) end)
--- An option in neither the mod's table nor the game's is missing rather than created.
-PZHarness.twoSided("setSandbox", function(_, args)
-    local options, name = Fixtures.sandboxOptions(args.table, args.key)
-    if not options then
-        return nil, "the sandbox option " .. tostring(args.key)
-    end
-    return Fixtures.setSandbox(options, name, args.key, args.value, Fixtures.sandboxChanged)
-end)
+--- The two-sided fixtures, by name: `apply(player, args)` changes one side's copy and returns the
+--- undo, or nil and what is missing (a noun phrase). The server serves each as the handler
+--- "PZHarness.<name>" (ServerFixtures.lua), and TestLib makes its client setter.
+Fixtures.TWO_SIDED = {
+    setTime = function(_, args) return Fixtures.setTime(args.hour) end,
+    setMultiplier = function(_, args) return Fixtures.setMultiplier(args.multiplier) end,
+    setGrid = function(_, args) return Fixtures.setGrid(args.on) end,
+    setPerk = function(player, args) return Fixtures.setPerk(player, Perks.FromString(args.perk), args.level) end,
+    setInstant = function(player, args) return Fixtures.setInstant(player, args.on) end,
+    setMechanicsCheat = function(player, args) return Fixtures.setMechanicsCheat(player, args.on) end,
+    -- An option in neither the mod's table nor the game's is missing rather than created.
+    setSandbox = function(_, args)
+        local options, name = sandboxOptions(args.table, args.key)
+        if not options then
+            return nil, "the sandbox option " .. tostring(args.key)
+        end
+        return setSandbox(options, name, args.key, args.value)
+    end,
+}
 
 --- Every perk's level, by perk id, for Fixtures.setPerkLevels.
 function Fixtures.perkLevels(player)
@@ -300,12 +262,6 @@ end
 function Fixtures.learnRecipes(player, names)
     for _, name in ipairs(names) do
         player:learnRecipe(name)
-    end
-end
-
-function Fixtures.forgetRecipes(player, names)
-    for _, name in ipairs(names) do
-        player:getKnownRecipes():remove(name)
     end
 end
 
@@ -327,7 +283,9 @@ function Fixtures.knowRecipes(player, names, known)
     if known then
         Fixtures.learnRecipes(player, names)
     else
-        Fixtures.forgetRecipes(player, names)
+        for _, name in ipairs(names) do
+            player:getKnownRecipes():remove(name)
+        end
     end
     return function()
         local list = player:getKnownRecipes()
@@ -592,47 +550,6 @@ function Fixtures.removePlaced(thing, player)
         thing:setActivated(false)
     end
     thing:getSquare():transmitRemoveItemFromSquare(thing)
-end
-
--- What an object on a square is drawn as, to tell it from the others there.
-local function lookOf(object)
-    local sprite = object:getSprite()
-    return sprite and sprite:getName() or object:getObjectName()
-end
-
---- How many objects of each look (sprite name, else class) stand on `square`, for
---- Fixtures.removeNewOn.
-function Fixtures.looksOn(square)
-    local looks = {}
-    local objects = square:getObjects()
-    for i = 0, objects:size() - 1 do
-        local look = lookOf(objects:get(i))
-        looks[look] = (looks[look] or 0) + 1
-    end
-    return looks
-end
-
---- Removes (Fixtures.removePlaced, for `player`) every object on `square` past the looks `before`
---- (Fixtures.looksOn) counted there. By look rather than by object, so it finds what a build's
---- OnCreate swapped in, and a copy a chunk that unloaded and loaded again holds.
-function Fixtures.removeNewOn(square, before, player)
-    local left, new = {}, {}
-    for look, count in pairs(before) do
-        left[look] = count
-    end
-    local objects = square:getObjects()
-    for i = 0, objects:size() - 1 do
-        local object = objects:get(i)
-        local look = lookOf(object)
-        if (left[look] or 0) > 0 then
-            left[look] = left[look] - 1
-        else
-            table.insert(new, object)
-        end
-    end
-    for i = #new, 1, -1 do
-        Fixtures.removePlaced(new[i], player)
-    end
 end
 
 --- Lets this side's chunks near x, y, z go of power that generators no longer there, or no longer

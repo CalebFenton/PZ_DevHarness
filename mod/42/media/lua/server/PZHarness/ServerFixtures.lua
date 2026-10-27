@@ -14,7 +14,7 @@ PZHarness = PZHarness or {}
 local Fixtures = PZHarness.Fixtures
 local handler, need = PZHarness.serverHandler, PZHarness.need
 
--- The two-sided fixtures (PZHarness.twoSided), registered from shared Lua before this file loads.
+-- The two-sided fixtures (Fixtures.TWO_SIDED).
 for name in pairs(Fixtures.TWO_SIDED) do
     handler("PZHarness." .. name, function(player, args, defer)
         local undo, missing = Fixtures.TWO_SIDED[name](player, args)
@@ -91,16 +91,37 @@ handler("PZHarness.trackPlaced", function(player, args, defer)
     return {}
 end)
 
+-- What an object on a square is drawn as, to tell it from the others there.
+local function lookOf(object)
+    local sprite = object:getSprite()
+    return sprite and sprite:getName() or object:getObjectName()
+end
+
 --- Has what stands on the square at `at` ({ x, y, z }) when the test ends, and didn't now, go then
---- (Fixtures.removeNewOn, for `player`), however it came: a build, a job, an OnCreate that swapped
---- the object, a chunk that loaded again with a new copy. The running handler ends as missing an
---- unloaded square.
+--- (Fixtures.removePlaced, for `player`), however it came: a build, a job, an OnCreate that swapped
+--- the object, a chunk that loaded again with a new copy. Counted by look rather than by object, so
+--- it finds those. The running handler ends as missing an unloaded square.
 function PZHarness.trackSquare(defer, player, at)
-    local before = Fixtures.looksOn(PZHarness.squareAt(at))
+    local left = {}
+    local objects = PZHarness.squareAt(at):getObjects()
+    for i = 0, objects:size() - 1 do
+        local look = lookOf(objects:get(i))
+        left[look] = (left[look] or 0) + 1
+    end
     defer(function()
         local square = Fixtures.squareAt(at)
-        if square then
-            Fixtures.removeNewOn(square, before, player)
+        local new, now = {}, square and square:getObjects()
+        for i = 0, (now and now:size() or 0) - 1 do
+            local object = now:get(i)
+            local look = lookOf(object)
+            if (left[look] or 0) > 0 then
+                left[look] = left[look] - 1
+            else
+                table.insert(new, object)
+            end
+        end
+        for i = #new, 1, -1 do
+            Fixtures.removePlaced(new[i], player)
         end
     end)
 end
@@ -180,8 +201,7 @@ handler("PZHarness.takeFloorItems", function(player, args)
     return { items = items }
 end)
 
--- T.objectModData: the modData key `args.key` of the object drawn as `args.sprite` on the square at
--- x, y, z.
+-- The modData key `args.key` of the object drawn as `args.sprite` on the square at x, y, z.
 handler("PZHarness.objectModData", function(_, args)
     local object = need(Fixtures.objectWithSprite(PZHarness.squareAt(args), args.sprite),
         "a " .. tostring(args.sprite) .. " on the server")
@@ -359,11 +379,6 @@ end)
 -- Not undone, as on the client.
 handler("PZHarness.learnRecipes", function(player, args)
     Fixtures.learnRecipes(player, args.names)
-    return {}
-end)
-
-handler("PZHarness.forgetRecipes", function(player, args)
-    Fixtures.forgetRecipes(player, args.names)
     return {}
 end)
 

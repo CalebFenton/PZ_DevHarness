@@ -302,12 +302,10 @@ else
     fi
 fi
 
-# On exit (exit_report, lib/harness.sh): records what failed for --failed and prints the suspects
-# (lib/tests.py), prints this run's phases and appends it to RUNS_LOG, and appends a RUNS_TESTS_LOG
-# line per PASS, FAIL or SKIP line of its tests, dated as the run's RUNS_LOG line: "<date>
-# mode=<mode> test=<name> status=<pass, fail or skip> seconds=<s>" (lib/results.py). A kept game's
-# rerun has no boot or world phase, and only a game that quits has a quit phase. A run a Lua error
-# stopped has a stopped phase instead of the run, up to the poll that saw the error.
+# On exit (exit_report, lib/harness.sh): records what failed for --failed and prints the suspects,
+# prints this run's phases and appends it to RUNS_LOG, and its timed tests to RUNS_TESTS_LOG. A kept
+# game's rerun has no boot or world phase, and only a game that quits has a quit phase. A run a Lua
+# error stopped has a stopped phase instead of the run, up to the poll that saw the error.
 report_timing() {
     [ -n "$MODE" ] || return 0
     if [ "$MODE" = test ]; then
@@ -488,9 +486,7 @@ if [ "$MODE" != test ]; then
         exit 1
     fi
     captures_var="MODE_CAPTURES_$MODE"
-    if declare -F "harness_after_$MODE" > /dev/null; then
-        "harness_after_$MODE"
-    elif [ -n "${!captures_var:-}" ]; then
+    if [ -n "${!captures_var:-}" ]; then
         "$HARNESS/lib/capture.py" "$CACHE" "$MARK" "$REPO/${!captures_var}"
         echo "PASS: captures are in $REPO/${!captures_var}"
     elif compgen -G "$CACHE/Screenshots/${MODE}_*.png" > /dev/null; then

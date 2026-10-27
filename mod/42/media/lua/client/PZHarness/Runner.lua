@@ -1,11 +1,8 @@
 -- Development only, not published. bin/run-client.sh loads this mod alongside the mod under test
--- and its dev mod, and writes <cachedir>/Lua/PZHarness.txt describing the run (Run.lua).
---
--- In a mode, the mod's debug scenario starts from the main menu; once the world has loaded the
--- runner runs the tests (Schedule.lua) or the mode's handler, prints "<mark> DONE" and quits (or,
--- with --stay, waits for rerun requests: Stay.lua). run-client.sh reads those lines from
--- console.txt. With --mp the client joins the dedicated server as admin instead
--- (Multiplayer.lua) and runs the scenario's onStart there.
+-- and its dev mod, and describes the run in <cachedir>/Lua/PZHarness.txt (Run.lua). In a mode,
+-- the mod's debug scenario starts from the main menu, or with --mp the client joins the dedicated
+-- server; once the world has loaded the runner runs the tests or the mode's handler, prints
+-- "<mark> DONE", which run-client.sh waits for in console.txt, and quits.
 
 require "PZHarness/Run"
 require "PZHarness/Fixtures"
@@ -30,7 +27,6 @@ end
 -- which saves the options, so options.ini never keeps the mode's rate.
 local savedUIFps
 
--- What a mode handler calls when it is done.
 local function done()
     if savedUIFps then
         getCore():setOptionUIRenderFPS(savedUIFps)
@@ -38,13 +34,6 @@ local function done()
     end
     print(run.mark .. " DONE")
     quit()
-end
-
--- The UI draws at its own rate (Core.StartFrameUI) and the frames in between show its last
--- drawing, so a mode that waits for the UI to draw waits less at the highest rate.
-local function fastUI()
-    savedUIFps = getCore():getOptionUIRenderFPS()
-    getCore():setOptionUIRenderFPS(FAST_UI_FPS)
 end
 
 local function worldLoaded()
@@ -63,7 +52,6 @@ local function worldLoaded()
     return true
 end
 
--- Runs `start` once the world around the character has loaded.
 local function afterSettling(start)
     local ticks = 0
     local function onTick()
@@ -95,15 +83,14 @@ local function startMode()
     end
     if mode.capture then
         PZHarness.Fixtures.clearWeather()
-        fastUI()
+        -- The UI draws at its own rate (Core.StartFrameUI) and the frames in between show its last
+        -- drawing, so a mode that waits for the UI to draw waits less at the highest rate.
+        savedUIFps = getCore():getOptionUIRenderFPS()
+        getCore():setOptionUIRenderFPS(FAST_UI_FPS)
     end
     mode.run(run.selection, done)
 end
 
--- The server places a new character in a spawn region; once it is at the scenario's start and the
--- world has loaded: the scenario's and mod's onStart, then the run once the server has the perks
--- and recipes they gave. TestLib's helpers reach the server themselves; anything else needs the
--- mod's own server handlers.
 if run.mp then
     Multiplayer.join(function(scenario)
         afterSettling(function()
@@ -118,20 +105,11 @@ if run.mp then
     end)
 end
 
--- A sandbox option's value as run-client.sh writes it.
-local function optionValue(text)
-    if text == "true" or text == "false" then
-        return text == "true"
-    end
-    return tonumber(text) or text
-end
-
 --- Gives `scenario`, a debugScenarios entry, a new save that records the active mods, which
 --- DebugScenarios doesn't do (see MainScreen.resetLuaIfNeeded), and has no zombies; with `quiet`
 --- (run-client.sh's "Key=value,Table.Key=value,..." for a --test world: QUIET_WORLD and
 --- TEST_SANDBOX) those options too, "Table.Key" in SandboxVars[Table]. The scenario's own
---- setSandbox runs after, so the mod's settings win. The runner does it for the mod's scenario,
---- PZHarness.QA.scenario for a QA scenario.
+--- setSandbox runs after, so the mod's settings win.
 function PZHarness.wrapSetSandbox(scenario, quiet)
     local originalSetSandbox = scenario.setSandbox
     scenario.setSandbox = function()
@@ -144,7 +122,11 @@ function PZHarness.wrapSetSandbox(scenario, quiet)
                 SandboxVars[group] = SandboxVars[group] or {}
                 options, name = SandboxVars[group], option
             end
-            options[name] = optionValue(value)
+            if value == "true" or value == "false" then
+                options[name] = value == "true"
+            else
+                options[name] = tonumber(value) or value
+            end
         end
         if originalSetSandbox then
             originalSetSandbox()

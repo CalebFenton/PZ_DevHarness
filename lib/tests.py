@@ -1,28 +1,13 @@
 #!/usr/bin/env python3
 """Which tests a --test run runs, and which changed files a failed test points at: the conf's
-TEST_MAP (docs/adopting.md), the batch of --changed, the record of --failed and the suspects of a
-failure (docs/running.md, "Choosing tests"). lib/harness.sh's tests_py runs it with the conf in
-its environment: REPO, HARNESS, MOD_DIR, DEV_MOD_DIR, HARNESS_MOD_DIR (absolute), TEST_MAP (its
-entries, a line each, only when the conf sets it), LIBRARY_IDS, RUNS_FAILED and SINCE.
+TEST_MAP (docs/adopting.md), --changed's batch, --failed's record and the suspects of a failure
+(docs/running.md, "Choosing tests"). lib/harness.sh's tests_py runs it with the conf, and the
+batch `batch` printed, in its environment; TEST_MAP is there only when the conf sets it.
 
-    tests.py check                      fails, saying how to fix each, while TEST_MAP misses a file
-    tests.py batch                      the batch's base and heads, as shell assignments
-    tests.py changed                    the selection for the batch's changed files (--changed)
-    tests.py failed <key>               the selection of what failed in the last <key> run (--failed)
-    tests.py record <key> <log> <tag> <test files>
-                                        records what failed in run log <log> for --failed, with
-                                        the suspects of each failure
+    tests.py check | batch | changed | failed <key> | record <key> <log> <tag> <test files>
 
-`changed` and `failed` print what they decided, then the selection as a last line
-"SELECTION=<entries>", and exit 3 when there are no tests to run. `changed`, `failed` and `record`
-take the batch from the environment, as `batch` printed it.
-
-A file's reach is the tests a change to it runs. Files outside the mod, the dev mod and the
-harness mod reach none that TEST_MAP decides. Inside, every glob a file matches adds its entries:
-test name prefixes, or "=<name>" for one test. A dev mod Lua file whose name has "Tests" registers
-tests (TestLib's T.test), and reaches those itself as "@<file name>". A harness mod file no glob
-matches reaches every test, as does a file of the mod or the dev mod that nothing maps, which
-`check` fails on.
+`changed` and `failed` print what they decided, then a last line "SELECTION=<entries>", and exit 3
+when there are no tests to run.
 """
 from __future__ import annotations
 
@@ -33,8 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import results  # noqa: E402
+import results
 
 # A file's reach when every test runs for it.
 EVERY = None
@@ -79,7 +63,9 @@ class Conf:
         return [i for i, (glob, _) in enumerate(self.map) if fnmatch.fnmatchcase(path, glob)]
 
     def reach(self, path):
-        """OUTSIDE, EVERY, or the sorted entries a change to `path` runs, empty for none."""
+        """OUTSIDE, EVERY, or the sorted entries a change to `path` runs, empty for none: those of
+        every glob it matches, and a dev mod test file's own tests as "@<file name>" (TestLib's
+        T.test). An unmatched file of the folders TEST_MAP covers reaches every test."""
         if not self.has_map:
             return EVERY if self.matches(path) is not None else OUTSIDE
         found = self.matches(path)
@@ -140,8 +126,6 @@ def check(conf):
     return problems
 
 
-# The batch ------------------------------------------------------------------------------------
-
 def batch(conf, since):
     """What --changed and the suspects of a failure look at: what changed since BATCH_BASE, `since`
     when set, else where the branch left its upstream, else HEAD, which leaves out the branch's
@@ -200,8 +184,6 @@ def file_history(conf, env, path):
     return history
 
 
-# Selections -----------------------------------------------------------------------------------
-
 def select_changed(conf, env):
     """The selection for the batch's changed files, saying why for each; None when nothing is to
     run, "" for every test. A library's repository records no batch base for this one, so its
@@ -238,18 +220,12 @@ def select_changed(conf, env):
 def failed_record(path, key):
     """The last record of runs of kind `key` in RUNS_FAILED: test name to how many such runs in a
     row it has failed; None without one."""
-    try:
-        found = [line for line in Path(path).read_text().splitlines() if line.startswith(key + " ")]
-    except FileNotFoundError:
-        return None
+    path = Path(path)
+    found = [line for line in path.read_text().splitlines() if line.startswith(key + " ")] if path.exists() else []
     if not found:
         return None
-    record = {}
-    for entry in found[-1][len(key) + 1:].split(","):
-        name, _, runs = entry.rpartition(":")
-        if name:
-            record[name] = int(runs) if runs.isdigit() else 0
-    return record
+    entries = (entry.rpartition(":") for entry in found[-1][len(key) + 1:].split(",") if entry)
+    return {name: int(runs) for name, _, runs in entries}
 
 
 def select_failed(conf, env, key):
@@ -265,8 +241,6 @@ def select_failed(conf, env, key):
     return ",".join("=" + name for name in names)
 
 
-# After a run ----------------------------------------------------------------------------------
-
 def reaches(entry, name, test_files):
     if entry.startswith("="):
         return entry[1:] == name
@@ -279,8 +253,6 @@ def print_suspects(conf, env, names, test_files):
     """For each failed test, "suspects <test>: <file> (<commits>); ...": the batch's changed files
     that reach it, each with its commits, newest first. `test_files` names the file that registered
     each test, for "@<file>" entries."""
-    if not names or not env.get("BATCH_BASE"):
-        return
     changed = [(path, conf.reach(path)) for path in changed_files(conf, env)]
     print(f"suspects: the files changed since {env['BATCH_BASE_SAID']} that reach each failed test")
     for name in names:
@@ -335,30 +307,22 @@ def main(argv):
     env = os.environ
     conf = Conf(env)
     command = argv[1]
-    if command == "check":
-        problems = check(conf)
-        for problem in problems:
-            print(problem, file=sys.stderr)
-        return 1 if problems else 0
     if command == "batch":
         for name, value in batch(conf, env.get("SINCE", "")).items():
             print(f"{name}={shlex.quote(value)}")
         return 0
-    if command == "changed":
+    if command == "record":
+        record(conf, env, *argv[2:6])
+        return 0
+    if command == "failed":
+        selection = select_failed(conf, env, argv[2])
+    else:
         problems = check(conf)
         for problem in problems:
             print(problem, file=sys.stderr)
-        if problems:
-            return 2
+        if problems or command == "check":
+            return 2 if problems else 0
         selection = select_changed(conf, env)
-    elif command == "failed":
-        selection = select_failed(conf, env, argv[2])
-    elif command == "record":
-        record(conf, env, *argv[2:6])
-        return 0
-    else:
-        print(f"tests.py: unknown command {command}", file=sys.stderr)
-        return 2
     if selection is None:
         return NOTHING
     print(f"SELECTION={selection}")

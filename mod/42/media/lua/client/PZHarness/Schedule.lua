@@ -1,6 +1,5 @@
--- Development only, not published. Runs the selected tests one after another, ticking through
--- each test, the character reset, the leak check (Leaks.lua) and the test's verdict (Report.lua)
--- before the next test starts.
+-- Development only, not published. Runs the selected tests one after another, with the character
+-- reset, the leak check (Leaks.lua) and the verdict between each test and the next.
 
 require "PZHarness/ServerCalls"
 require "PZHarness/Fixtures"
@@ -20,6 +19,18 @@ local SQUARE_WAIT_MS = 10000
 -- cleared and its undos run, so one hung step can't stall the run. A spec's `timeoutSeconds`
 -- raises it for a test that is slow on purpose.
 local TEST_TIMEOUT_SECONDS = 30
+-- How much further than TestLib's SEARCH_RADIUS the leak check looks, unless the dev mod sets
+-- `leakRadius`.
+local LEAK_MARGIN = 2
+-- At most this many LEAK and DESYNC lines per test, and DIRTY lines per run; a count of the rest
+-- follows.
+local LEAK_LINES_SHOWN = 10
+-- How many of the slowest tests the run's summary names.
+local SLOWEST_COUNT = 10
+
+-- What the last run in this game left behind, as "<test>: <what>", which a kept game's next run
+-- reports first: it is still in the world that run starts from.
+local leftBehind = {}
 
 -- Selection
 
@@ -118,16 +129,50 @@ end
 
 -- The state machine
 
+-- Prints test `name`'s verdict and counts it for the DONE line and the REPEAT tally.
+local function printVerdict(state, name, failures, seconds)
+    Report.verdict(name, failures, seconds)
+    local tally = state.tally[name] or { passed = 0, failed = 0 }
+    state.tally[name] = tally
+    if #failures == 0 then
+        state.passed, tally.passed = state.passed + 1, tally.passed + 1
+    else
+        state.failed, tally.failed = state.failed + 1, tally.failed + 1
+    end
+end
+
 -- Prints the verdict of the test that just ended, once the leak check after it is done: its LEAK
 -- and DESYNC lines first, which with LEAKS=fail also fail it.
 local function settleVerdict(state, found)
-    local verdict = state.verdict
+    local ended = state.verdict
     state.verdict = nil
-    if not verdict then
+    if not ended then
         return
     end
-    Report.findings(verdict.name, PZHarness.Leaks.findings(found), state.leaks == "fail", verdict.failures)
-    Report.verdict(verdict.name, verdict.failures, verdict.seconds)
+    local failures = ended.failures
+    local findings = {}
+    for _, line in ipairs(found and found.leaks or {}) do
+        table.insert(findings, { kind = "LEAK", line = line, failure = "left behind " .. line })
+    end
+    for _, line in ipairs(found and found.desyncs or {}) do
+        table.insert(findings, { kind = "DESYNC", line = line, failure = "client and server differ at " .. line })
+    end
+    for i, finding in ipairs(findings) do
+        if i > LEAK_LINES_SHOWN then
+            local rest = #findings - LEAK_LINES_SHOWN
+            Report.line("LEAK", string.format("%s: and %d more", ended.name, rest))
+            if state.leaks == "fail" then
+                table.insert(failures, rest .. " more leaks and desyncs")
+            end
+            break
+        end
+        Report.line(finding.kind, ended.name .. ": " .. finding.line)
+        table.insert(leftBehind, ended.name .. ": " .. finding.line)
+        if state.leaks == "fail" then
+            table.insert(failures, finding.failure)
+        end
+    end
+    printVerdict(state, ended.name, failures, ended.seconds)
 end
 
 -- What the server does between tests, sent behind the ended test's undos so it all comes back in
@@ -147,9 +192,8 @@ local function askBetweenTests(state, at)
 end
 
 -- The current test is done once its action queue is empty, or stopped once it overruns its time
--- limit, in which case validate() fails it with what it was waiting on. Its verdict then waits
--- for the leak check (settleVerdict); timings go to the summary, cheat and character are restored,
--- and the between-tests request goes out.
+-- limit, in which case validate() fails it with what it was waiting on. Its verdict waits for the
+-- leak check (settleVerdict).
 local function finishCurrentTest(state)
     local current, player = state.current, state.player
     local queue = ISTimedActionQueue.getTimedActionQueue(player).queue
@@ -173,7 +217,8 @@ local function finishCurrentTest(state)
     local seconds = current.seconds or (state.doneMs - state.testStartMs) / 1000
     state.verdict = { name = state.name, seconds = seconds,
         failures = current.failures or (passed and {} or { "validate failed" }) }
-    Report.time(state.name, seconds, (PZHarness.ServerCalls.waitedMs() - state.testServerMs) / 1000)
+    table.insert(state.times, { name = state.name, seconds = seconds,
+        serverSeconds = (PZHarness.ServerCalls.waitedMs() - state.testServerMs) / 1000 })
     ISBuildMenu.cheat = state.wasCheat
     PZHarness.Fixtures.teleportToMiddle(player, state.start.x, state.start.y, state.start.z)
     askBetweenTests(state, state.start)
@@ -194,9 +239,8 @@ local function readyForNextTest(state)
     return state.resetAnswered or not PZHarness.ServerCalls.busy()
 end
 
--- Between tests: the character reset, then the leak check (PZHarness/Leaks.lua), then the ended
--- test's verdict. Returns true once all of it is done. A check whose square never loaded finds
--- nothing and restarts the baselines.
+-- Between tests: the character reset, then the leak check, then the ended test's verdict. True once
+-- all of it is done.
 local function checkBetweenTests(state)
     if state.checkedFor == state.index then
         return true
@@ -238,7 +282,7 @@ local function startNextTest(state, name)
     print("TEST: " .. name)
     local here = player:getCurrentSquare()
     if not here then
-        Report.verdict(name, { string.format("the character's square was still unloaded %d s after the last test",
+        printVerdict(state, name, { string.format("the character's square was still unloaded %d s after the last test",
             SQUARE_WAIT_MS / 1000) }, 0)
         state.doneMs = getTimestampMs()
         return
@@ -254,20 +298,83 @@ local function startNextTest(state, name)
     state.current:run()
 end
 
--- Prints the run's summary and verdict, then calls onDone().
+-- Prints `lines` as "<tag> <kind> <line>", at most LEAK_LINES_SHOWN of them, then how many more.
+local function printCapped(kind, lines)
+    for i, text in ipairs(lines) do
+        if i > LEAK_LINES_SHOWN then
+            Report.line(kind, string.format("and %d more", #lines - LEAK_LINES_SHOWN))
+            return
+        end
+        Report.line(kind, text)
+    end
+end
+
+-- With REPEAT, how often each test passed and failed, the most failed first.
+local function printTally(tally)
+    local names = {}
+    for name in pairs(tally) do
+        table.insert(names, name)
+    end
+    table.sort(names, function(a, b)
+        if tally[a].failed ~= tally[b].failed then
+            return tally[a].failed > tally[b].failed
+        end
+        return a < b
+    end)
+    for _, name in ipairs(names) do
+        Report.line("REPEAT", string.format("%s passed=%d failed=%d", name, tally[name].passed, tally[name].failed))
+    end
+end
+
+-- Prints the slowest tests, then where the run's time went: in tests, between them, and in
+-- multiplayer how much of it waited on the server.
+local function printSlowest(state)
+    local times = state.times
+    table.sort(times, function(a, b)
+        if a.seconds ~= b.seconds then
+            return a.seconds > b.seconds
+        end
+        return a.name < b.name
+    end)
+    local inTests = 0
+    for i, entry in ipairs(times) do
+        inTests = inTests + entry.seconds
+        if i <= SLOWEST_COUNT then
+            Report.line("SLOWEST", string.format("%.2f s %s%s", entry.seconds, entry.name,
+                isClient() and string.format(" (server %.2f s)", entry.serverSeconds) or ""))
+        end
+    end
+    local summary = string.format("%.1f s in tests, %.1f s between them (%.1f s of it checking for leaks)",
+        inTests, state.gapMs / 1000, state.leakMs / 1000)
+    if isClient() then
+        summary = summary .. string.format(", %.1f s of it all waiting on the server; %d leak checks waited the full time for this client to catch up",
+            (PZHarness.ServerCalls.waitedMs() - state.serverStartMs) / 1000, state.leakWaitedFull)
+    end
+    Report.line("SLOWEST", summary)
+end
+
+-- The run's SKIP, REPEAT, SLOWEST and TIME lines, then DONE, whose failed count takes in the
+-- failures that came after their tests' verdicts.
 local function finishRun(state)
+    Report.runnerOwnsVerdicts = false
     PZHarness.Trace.stop()
     state.gapMs = state.gapMs + getTimestampMs() - state.doneMs
-    Report.finishRun({
-        gapMs = state.gapMs, leakMs = state.leakMs, leakWaitedFull = state.leakWaitedFull,
-        serverMs = PZHarness.ServerCalls.waitedMs() - state.serverStartMs,
-        seconds = (getTimestampMs() - state.startedMs) / 1000, ticks = state.ticks,
-    })
+    for _, skip in ipairs(state.skipped) do
+        Report.line("SKIP", skip .. " (0.00 s)")
+    end
+    if state.rounds > 1 then
+        printTally(state.tally)
+    end
+    printSlowest(state)
+    local seconds = (getTimestampMs() - state.startedMs) / 1000
+    Report.line("TIME", string.format("%.1f s, %d frames (%.0f a second)", seconds, state.ticks,
+        state.ticks / math.max(seconds, 0.001)))
+    Report.line("DONE", "passed=" .. state.passed .. " failed=" .. (state.failed + Report.lateFailures - state.lateAtStart)
+        .. " skipped=" .. #state.skipped)
     state.onDone()
 end
 
---- Runs the tests `selection` picks (comma-separated name prefixes, "=<name>" and "@<file>"
---- entries; empty for every test of the mod) one after another, with the resets of vanilla's
+--- Runs the tests `selection` picks (testNames) one after another, with the resets of vanilla's
 --- debug-menu runner (Tests/TimedActionsTests.lua, whose locals Lua can't reach): full health,
 --- empty inventory, nothing worn or held, cheat off before each test; validate() once the action
 --- queue empties; then the cheat and character position restored. Unlike vanilla there is no
@@ -277,27 +384,51 @@ function Schedule.runTests(selection, onDone)
     local names, skipped, unmatched = testNames(selection)
     local rounds = math.max(1, tonumber(run.rounds) or 1)
     local order = run.order or ""
-    local leaks, leakRadius, leakLevels, leakIgnore = PZHarness.Leaks.settings()
+    local leaks = run.leaks ~= nil and run.leaks ~= "" and run.leaks or "fail"
+    local settings = PZHarness.testSettings
+    local leakRadius = settings.leakRadius or PZHarness.Test.SEARCH_RADIUS + LEAK_MARGIN
+    local leakIgnore = {}
+    for _, list in ipairs({ PZHarness.Snapshot.DEFAULT_IGNORE, settings.leakIgnore or {} }) do
+        for _, pattern in ipairs(list) do
+            table.insert(leakIgnore, pattern)
+        end
+    end
+    if #leftBehind > 0 then
+        printCapped("DIRTY", leftBehind)
+        leftBehind = {}
+    end
     names = orderedRounds(names, order, rounds)
-    Report.startRun(#names, { order = order, rounds = rounds, leaks = leaks, leakRadius = leakRadius }, skipped, unmatched)
+    Report.line("START", tostring(#names))
+    if order ~= "" then
+        Report.line("ORDER", order)
+    end
+    if rounds > 1 then
+        Report.line("REPEAT", rounds .. " rounds")
+    end
+    Report.line("LEAKS", leaks .. (leaks ~= "off" and ", " .. leakRadius .. " squares around the character" or ""))
+    for _, filter in ipairs(unmatched) do
+        Report.line("FAIL", filter .. ": the selection names no test")
+    end
     local tests = TimedActionTests.getTests()
     Run.writeTestFiles(tests)
     PZHarness.Leaks.reset()
     if run.trace ~= nil and run.trace ~= "" then
         PZHarness.Trace.start()
     end
+    Report.runnerOwnsVerdicts = true
     local startedMs = getTimestampMs()
     -- `start` holds where the current test started, as numbers: the square object itself goes back
     -- to the pool when a test takes the character far enough for its chunk to unload, and comes
     -- back as some other square (IsoGridSquare.discard, getNew), so teleporting to its coordinates
     -- then lands somewhere else entirely.
     local state = {
-        names = names, tests = tests, onDone = onDone,
-        leaks = leaks, leakRadius = leakRadius, leakLevels = leakLevels, leakIgnore = leakIgnore,
-        index = 0, ticks = 0, startedMs = startedMs, doneMs = startedMs,
-        -- For the summary: time between tests and its leak-check share, and server waits
-        -- (accumulated across a kept game's runs).
-        gapMs = 0, leakMs = 0, leakWaitedFull = 0, serverStartMs = PZHarness.ServerCalls.waitedMs(),
+        names = names, skipped = skipped, tests = tests, onDone = onDone, rounds = rounds,
+        leaks = leaks, leakRadius = leakRadius, leakLevels = settings.leakLevels, leakIgnore = leakIgnore,
+        passed = 0, failed = #unmatched, index = 0, ticks = 0, startedMs = startedMs, doneMs = startedMs,
+        lateAtStart = Report.lateFailures,
+        -- For the summary: per-test timings, time between tests and its leak-check share, server
+        -- waits (accumulated across a kept game's runs) and per-test pass/fail counts.
+        times = {}, gapMs = 0, leakMs = 0, leakWaitedFull = 0, serverStartMs = PZHarness.ServerCalls.waitedMs(), tally = {},
         current = nil, name = nil, player = nil, start = nil, wasCheat = nil,
         testStartMs = nil, testStartTicks = nil, testServerMs = nil,
         -- Between-tests bookkeeping: which test index the server request was sent for and whether
@@ -324,21 +455,6 @@ function Schedule.runTests(selection, onDone)
         end
     end
     Events.OnTick.Add(onTick)
-end
-
---- Forgets every test of the mod, so a --stay rerun that loads the test files again doesn't run
---- renamed or deleted ones.
-function Schedule.unregisterTests()
-    local tests = TimedActionTests.getTests()
-    local registered = {}
-    for name in pairs(tests) do
-        if luautils.stringStarts(name, PZHarness.config.prefix) then
-            table.insert(registered, name)
-        end
-    end
-    for _, name in ipairs(registered) do
-        tests[name] = nil
-    end
 end
 
 return Schedule

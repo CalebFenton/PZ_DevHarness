@@ -28,7 +28,6 @@ second.
 
 | Key | Meaning |
 | --- | --- |
-| `PRECHECK` | Unless the conf sets it otherwise, every game of the harness runs `dev/static-check.sh` first, so a typo costs seconds rather than a game start ([running.md](running.md#checks-before-a-run)). |
 | `CHECK_PLUGINS` | Optional: a bash array of Python files, relative to the repository, with the mod's own checks ([Plugins](#plugins)). |
 | `LIBRARY_MODS` | Optional: the library mods the published mod requires ([adopting.md](adopting.md#devharnessconf)). Their Lua, scripts, translations and packs are read with the mod's, so its requires of their modules and its getText keys resolve, and checked as published code, since they ship too; `library-require` holds the published `mod.info`'s `require=` to them. |
 | `CHECK_ALL_LANGUAGES` | Optional: when set, every language the game offers (but `STREW`, its placeholder) must have every translation file and key English has (`translation-missing`); otherwise a language the mod has that lacks keys is only a note. |

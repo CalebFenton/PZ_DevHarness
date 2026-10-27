@@ -1,4 +1,5 @@
 require "PZHarness/TestLib"
+require "PZHarness/TestReads"
 require "Moveables/ISMoveableSpriteProps"
 require "Moveables/ISMoveablesAction"
 local Runtime = require "PZHarness/TestRuntime"
@@ -118,7 +119,7 @@ function T.track(self, thing)
 end
 
 --- Queues removing, when the test ends, what then stands on `at`'s square (a handle or square)
---- that doesn't now, the way the game removes it (PZHarness.Fixtures.removeNewOn): for what a test
+--- that doesn't now, the way the game removes it (PZHarness.trackSquare): for what a test
 --- puts there by other means than a fixture, such as a job, whatever its OnCreate swapped in.
 function T.trackSquare(self, at)
     T.server(self, "PZHarness.trackSquare", T.at(at))
@@ -139,61 +140,20 @@ function T.takeFloorItems(self, squares, label)
     for i, square in ipairs(squares) do
         at[i] = T.at(square)
     end
-    T.server(self, "PZHarness.takeFloorItems", { squares = at })
-    if label then
-        self.reads = self.reads or {}
-        T.step(function() self.reads[label] = self.server["PZHarness.takeFloorItems"] end)
-    end
+    T.read(self, "PZHarness.takeFloorItems", { squares = at }, label)
 end
 
 --- Queues a wooden floor one level above `at`'s square laid by the authority, as a player roofs a
 --- yard, until the test ends; whether the square below is still outdoors lands in
 --- self.reads[label].outside (when given).
 function T.floorAbove(self, at, label)
-    T.server(self, "PZHarness.floorAbove", T.at(at))
-    if label then
-        self.reads = self.reads or {}
-        T.step(function() self.reads[label] = self.server["PZHarness.floorAbove"] end)
-    end
+    T.read(self, "PZHarness.floorAbove", T.at(at), label)
 end
 
 --- Queues a tile of `sprite` on each of the eight squares around `at` on level `level`, laid by
 --- the authority until the test ends, the squares made where that level has none.
 function T.ringOfTiles(self, at, level, sprite)
     T.server(self, "PZHarness.ringOfTiles", T.at(at, { level = level, sprite = sprite }))
-end
-
---- Queues reading the modData key `key` of the authority's object drawn as `sprite` on `at`'s
---- square into self.reads[label].value.
-function T.readModData(self, at, sprite, key, label)
-    T.server(self, "PZHarness.objectModData", T.at(at, { sprite = sprite, key = key }))
-    self.reads = self.reads or {}
-    T.step(function() self.reads[label] = self.server["PZHarness.objectModData"] end)
-end
-
---- Queues reads of the authority's world update count until it passes `frame()` (an earlier
---- answer's): every object there has had an update since, which a multiplayer server runs on its
---- own clock (PZHarness.worldFrame).
-function T.waitForFrameAfter(self, frame)
-    T.serverUntil(self, "PZHarness.worldFrame", {}, function(now) return now.frame > frame() end)
-end
-
---- A tile object of `sprite` on `square`, with `modData`.
-function T.tile(self, square, sprite, modData)
-    return T.track(self, PZHarness.Fixtures.newTile(square, sprite, modData))
-end
-
---- Places a new `itemType` on `square` the way the moveables cursor does, with `modData` on the
---- item first. Returns the placed object.
-function T.placeMoveable(self, square, itemType, sprite, modData)
-    local item = instanceItem(itemType)
-    for key, value in pairs(modData or {}) do
-        item:getModData()[key] = value
-    end
-    T.player():getInventory():AddItem(item)
-    ISMoveableSpriteProps.new(sprite):placeMoveable(T.player(), square, item:getWorldSprite(), true)
-    local object = T.objectWithSprite(square, sprite)
-    return T.need(self, object and T.track(self, object), "a placed " .. itemType)
 end
 
 -- A free square next to the character, with no wall in between, for a bench of `entity`; nil, and
@@ -204,21 +164,6 @@ local function benchSquare(self, entity)
         self.used[square] = true
     end
     return T.need(self, square, "a free square next to the character for a " .. entity)
-end
-
---- A workstation of the entity script `entity` (such as "Base.Kiln_Small"), drawn as `sprite`,
---- on a free square next to the character, who is using it as its crafting window makes them.
---- Returns the object. On a multiplayer client it exists here only: use T.placeBench.
-function T.bench(self, entity, sprite)
-    local square = benchSquare(self, entity)
-    if not square then
-        return nil
-    end
-    local bench, missing = PZHarness.Fixtures.newBench(square, entity, sprite, T.player())
-    if bench then
-        T.track(self, bench)
-    end
-    return T.need(self, not missing and bench, missing)
 end
 
 -- Sends the call of handler `name`, which places something, and queues a wait until `find()`
@@ -252,7 +197,9 @@ function T.placeTile(self, square, sprite, modData)
     end, "a " .. sprite)
 end
 
---- T.bench placed the way the authority does, as T.placeTile places a tile: returns a handle
+--- A workstation of the entity script `entity` (such as "Base.Kiln_Small"), drawn as `sprite`,
+--- on a free square next to the character, who is using it as its crafting window makes them;
+--- placed the way the authority does, as T.placeTile places a tile: returns a handle
 --- { x, y, z, square } at once, or nil without a free square, and handle.object is this client's
 --- copy of the bench once it has one.
 function T.placeBench(self, entity, sprite)
@@ -393,28 +340,11 @@ function T.pickUpAsPlayer(self, at, sprite)
     end)
 end
 
--- The squares T.vehicle tries, nearest first: `opts.square`, else open ground near `opts.near`
--- (the character by default), far enough that the vehicle doesn't land on the character.
+-- The squares T.placeVehicle tries, nearest first: `opts.square`, else open ground near
+-- `opts.near` (the character by default), far enough that the vehicle doesn't land on it.
 local function vehicleSquares(self, opts)
     return opts.square and { opts.square }
         or freeSquares(self, VEHICLE_TRIES, { near = opts.near, minDistance = 4, bare = true })
-end
-
---- A vehicle of `script` facing north on `opts.square`, else on open ground near `opts.near`
---- (the character by default). Returns the vehicle. On a multiplayer client it exists here only:
---- use T.placeVehicle.
-function T.vehicle(self, script, opts)
-    for _, square in ipairs(vehicleSquares(self, opts or {})) do
-        -- addVehicleDebug returns a vehicle even where it leaves it out of the world, as it does
-        -- where it would hit another vehicle; only a vehicle in the world gets an id
-        -- (BaseVehicle.createPhysics).
-        local vehicle = addVehicleDebug(script, IsoDirections.N, nil, square)
-        if vehicle and vehicle:getId() ~= -1 then
-            return T.track(self, vehicle)
-        end
-    end
-    T.need(self, nil, "open ground for a " .. script)
-    return nil
 end
 
 -- This client's copies of the vehicles T.placeVehicle found, to the handle each was found for.
@@ -431,13 +361,13 @@ local foundVehicles = {}
 -- when its update came, so the wait can't end sooner.
 local VEHICLE_SETTLE_MS = 300
 
---- T.vehicle placed the way the authority does: on the server in multiplayer, which sends it to
---- the clients nearby; removed when the test ends. `opts`: `square` or `near` as for T.vehicle,
---- `facing` ("N" unless given), `args` (plain values for the dev mod's `spawnVehicle` setting,
---- which makes the vehicle if it returns one). Returns a handle at once. Once the server has
---- answered, handle.id (shared by the server and its clients; PZHarness.Fixtures.vehicleById
---- finds it on either side), x, y, z and square say where it went, and after a queued wait
---- handle.vehicle is this client's copy.
+--- A vehicle of `script` placed the way the authority does: on the server in multiplayer, which
+--- sends it to the clients nearby; removed when the test ends. `opts`: `square` or `near` (see
+--- vehicleSquares), `facing` ("N" unless given), `args` (plain values for the dev mod's
+--- `spawnVehicle` setting, which makes the vehicle if it returns one). Returns a handle at once.
+--- Once the server has answered, handle.id (shared by the server and its clients;
+--- PZHarness.Fixtures.vehicleById finds it on either side), x, y, z and square say where it went,
+--- and after a queued wait handle.vehicle is this client's copy.
 function T.placeVehicle(self, script, opts)
     opts = opts or {}
     local removed = {}

@@ -11,16 +11,16 @@ How a mod takes the harness on, what it tells the harness about itself, and the 
 | `bin/static-check.sh` | The static check behind a mod's `dev/static-check.sh`: compiles the Lua with the game's compiler and cross-checks the mod against the installed game ([static-check.md](static-check.md)). |
 | `bin/review.sh`, `lib/review.css` | The review copy behind a mod's `dev/review.sh`: lays out the README images, renders `REVIEW_DOCS` to HTML as GitHub shows them, the first also to a PDF, and zips the mod, its libraries and the dev mods as players install them, into `REVIEW_DIR` (`~/Nextcloud` by default); `--art` adds the mod's `art/models/preview.py` page. Its header lists the files and what it needs. |
 | `check/` | The static check's Java probe and Python checker, and the `.pack`, `.tiles` and `.lotheader` readers it and a mod's plugins use. |
-| `lib/harness.sh` | Paths, JVM arguments, the game lock and a kept `--stay` game's reruns, `install_mod`, `compile_java`, the client cache (`prepare_cache`) and the dedicated server the scripts start (`prepare_server`, `prepare_mp_server`, `start_server`, `wait_server_started`, `stop_server`, `server_problems`). A mod's own dev scripts may source it. |
+| `lib/harness.sh` | Paths, JVM arguments, the game lock and a kept `--stay` game's reruns, `install_mod`, `compile_java`, the client cache (`prepare_cache`) and the dedicated server the scripts start (`prepare_server`, `prepare_mp_server`, `start_server`, `server_started`, `stop_server`, `server_problems`). A mod's own dev scripts may source it. |
 | `lib/tests.py`, `lib/results.py` | Which tests a run runs and what a failure points at: `TEST_MAP`, `--changed`'s batch, `--failed`'s record and the suspects ([running.md](running.md#choosing-tests)); and the one reader of a `--test` run's result lines, for those and the verdict. |
-| `lib/capture.py` | Crops a [capture mode](#capture-modes)'s screenshots into the mod's captures; a mod's own extraction may import it. |
+| `lib/capture.py` | Crops a [capture mode](#capture-modes)'s screenshots into the mod's captures. |
 | `lib/promo.py`, `lib/fonts/` | Lays out a mod's README images, Workshop gallery, poster, preview and mod icon from those captures, imported by the mod's `art/promo/compose.py` ([workshop-page.md](workshop-page.md#laying-out-the-images)), with the NotoSans font it draws in. |
 | `lib/trace.py` | Reports where a `TRACE=1` run's time went and writes it as a Perfetto timeline ([running.md](running.md#where-the-time-goes)). |
-| `lib/census.py` | Counts the rooms, container tiles by room and vehicle stalls of the vanilla towns (or `--town`s) and the whole map into a Lua table at `--out`, for a mod's loot report; its docstring has the formats it reads. |
+| `lib/census.py` | Counts the rooms, container tiles by room and vehicle stalls of the vanilla towns and the whole map into a Lua table at `--out`, for a mod's loot report; its docstring has the formats it reads. |
 | `lib/art/`, `lib/blender.sh` | The art library a tile and item mod's `art/models` and `tools` build with: mesh and material helpers for its Blender builders, the tile, depth map and icon renderer, review sheet helpers, deterministic FBX export, the `.tiles` and texture pack writers, and the Blender invocation its `make.sh` sources ([art.md](art.md)). |
 | `java/ClickToStart.java` | Starts the client, presses "Click to start" on the loading screen, gives the asset loader more threads (`java/AssetLoading.java`), loads the tile depth maps early (`java/DepthMaps.java`) and in multiplayer sends every packet at once (`java/NetLatency.java`). |
 | `java/FastServer.java` | Starts the dedicated server of `--mp` and `validate-server.sh` with the same wider asset loader, sending every packet at once. |
-| `mod/42/` | The harness mod (`cf_test_harness`): `client/PZHarness/Runner.lua`, which registers the mod and starts its modes, `Run.lua`, the files the run script and the game talk through and `PZHarness.run`, `Schedule.lua`, which runs the tests one after another, `Report.lua`, every result line and the counts of `DONE`, `Stay.lua`, the reruns of a game kept by `--stay`, `Multiplayer.lua`, the `--mp` client's join, `TestLib.lua`, `ServerCalls.lua` and `Leaks.lua`, the leak check between tests, `Trace.lua`, what a `TRACE=1` run records, `Capture.lua`, the steps and shots of [capture modes](#capture-modes), `Stage.lua` and `StageLots.lua`, their [staging](#staging), and `QA.lua`, the setup of [QA scenarios](#qa-scenarios); `server/PZHarness/ServerHandlers.lua`, the server's half of the tests' server channel, `ServerFixtures.lua`, the server's half of the two-sided fixtures, `ServerChecks.lua`, of server checks and [reads](#the-test-library) of what the character carries, and `ServerLearning.lua`, of [recipe learning](#the-test-library); `shared/PZHarness/Fixtures.lua`, what both halves do, `Checks.lua`, expectations for server handlers, `Loot.lua`, the loot tables and rolls of [loot checks and reports](#loot), and `Snapshot.lua`, what the leak check reads on each side. |
+| `mod/42/` | The harness mod (`cf_test_harness`): `client/PZHarness/Runner.lua`, which registers the mod and starts its modes, `Run.lua`, the files the run script and the game talk through and `PZHarness.run`, `Schedule.lua`, which runs the tests one after another and sums up the run, `Report.lua`, the verdict lines and the failures that come after them, `Stay.lua`, the reruns of a game kept by `--stay`, `Multiplayer.lua`, the `--mp` client's join, `TestLib.lua`, `ServerCalls.lua` and `Leaks.lua`, the leak check between tests, `Trace.lua`, what a `TRACE=1` run records, `Capture.lua`, the steps and shots of [capture modes](#capture-modes), `Stage.lua` and `StageLots.lua`, their [staging](#staging), and `QA.lua`, the setup of [QA scenarios](#qa-scenarios); `server/PZHarness/ServerHandlers.lua`, the server's half of the tests' server channel, `ServerFixtures.lua`, the server's half of the two-sided fixtures, `ServerChecks.lua`, of server checks and [reads](#the-test-library) of what the character carries, and `ServerLearning.lua`, of [recipe learning](#the-test-library); `shared/PZHarness/Fixtures.lua`, what both halves do, `Checks.lua`, expectations for server handlers, `Loot.lua`, the loot tables and rolls of [loot checks and reports](#loot), and `Snapshot.lua`, what the leak check reads on each side. |
 
 ## Adopting it
 
@@ -49,7 +49,6 @@ Sourced bash. Paths are relative to the repository. The mod's id and name come f
 | `MODE_GROUPS_<mode>` | Optional: the groups a [capture mode](#capture-modes) shoots, space-separated, in the order a run takes them. The selection may name only these, or the run fails before the game starts and lists them; the handler gets the named ones, or every group if the selection names none, comma-separated in this order, and all of them as `PZHarness.run.groups`, so a group of the handler's own that the conf lacks fails the run (`Stage.runGroups`) rather than go unshot. |
 | `MODE_CAPTURES_<mode>` | Optional: the folder, such as `art/promo/captures`, that a [capture mode](#capture-modes)'s shots are cropped into after a run that finished cleanly. |
 | `TEST_MAP` | Optional: a bash array of `'<glob>=<prefix>,<prefix>'` entries for `--test --changed` and for the `suspects` lines after a failure ([running.md](running.md#choosing-tests)). Each glob is matched against paths relative to the repository, `*` crossing `/`; every entry a file matches adds its test name prefixes (`=<name>` for one test exactly), and an empty list (`'<glob>='`) adds none. A dev mod Lua file whose name has `Tests` registers tests and selects them itself (`@<file>`; `T.test` records each test's file), and a harness mod file reaches every test, so neither needs an entry; a line for a harness file narrows it, as for a feature module only some tests load. Every other file under the mod and the dev mod needs an entry, and every glob must match a file of those or the harness mod: `dev/static-check.sh` and `--changed` fail otherwise, naming each file without a line and each glob that matches none, so a new or renamed file shows up in the map at once. A file every test depends on names the mod's test prefix, the `prefix` it registers, which selects every test; files elsewhere, such as docs and art, reach no test and take no entry. The runner fails an entry that names no test. `lib/tests.py` owns the map. |
-| `PRECHECK` | Optional: a bash array, the command every game run of the harness runs first from the repository; `(dev/static-check.sh)` ([static-check.md](static-check.md)) when the mod has that script, and `PRECHECK=()` runs none. If it fails, no game starts. |
 | `CHECK_PLUGINS` | Optional: a bash array of Python files with the mod's own static check rules ([static-check.md](static-check.md#plugins)). |
 | `CHECK_ALL_LANGUAGES` | Optional: set to make the static check fail on any language the game offers that lacks a translation file or key English has. |
 | `QUIET_WORLD` | Optional: a bash array of `Key=value` sandbox options that make a `--test` world quiet, replacing the harness's list ([running.md](running.md#a-quiet-world)); `QUIET_WORLD=()` keeps the world's own population. |
@@ -62,14 +61,13 @@ Sourced bash. Paths are relative to the repository. The mod's id and name come f
 | `WORKSHOP_GALLERY` | Optional: the folder of gallery images [`dev/workshop-gallery.sh --upload`](workshop-page.md#the-gallery) puts on the Workshop item; `art/promo/gallery` by default. |
 | `REVIEW_DOCS` | Optional: a bash array of the Markdown files `dev/review.sh` renders, such as `(README.md docs/player-guide.md)`; the first is also printed to a PDF. `(README.md)` by default. |
 
-Hooks, bash functions the conf may define:
+A hook, a bash function the conf may define:
 
 | Hook | When it runs |
 | --- | --- |
-| `harness_after_<mode>` | After a run of the mode that finished cleanly, instead of the harness's own ending: with `MODE_CAPTURES_<mode>`, `lib/capture.py` crops the shots into that folder and the run prints `PASS: captures are in <folder>`; for a mode that saved `<mode>_*.png` screenshots, `PASS: screenshots are in <folder>`; else `PASS`. Define it for more, such as captures of the mod's own. |
 | `harness_server_setup` | After a server's `$CACHE/Server/$SERVER_NAME.ini` is written: in `validate-server.sh`, and for the server of `--mp`, whose sandbox then gets `Zombies = 6` and the `QUIET_WORLD` and `TEST_SANDBOX` options it doesn't set appended; add files such as `${SERVER_NAME}_SandboxVars.lua`. `$MP` is `1` for the `--mp` server. |
 
-Hooks can read `$REPO`, `$CACHE`, `$MOD_DIR`, `$DEV_MOD_DIR` (absolute by then), `$MODE` and `$MP`;
+The hook can read `$REPO`, `$CACHE`, `$MOD_DIR`, `$DEV_MOD_DIR` (absolute by then), `$MODE` and `$MP`;
 in `validate-server.sh` both are empty.
 
 ### Entry points
@@ -139,7 +137,7 @@ PZHarness.register({
 The test library's settings and hooks go in a file of the dev mod's shared Lua, since a
 multiplayer server loads no client Lua and both sides read the same registration: in single player
 a fixture placed through the server channel (`placeTile`, `placeBench`, `placeVehicle`) and one
-placed directly (`tile`, `bench`, `track`) are removed by the same `remove`.
+placed directly (`track`) are removed by the same `remove`.
 
 ```lua
 -- <DEV_MOD_DIR>/42/media/lua/shared/MyMod/Debug/MyModTestSettings.lua
@@ -224,7 +222,7 @@ require "PZHarness/TestMenus" -- each library module its tests use ("The test li
 MyModTest = setmetatable({}, { __index = PZHarness.Test })
 local T = MyModTest
 
-function T.gadget(self, square) return T.tile(self, square, "mymod_01_0") end
+function T.gadget(self, square) return T.placeTile(self, square, "mymod_01_0") end
 ```
 
 Test files register tests with `T.test(name, spec)`; `PZHarness/TestLib.lua` explains the spec,
@@ -285,7 +283,7 @@ once the global object systems exist. For `setup`:
   item type and the fluid it holds, sorted by display category and type, plus the inputs no item
   meets. Each input is `inputItem`'s pick, `inputCount` of it, so drainables count by their uses;
   `kept` is the most of a kept tool one recipe needs, `used` the sum of what all use up.
-- `isKnown(fullType)`, `newItem(fullType, fluid)` (its fluid container full of `fluid`; nil for a
+- `newItem(fullType, fluid)` (its fluid container full of `fluid`; nil for a
   type the game lacks), and `buildAsPlayer(player, sprite, nSprite, x, y, z)`, which builds the
   build menu entity of the tile `sprite` there as the build menu does (`ISBuildIsoEntity:create`),
   turned by the cursor's rotation `nSprite`, the build cheat standing in for materials and the job;
@@ -334,18 +332,18 @@ what it does, so read those rather than a list here:
 
 | Module | What it has |
 | --- | --- |
-| `PZHarness/TestLib.lua` | Registering (`test`; its spec's `hour`, `instant`, `sandbox`, `spOnly` or `mpOnly`, `timeoutSeconds`), expectations and `need`, the restore stack (`defer`, `onTick`), the two-sided setters (`setTime`, `setPerk`, `setSandbox`, `setMultiplier`, `setGrid`, `setMechanicsCheat`, `makeDark`, `changeItem`; `twoSided(name)` is the setter of a fixture registered with `PZHarness.twoSided`, see [two-sided fixtures](multiplayer.md#two-sided-fixtures)), the server's copy of the character (`setStat`, `takeItems`, `needActionTime`) and its rolls (`forceRoll`, `UNDER`). Its header has the rules that keep each test independent of the ones before it. |
+| `PZHarness/TestLib.lua` | Registering (`test`; its spec's `hour`, `instant`, `sandbox`, `spOnly` or `mpOnly`, `timeoutSeconds`), expectations and `need`, the restore stack (`defer`, `onTick`), the two-sided setters (`setTime`, `setPerk`, `setSandbox`, `setMultiplier`, `setGrid`, `setMechanicsCheat`, `makeDark`, `changeItem`; see [two-sided fixtures](multiplayer.md#two-sided-fixtures)), the server's copy of the character (`setStat`, `takeItems`) and its rolls (`forceRoll`, `UNDER`). Its header has the rules that keep each test independent of the ones before it. |
 | `PZHarness/TestRuntime.lua` | Loaded by `TestLib.lua`: the queue (`wait`, `waitUntil`, `waitFor`, `waitForLight`, `step`, `describeAction`) and the server channel (`server`, `serverUntil`, `give`, `count`, `batch`; [multiplayer.md](multiplayer.md#the-server-channel)). |
-| `PZHarness/TestWorld.lua` | Squares and handles (`squares`, `square`, `where`, `at`, `copyOf`), fixtures placed by the server or by the character as a player does, this game's own fixtures, what the test leaves on a square (`trackSquare`), floor items and floors (`floorItem`, `takeFloorItems`, `floorAbove`, `ringOfTiles`, `readModData`), the server's world updates (`waitForFrameAfter`), vehicles, and walking and jobs (`standNextTo`, `goNextTo`, `walkTo`, `doJob`). |
+| `PZHarness/TestWorld.lua` | Squares and handles (`squares`, `square`, `where`, `at`, `copyOf`), fixtures placed by the server or by the character as a player does, this game's own (`track`), what the test leaves on a square (`trackSquare`), floor items and floors (`floorItem`, `takeFloorItems`, `floorAbove`, `ringOfTiles`), vehicles, and walking and jobs (`standNextTo`, `goNextTo`, `walkTo`, `doJob`). The server handlers `PZHarness.objectModData` and `PZHarness.worldFrame` (`ServerFixtures.lua`) take `read` and `serverUntil` directly. |
 | `PZHarness/TestLearning.lua`, `server/PZHarness/ServerLearning.lua` | Recipe names, knowing and forgetting recipes on both sides, recipe skills, level ups as the game awards them, and the AutoLearn tests (`autoLearnTests`). |
 | `PZHarness/TestCraft.lua` | Recipe inputs (`inputItem`, `inputCount`, `recipeInputs`), work tables, crafting through the game's menus (`startCraft`, `craft`) and `craftTest`; requires `TestWorld` and `TestLearning`. |
 | `PZHarness/TestBuild.lua` | Building from the build menu (`buildEntry`, `placeable`, `buildSite`, `build`, which tracks its square); requires `TestCraft`. |
 | `PZHarness/TestMenus.lua` | Context menus: building, finding, reading, noting and choosing options; tooltip text laid out (`runTogether`); requires `TestWorld`. |
 | `PZHarness/TestReads.lua`, `server/PZHarness/ServerChecks.lua` | Reads kept on the test (`read`, `readUntil`, `findIn`), server checks (`expectNoFailures`, `serverCheck`), the server's copy of the character (`readCharacter`, `xpAward`), and what the character carries on either side. |
-| `PZHarness/TestRecords.lua`, `server/PZHarness/ServerRecords.lua` | The record kit, for the kinds of the `records` setting: `placeRecord`, `setRecord`, `fillRecord`, `ageRecord`, `readRecord`, `reloadRecord`, `onRecord`, `recordSummary`, `waitForSummary`; `PZHarness.Records` for a dev mod's handlers (`at`, `set`, `age`, `read`, `track`). |
+| `PZHarness/TestRecords.lua`, `server/PZHarness/ServerRecords.lua` | The record kit, for the kinds of the `records` setting: `placeRecord`, `setRecord`, `fillRecord`, `ageRecord`, `readRecord`, `reloadRecord`, `onRecord`, `recordSummary`, `waitForSummary`; `PZHarness.Records` for a dev mod's handlers (`at`, `set`, `read`, `track`). |
 | `PZHarness/TestJobs.lua`, `server/PZHarness/ServerJobs.lua` | The job kit, for the `jobAction` setting's class: `job` (with reads before and after in the same call), `expectOk`, `expectRefused`. |
 | `PZHarness/TestChunks.lua` | Trips away: chunk reload trips (`reloadChunk`) and visits to far places (`startVisits`, `visitUntil`, `returnHome`). |
-| `shared/PZHarness/Fixtures.lua` | What both sides do, for a dev mod's server handlers too: lookups (`squareAt`, `overlaysOf`, `fieldsOf`, `ring`, `buildingNear`, `worldItems`, `newSince`, `teleportToMiddle`), building and removing (`newTile`, `newBench`, `removePlaced`, `looksOn`, `removeNewOn`, `releaseGeneratorPower`), and undoing (`deferOnce`, `replace`, `saveOptions`). `server/PZHarness/ServerFixtures.lua` adds the handlers' `PZHarness.squareAt`, `vehicleAt`, `squareFor` and `trackSquare`, `ServerHandlers.lua` `PZHarness.readsAround`. |
+| `shared/PZHarness/Fixtures.lua` | What both sides do, for a dev mod's server handlers too: lookups (`squareAt`, `overlaysOf`, `fieldsOf`, `ring`, `buildingNear`, `worldItems`, `newSince`, `teleportToMiddle`), building and removing (`newTile`, `newBench`, `removePlaced`, `releaseGeneratorPower`), and undoing (`deferOnce`, `replace`, `saveOptions`). `server/PZHarness/ServerFixtures.lua` adds the handlers' `PZHarness.squareAt`, `vehicleAt`, `squareFor` and `trackSquare`, `ServerHandlers.lua` `PZHarness.readsAround`. |
 | `shared/PZHarness/Rolls.lua` | Setting the `chance` setting's rolls in a server handler: `PZHarness.Rolls.force`, `with`, `eachTrial`, `trialRoll`, `UNDER`. |
 
 The runner (`PZHarness/Schedule.lua`) fails a test still busy after 30 seconds of real time with
@@ -458,9 +456,6 @@ that crop as `promo.json`'s `models`. A run that shot no models keeps the last b
 capture.py prints `extract: no capture <name>.png` for each icon the catalog's items and recipes
 name, and with `models` each item's model, that no run has made.
 
-A mod with captures of its own defines `harness_after_<mode>` to run its own script, which imports
-`Extraction` from it, saves its images with `save(image, group, name)` and calls `finish()`.
-
 ### Staging
 
 `PZHarness.Stage`, from `PZHarness/Stage.lua`, holds what staging a world shot takes, and
@@ -544,10 +539,9 @@ Stage.runGroups(run, selection, {
   item at once so their models load, and shoots the bare floor (`models_floor`) and each item
   alone on it, turned `STUDIO.rotation`, at the closest zoom, adding each to `models` (the data's
   `models` list, see above).
-- Dressing: `dress(player, look)` sets `female`, `hair`, `beard` ("" for none) and `hairColour` if
-  given, and with `clothes` (full types, made once per look) or `ownClothes` (what the character
-  wore before a look first changed it) wears only those and holds `weapon` (made once) or nothing;
-  `addOutfit(run, player, look)` adds it as a step.
+- Dressing: `dress(player, look)` with `hair` sets `female`, that hair, no beard and `hairColour`
+  if given, and with `clothes` (full types, made once per look) or `ownClothes` (what the character
+  wore before a look first changed it) wears only those and holds `weapon` (made once) or nothing.
 - Tiles and clearing: `placeTile(square, sprite, modData)` places a tile at once on this side, as
   `PZHarness.Fixtures.newTile` does, and recalculates its neighbours so it draws (nothing removes
   it, unlike a test's `T.placeTile`); `clearToFloor(square, keeps)` takes every object but the

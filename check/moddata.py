@@ -1,9 +1,6 @@
 """What the static check reads from a mod, and what a mod's own checks (plugins) build on.
 
-check.py builds a Mod from the mod's roots and runs every check registered with @check against it,
-the rule modules' (rules_*.py, tiles.py) and then each plugin's. Each check is a function under the
-name docs/static-check.md lists it by.
-
+Each check is a function registered with @check, under the name docs/static-check.md lists it by.
 A plugin is a Python file a mod's dev/harness.conf names in CHECK_PLUGINS. It imports this module,
 registers its own checks with @check, and may use the lookups below.
 """

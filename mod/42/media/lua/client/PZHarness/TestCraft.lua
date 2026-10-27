@@ -79,16 +79,6 @@ function T.recipeInputs(recipe, prefer)
     return items, unmatched
 end
 
---- Adds T.recipeInputs to this game's inventory at once; returns the inputs that had no possible
---- item. A multiplayer server doesn't get them: give them with T.give instead.
-function T.addRecipeInputs(player, recipe, prefer)
-    local items, unmatched = T.recipeInputs(recipe, prefer)
-    for _, item in ipairs(items) do
-        player:getInventory():AddItems(item.type, item.count)
-    end
-    return unmatched
-end
-
 --- AnySurfaceCraft recipes need a table the character can walk to. Puts one on a free square next
 --- to the character, with no wall in between, unless one is there already
 --- (PZHarness.Fixtures.placeWorkTable). Not undone: scenarios call it too, and a table left
@@ -114,7 +104,7 @@ end
 -- Crafting
 
 -- The crafting logic the game starts `recipe` from the item `from` with: the right-click menu's,
--- with a table in reach as the surface, or with `bench` (from T.bench) the bench window's.
+-- with a table in reach as the surface, or with `bench` (T.placeBench's) the bench window's.
 local function craftLogic(recipe, from, bench)
     local p = T.player()
     local logic
@@ -224,7 +214,7 @@ local function watchCrafts(self, recipe, start)
 end
 
 --- Starts crafting `recipe` from the item `from` the way the right-click menu does or, with
---- `bench` (from T.bench), the way the bench's crafting window does. Adds why the game refused
+--- `bench` (T.placeBench's), the way the bench's crafting window does. Adds why the game refused
 --- to `self.refusal`, which the test's failures then end with.
 function T.startCraft(self, recipe, from, bench)
     local refusal = T.craftRefusal(recipe, from, bench)

@@ -10,8 +10,6 @@ MODE_CAPTURES_<mode> (docs/adopting.md, "Capture modes"); by hand:
 
     dev/harness/lib/capture.py <cache dir> <mark> <captures dir>
 
-A mod that makes more captures of its own imports this module and adds them before finish().
-
 Only the captures of the groups the run shot are replaced; promo.json lists each group's captures,
 so that a rerun of a group also removes the ones it no longer makes.
 

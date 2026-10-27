@@ -1,6 +1,4 @@
--- Development only, not published. With --stay the game stays open after its test run and reruns
--- the tests for every request run-client.sh writes (Run.readRequest), until STAY_IDLE_MS pass
--- without one.
+-- Development only, not published. The reruns of a game --stay keeps open after its test run.
 
 require "ISUI/ISUIElement"
 require "PZHarness/ServerCalls"
@@ -27,10 +25,10 @@ function IdleNote:render()
     self:drawText(IDLE_TEXT, 0, 0, 1, 1, 0.4, 1, UIFont.Large)
 end
 
---- Waits for rerun requests, after a test run. For each one: forgets the mod's tests, loads the
---- request's files again, takes its options and runs its selection. reloadLuaFile ignores a file's
---- Events.*.Add calls (LuaCompiler.rewriteEvents), which suits test files. With --mp the server
---- loads its files again first.
+--- Reruns the tests for every request run-client.sh writes (Run.readRequest) until STAY_IDLE_MS
+--- pass without one. reloadLuaFile ignores a file's Events.*.Add calls (LuaCompiler.rewriteEvents),
+--- which suits test files. The mod's tests are unregistered first so renamed or deleted ones don't
+--- run again. With --mp the server loads its files again first.
 function Stay.serve()
     local performance = getPerformance()
     local fps, uncapped = performance:getFramerate(), performance:isFramerateUncapped()
@@ -69,7 +67,16 @@ function Stay.serve()
         performance:setFramerateUncapped(uncapped)
         print(run.tag .. " RUN " .. request.id)
         local function rerun()
-            Schedule.unregisterTests()
+            local tests = TimedActionTests.getTests()
+            local registered = {}
+            for name in pairs(tests) do
+                if luautils.stringStarts(name, PZHarness.config.prefix) then
+                    table.insert(registered, name)
+                end
+            end
+            for _, name in ipairs(registered) do
+                tests[name] = nil
+            end
             for _, file in ipairs(request.files) do
                 reloadLuaFile(file)
             end

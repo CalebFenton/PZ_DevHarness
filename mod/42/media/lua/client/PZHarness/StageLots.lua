@@ -1,7 +1,5 @@
--- Development only, not published. Lots and places for capture modes (docs/adopting.md, "Staging"):
--- telling open ground, finding lots and places near the character, their squares, placing tiles on
--- them so they draw at once, clearing them, and the item model shots on a found floor. It adds to
--- PZHarness.Stage (PZHarness/Stage.lua).
+-- Development only, not published. Lots and places for capture modes (docs/adopting.md,
+-- "Staging"). It adds to PZHarness.Stage (PZHarness/Stage.lua).
 
 require "PZHarness/Fixtures"
 local Stage = require "PZHarness/Stage"
@@ -234,7 +232,7 @@ end
 function Stage.closestPlace(player, frames, fits, others, gap)
     for _, frame in ipairs(frames) do
         local best = Stage.closestSquare(player, function(origin)
-            return isApartFrom(origin, others or {}, gap or 0) and fits(Stage.place(origin, frame))
+            return isApartFrom(origin, others, gap) and fits(Stage.place(origin, frame))
         end)
         if best then
             return Stage.place(best, frame)
@@ -243,12 +241,11 @@ function Stage.closestPlace(player, frames, fits, others, gap)
     return nil
 end
 
---- Finds the places of `specs` that `needs` names, in the order of `specs`, each apart from those
---- found before it, and logs them in one line under `mark`. Returns them by name and their origins
---- in order, or nil and the `missing` of the first it can't find. A spec has a `name`, a `label`
---- for the log, what is `missing` when there is none, and either `frames` and `fits(place,
---- player)` (Stage.closestPlace, `gap` from those found), or `find(player, found)` returning the
---- place or nil, given the places found so far; `detail(place)` adds to its entry in the log.
+--- Finds the places of `specs` that `needs` names, in order, each apart from those found before
+--- it, and logs them in one line under `mark`. Returns them by name and their origins in order, or
+--- nil and the `missing` of the first it can't find. A spec has a `name`, a `label` for the log,
+--- what is `missing` without it, and either `frames` and `fits(place, player)` (Stage.closestPlace),
+--- or `find(player, found)`; `detail(place)` adds to its entry in the log.
 function Stage.findPlaces(player, specs, needs, mark, gap)
     local places, found, origins, logged = {}, {}, {}, {}
     for _, spec in ipairs(specs) do

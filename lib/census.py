@@ -4,11 +4,9 @@ map: every room, every container tile by the room it stands in, and every vehicl
 vehicle zone. Writes them to `--out` as a Lua table a mod's loot report can require and multiply by
 each container's, room's and vehicle's expected finds.
 
-    dev/harness/lib/census.py --out <file.lua> [--by <command>] [--town <name>=<x1>,<y1>,<x2>,<y2> ...]
-                              [PZ media folder]
+    dev/harness/lib/census.py --out <file.lua> [--by <command>] [PZ media folder]
 
-The towns default to TOWNS. The media folder defaults to the installed game's, which PZ_APP moves
-as in the harness's scripts. `--by` is the command the file's header tells a reader to rerun.
+The media folder defaults to the installed game's, which PZ_APP moves as in the harness's scripts.
 Rerun it after a game update changes the map. It reads the files IsoMetaGrid and IsoLot read:
 
 - <map>/<cx>_<cy>.lotheader: the cell's tile names, its levels and its rooms (check/lotheader.py).
@@ -286,19 +284,11 @@ def count_containers_by_cell(folder, types, town):
     return containers
 
 
-def parse_town(text):
-    """A --town argument, <name>=<x1>,<y1>,<x2>,<y2>, as a TOWNS entry."""
-    name, _, bounds = text.rpartition("=")
-    x1, y1, x2, y2 = map(int, bounds.split(","))
-    return (name, x1, y1, x2, y2)
-
-
 def main():
     parser = argparse.ArgumentParser(description="Counts the rooms, containers and vehicle stalls of the map's towns.")
     parser.add_argument("media", nargs="?", default=DEFAULT_MEDIA, help="the game's media folder")
     parser.add_argument("--out", required=True, help="the Lua file to write")
     parser.add_argument("--by", default="dev/harness/lib/census.py", help="the command the file says wrote it")
-    parser.add_argument("--town", type=parse_town, action="append", help="<name>=<x1>,<y1>,<x2>,<y2>; default TOWNS")
     args = parser.parse_args()
     folder = os.path.join(args.media, "maps", MAP)
     types = container_types(args.media)
@@ -308,7 +298,7 @@ def main():
            "-- container type, and its vehicle stalls by vehicle zone; the last is the whole map.",
            "return {",
            "    towns = {"]
-    for town in (args.town or TOWNS) + [whole_map(folder)]:
+    for town in TOWNS + [whole_map(folder)]:
         name, x1, y1, x2, y2 = town
         print("counting", name, file=sys.stderr)
         count = count_containers_by_cell if name == WHOLE_MAP else count_containers

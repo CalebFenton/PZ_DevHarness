@@ -46,20 +46,14 @@ function PZHarness.need(value, what)
     return value
 end
 
---- Runs the registered handler `name` inside the running one, with its `player` and `defer`, and
---- returns its answer: for reads a handler takes before and after its change in the same call, so
---- no tick comes between them (PZHarness.readsAround). Ends the running handler as missing a
---- handler that isn't registered.
-function Handlers.run(name, player, args, defer)
-    local handler = PZHarness.need(handlers[name], "the server handler " .. tostring(name))
-    return handler(player, args or {}, defer)
-end
-
--- Each read of `reads` ({ [label] = { name, args } }) by label (Handlers.run).
+-- Each read of `reads` ({ [label] = { name, args } }), run inside the running handler with its
+-- `player` and `defer`, by label. Ends the running handler as missing a handler that isn't
+-- registered.
 local function readAll(player, reads, defer)
     local answers = {}
     for label, read in pairs(reads or {}) do
-        answers[label] = Handlers.run(read.name, player, read.args, defer)
+        local handler = PZHarness.need(handlers[read.name], "the server handler " .. tostring(read.name))
+        answers[label] = handler(player, read.args or {}, defer)
     end
     return answers
 end

@@ -11,11 +11,6 @@ require "PZHarness/ServerFixtures"
 
 local handler, need = PZHarness.serverHandler, PZHarness.need
 
-local function actionClass()
-    local setting = PZHarness.testSettings.jobAction
-    return need(setting and setting(), "the jobAction test setting, the mod's job action class")
-end
-
 -- The target of `feature` on the square at `at`, or with `floor` the square's floor, which some
 -- features work at; nil, also while the square isn't loaded.
 local function targetAt(Action, feature, at, floor)
@@ -52,19 +47,13 @@ local function xpIn(player, perks)
     return xp
 end
 
--- T.job: the job `args.job` of the action's feature `args.feature` at its target on the square at
--- `args.at` (the target of the feature `args.targetOf` there if given, as for a job the action
--- must turn down; the square's floor with `args.floor`), with `args.with` (withOf), as the server's
--- character. `args.via` "job" (the default) does it as the action's complete() does once the
--- character is found at it (completeJob); "complete" builds the action as the server builds a
--- client's and runs its complete(), its keeps() and reach included; with `args.build` the action
--- is only built. A forged place with no target answers { ok = false, reason = "no <feature>" }, as
--- keeps() turns it down. Answers `ok`, else the `reason` the job module refuses it for as the
--- authority knows it after; `built`; the XP in the perks `args.xp` before and after (`xpBefore`,
--- `xpAfter`); and `args.reads` read before and after in the same call (PZHarness.readsAround), in
--- `before` and `after`.
+-- T.job, as the server's character. A forged place with no target answers { ok = false, reason =
+-- "no <feature>" }, as keeps() turns it down; a refused job's `reason` is the job module's as the
+-- authority knows it after.
 handler("PZHarness.job", function(player, args, defer)
-    local Action, feature, job = actionClass(), args.feature, args.job
+    local setting = PZHarness.testSettings.jobAction
+    local Action = need(setting and setting(), "the jobAction test setting, the mod's job action class")
+    local feature, job = args.feature, args.job
     local target = targetAt(Action, args.targetOf or feature, args.at, args.floor)
     if not target then
         return { ok = false, reason = "no " .. tostring(feature) }

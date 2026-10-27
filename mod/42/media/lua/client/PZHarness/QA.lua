@@ -59,11 +59,6 @@ function QA.setUpCharacter(player)
     QA.learnAllRecipes(player)
 end
 
---- Whether the game has an item script named `fullType`.
-function QA.isKnown(fullType)
-    return getScriptManager():FindItem(fullType) ~= nil
-end
-
 --- Every item script of the script module `module` by full type, sorted, so what is laid out or
 --- checked from it comes out the same each run.
 function QA.itemsOfModule(module)
@@ -154,25 +149,21 @@ function QA.materials(names, prefer)
     return order, unmatched
 end
 
---- A summary for QA.packToolboxes and QA.layGroups to count into, and QA.printSummary to print:
---- `tools` packed in `boxes` toolboxes, of the types `toolboxes` lists; `items` of `types` laid
---- in `groups`; and the types the game lacks (`unknown`) and those no square was left for
---- (`unplaced`).
+--- A summary for QA.packToolboxes and QA.layGroups to count into, and QA.printSummary to print.
 function QA.newSummary()
     return { types = 0, items = 0, groups = 0, tools = 0, boxes = 0, toolboxes = {}, unknown = {}, unplaced = {} }
 end
 
--- Kept tools go in vanilla toolboxes. A kept item goes in only if vanilla files it as a tool and it
--- fits a toolbox's MaxItemSize, which keeps the toolboxes few enough to hold: the crafting window
--- takes items only from the bags the character holds or wears (ISInventoryPage:refreshBackpacks).
+-- A kept item goes in a toolbox only if vanilla files it as a tool and it fits a toolbox's
+-- MaxItemSize, which keeps the toolboxes few enough to hold: the crafting window takes items only
+-- from the bags the character holds or wears (ISInventoryPage:refreshBackpacks).
 local TOOLBOX = "Base.Toolbox"
 
---- Puts the kept vanilla tools of `stock` (a list of { type, used, kept }, as QA.materials gives)
---- in toolboxes in `player`'s inventory, starting a new one when the last has no room, the first
---- two in the hands, and counts them into `summary` (QA.newSummary). Room is counted with no
---- character, by the toolbox's own capacity, which the Organized and Disorganized traits would
---- change (ItemContainer.getEffectiveCapacity), so every character gets the same toolboxes. A kept
---- item that doesn't go in is added to its entry's `used`, what is left to lay out.
+--- Puts the kept vanilla tools of `stock` (QA.materials entries) in toolboxes in `player`'s
+--- inventory, the first two in the hands. Room is counted with no character, by the toolbox's own
+--- capacity, which the Organized and Disorganized traits would change
+--- (ItemContainer.getEffectiveCapacity), so every character gets the same toolboxes. A kept item
+--- that doesn't go in is added to its entry's `used`, what is left to lay out.
 function QA.packToolboxes(player, stock, summary)
     local boxes, container = {}, nil
     local maxSize = instanceItem(TOOLBOX):getMaxItemSize()
@@ -207,8 +198,7 @@ end
 local Layout = {}
 Layout.__index = Layout
 
---- The layout's next square `accepts` takes, cleared of ground cover so what lies there shows; nil
---- once the layout has taken `maxRows` rows.
+--- The layout's next square, cleared of ground cover; nil once it has taken `maxRows` rows.
 function Layout:nextSquare()
     while self.row < self.maxRows do
         local square = getCell():getGridSquare(self.x + self.column, self.y + self.row, self.z)
@@ -230,9 +220,8 @@ function Layout:nextGroup()
     self.column = 0
 end
 
---- The first square of the layout's next run of `length` squares east along the world that
---- `accepts` takes, with the layout moved past the run's other squares so nothing is laid on them;
---- nil if none is left.
+--- The first square of the layout's next run of `length` squares east, with the layout moved past
+--- the run; nil if none is left.
 function Layout:nextRun(length)
     local first
     repeat
@@ -244,8 +233,8 @@ function Layout:nextRun(length)
     return first
 end
 
---- The west square of the layout's next whole row that `accepts` takes, past an empty row, with the
---- layout moved past that row; nil if none is left.
+--- The west square of the layout's next whole row, past an empty row, with the layout moved past
+--- it; nil if none is left.
 function Layout:nextOpenRow()
     self:nextGroup()
     while self.row < self.maxRows do
@@ -261,7 +250,7 @@ end
 
 -- Lays `entry`'s items on the layout's next square, scattered over it so they show.
 local function lay(layout, summary, entry, newItem)
-    if not QA.isKnown(entry.type) then
+    if not getScriptManager():FindItem(entry.type) then
         table.insert(summary.unknown, entry.type)
         return
     end
@@ -287,15 +276,9 @@ end
 
 --- Lays out `groups`, a list of { name, items }, in order from the square `origin` in rows `width`
 --- squares wide running south, each group from a row of its own with an empty row before it, a
---- square to each item of `items`: { type, count, fluid }, `count` items of `type` filled with the
---- Fluid `fluid` if given. Counts into `summary` (QA.newSummary). `opts`:
---- - maxRows: the most rows the layout takes;
---- - accepts(square), if any: whether an item may lie on `square` (nil where none is loaded),
----   else any loaded square; the layout skips the others;
---- - after, if any: { [name] = fn(layout, summary) }, what a group sets after its items, with the
----   layout's nextSquare(), nextRun(length) and nextOpenRow(), and `width`; a group with no items
----   is laid only for this;
---- - newItem(entry), if any: the item to lay for `entry`, else QA.newItem(type, fluid).
+--- square to each item { type, count, fluid }. `opts`: `maxRows`; `accepts(square)` (nil where
+--- none is loaded), else any loaded square; `after[name](layout, summary)`, what a group sets after
+--- its items; `newItem(entry)`, else QA.newItem(type, fluid).
 function QA.layGroups(origin, width, groups, summary, opts)
     local after, newItem = opts.after or {}, opts.newItem or newItemOf
     local layout = setmetatable({ x = origin:getX(), y = origin:getY(), z = origin:getZ(), column = 0, row = 0,

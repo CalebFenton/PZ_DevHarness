@@ -1,5 +1,4 @@
 require "Tests/TimedActionsTests"
-require "PZHarness/Run"
 require "PZHarness/Fixtures"
 require "PZHarness/Checks"
 require "PZHarness/Rolls"
@@ -92,26 +91,23 @@ function T.onTick(self, fn)
     T.defer(self, function() Events.OnTick.Remove(fn) end)
 end
 
---- The client setter of the two-sided fixture `name` (PZHarness.twoSided): `setter(self, args,
---- onReply)` changes this game's copy at once and, on a multiplayer client, the server's copy too
---- (Runtime.alsoOnServer), with `onReply` called on the server's answer; each side undoes its
---- change when the test ends. Returns false, the fixture recorded as missing (T.need), if it
---- couldn't be made here.
-function T.twoSided(name)
+-- The client setter of the two-sided fixture `name` (Fixtures.TWO_SIDED): `setter(self, args,
+-- onReply)` changes this game's copy at once and, on a multiplayer client, the server's copy too
+-- (Runtime.alsoOnServer), with `onReply` called on the server's answer; each side undoes its
+-- change when the test ends. A fixture that can't be made here is recorded as missing (T.need).
+local function twoSided(name)
     return function(self, args, onReply)
         local undo, missing = PZHarness.Fixtures.TWO_SIDED[name](T.player(), args)
-        if not T.need(self, undo, missing) then
-            return false
+        if T.need(self, undo, missing) then
+            T.defer(self, undo)
+            Runtime.alsoOnServer(self, "PZHarness." .. name, args, onReply)
         end
-        T.defer(self, undo)
-        Runtime.alsoOnServer(self, "PZHarness." .. name, args, onReply)
-        return true
     end
 end
 
-local setTime, setPerk, setSandbox = T.twoSided("setTime"), T.twoSided("setPerk"), T.twoSided("setSandbox")
-local setMultiplier, setMechanicsCheat = T.twoSided("setMultiplier"), T.twoSided("setMechanicsCheat")
-local setGrid, setInstant = T.twoSided("setGrid"), T.twoSided("setInstant")
+local setTime, setPerk, setSandbox = twoSided("setTime"), twoSided("setPerk"), twoSided("setSandbox")
+local setMultiplier, setMechanicsCheat = twoSided("setMultiplier"), twoSided("setMechanicsCheat")
+local setGrid, setInstant = twoSided("setGrid"), twoSided("setInstant")
 
 function T.setTime(self, hour)
     setTime(self, { hour = hour }, function()
@@ -195,12 +191,6 @@ end
 function T.changeItem(self, item, changes)
     PZHarness.Fixtures.changeItem(item, changes)
     Runtime.alsoOnServer(self, "PZHarness.changeItem", { id = item:getID(), changes = changes })
-end
-
---- Fails the test unless timed actions take their time, for a test that times one.
-function T.needActionTime(self)
-    return T.need(self, not T.player():isTimedActionInstant(),
-        "the debug option Cheats > Timed Action > Instant off, which makes every action instant")
 end
 
 --- Queues the authority's copy of the character's stat `stat` (a CharacterStat field name) at
@@ -336,7 +326,7 @@ local function validateEntry(entry, name, spec, problem)
     Runtime.finish(self, failures)
     entry.seconds = self.startedMs and (getTimestampMs() - self.startedMs) / 1000 or 0
     entry.failures = failures
-    if not Report.runnerOwnsVerdicts() then
+    if not Report.runnerOwnsVerdicts then
         Report.verdict(name, failures, entry.seconds)
     end
     return #failures == 0

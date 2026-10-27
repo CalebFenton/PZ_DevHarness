@@ -179,9 +179,8 @@ than a test failed. A `TRACE=1` run always runs: its timings differ from run to 
 
 ### Checks before a run
 
-The conf's `PRECHECK` ([adopting.md](adopting.md#devharnessconf)) runs before every harness game,
-`validate-server.sh` too, and no game starts if it fails. By default it is the mod's
-`dev/static-check.sh` ([static-check.md](static-check.md)).
+The mod's `dev/static-check.sh` ([static-check.md](static-check.md)) runs before every harness
+game, `validate-server.sh` too, and no game starts if it fails.
 
 ## Where the time goes
 

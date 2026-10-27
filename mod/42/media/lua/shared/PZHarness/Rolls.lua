@@ -19,6 +19,10 @@ local function chance()
     return PZHarness.need(setting and setting(), "the chance test setting, the mod's roll module")
 end
 
+-- The game's roll, kept while a test sets its own; and the rolls tests set, so that setting one
+-- over another still keeps the game's.
+local gameRoll, setRolls = nil, {}
+
 --- Sets what the mod's roll gives until the test ends: `rolls` a number, every roll; or a list, the
 --- next rolls in order, and an error once they run out, so a draw the test didn't expect shows. The
 --- error puts the game's roll back first, so the draws after it, a pass's or a tick's, roll as
@@ -26,15 +30,19 @@ end
 --- In a server handler.
 function Rolls.force(defer, rolls)
     local module = chance()
+    if not setRolls[module.roll] then
+        gameRoll = module.roll
+    end
     local drawn = 0
     local roll = type(rolls) == "number" and function() return rolls end or function()
         drawn = drawn + 1
         if rolls[drawn] == nil then
-            module.roll = Fixtures.original(module, "roll")
+            module.roll = gameRoll
             error("a roll past the " .. #rolls .. " the test set")
         end
         return rolls[drawn]
     end
+    setRolls[roll] = true
     return Fixtures.replace(defer, module, "roll", roll)
 end
 

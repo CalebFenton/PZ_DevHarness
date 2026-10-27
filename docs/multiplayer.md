@@ -100,12 +100,10 @@ player behaves as before:
   multiplayer client takes back the server's levels, not its own: the server's perk sync can leave
   this client's a level behind for up to a second, and a stale level put back after every test
   would outlast the syncs. Each side calls the dev mod's `sandboxChanged` setting after its own
-  copy of an option changes. Such a setter is written once: `PZHarness.twoSided(name, apply)`, in
-  shared Lua (`shared/PZHarness/Fixtures.lua` registers the library's own), takes
-  `apply(player, args)`, which changes one side's copy and returns its undo, or nil and what is
-  missing; `ServerFixtures.lua` serves it as the handler `PZHarness.<name>`, and
-  `T.twoSided(name)` is the client's setter `(self, args, onReply)`, which a dev mod can use for
-  a two-sided fixture of its own.
+  copy of an option changes. Each such setter is an entry of `PZHarness.Fixtures.TWO_SIDED`
+  (`shared/PZHarness/Fixtures.lua`), `apply(player, args)`, which changes one side's copy and
+  returns its undo, or nil and what is missing; `ServerFixtures.lua` serves it as the handler
+  `PZHarness.<name>`, and `TestLib.lua` makes its client setter.
   A client lights its squares with the daylight the server sends it, which the server does only
   every ten game minutes, so the server's `setTime` (and its undo) makes its next climate tick
   send it; `makeDark` then waits, up to 10 seconds, for this client's light to follow.
@@ -138,7 +136,7 @@ player behaves as before:
   its squares powered here: the switch-off names it by its place on the square and misses.
   `T.setGrid(self, false)` and a dev mod's generator fixture clear such power with
   `PZHarness.Fixtures.releaseGeneratorPower(x, y, z, going)`.
-  `T.placeWorkTable`, `T.learnRecipes` and `T.forgetRecipes` work outside tests too, as in a
+  `T.placeWorkTable` and `T.learnRecipes` work outside tests too, as in a
   scenario's onStart; `PZHarness.ServerCalls.callOutsideTest(name, args, onReply)` calls any
   handler there.
 - Records and jobs: the record kit (`TestRecords.lua`, `ServerRecords.lua`) places, sets, fills,
@@ -172,7 +170,7 @@ player behaves as before:
 - Client Lua runs on the client only: setting `SandboxVars`, the clock, the game speed or the grid
   directly changes the client's copy, which the server overwrites or ignores; use the setters
   above. The server's own sandbox at start comes from `harness_server_setup`.
-- Objects a client places with `AddTileObject` (`T.tile`, `T.bench`) exist on that client only,
+- Objects a client places with `AddTileObject` exist on that client only,
   and items it adds to the inventory aren't on the server: a timed action with `complete()` runs on
   the server, which can't find them. `ActionManager.sendAction` then logs "Unable to resolve
   container location", which fails the run. Use the two-sided fixtures or a server handler.

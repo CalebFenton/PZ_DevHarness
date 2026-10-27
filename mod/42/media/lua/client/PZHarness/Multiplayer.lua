@@ -1,6 +1,5 @@
 -- Development only, not published. With --mp the client joins the dedicated server run-client.sh
--- started, as its admin, instead of starting the scenario; this takes it from the main menu to the
--- scenario's start with the onStart setup copied to the server (docs/multiplayer.md).
+-- started, as its admin, instead of starting the scenario (docs/multiplayer.md).
 
 require "PZHarness/ServerCalls"
 require "PZHarness/Fixtures"
