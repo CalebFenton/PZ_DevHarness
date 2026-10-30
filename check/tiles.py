@@ -20,18 +20,13 @@ def _full_type(name, module):
 @check
 def tiles(mod, game, report):
     for path, tileset in mod.tilesets:
-        # A .patch.tiles file adds its properties to the game's tiles of those names
-        # (IsoWorld.LoadTileDefinitions), so its sprites are the game's.
-        patch = path.endswith(".patch.tiles")
         for index, properties in enumerate(tileset.tiles):
             if not properties:
                 continue
             report.saw("tiles")
             sprite = "%s_%d" % (tileset.name, index)
             values = dict(properties)
-            if patch and sprite not in game.sprites:
-                report.fail("tile-sprite", path, None, "%s patches a tile the game doesn't have" % sprite)
-            elif not patch and sprite not in mod.sprites:
+            if sprite not in mod.sprites:
                 report.fail("tile-sprite", path, None, "%s has properties but no pack has its sprite" % sprite)
             item = values.get("CustomItem")
             if item is not None and not item_exists(mod, game, item):

@@ -111,7 +111,7 @@ mistake, never report a correct name. Run over the game's own 1,400 Lua files, `
 | `pack-format` | A mod `.pack` the game could not read. |
 | `pack-clash` | A mod sprite named like a vanilla one, which it replaces everywhere. |
 | `tile-format` | A `tiledef=` or `pack=` line in `mod.info` naming no file or a file number the game rejects, or a `.tiles` file that does not read and write back byte for byte. |
-| `tile-sprite` | A tile with properties but no packed sprite, or a tile of a `.patch.tiles` file, which adds properties to the game's tiles, that the game doesn't have. |
+| `tile-sprite` | A tile with properties but no packed sprite. |
 | `tile-item` | A tile's `CustomItem` that is no item. |
 | `tile-item-pair` | An item whose `WorldObjectSprite` is a tile of the mod that does not pick up as that item (its `CustomItem`), or a tile whose `CustomItem` is a mod item that places no tile of the mod. |
 | `tile-name` | A tile's `GroupName CustomName` without its `Moveables.json` key. |
