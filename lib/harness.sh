@@ -11,6 +11,8 @@ REPO="$(cd "$HARNESS/../.." && pwd)"
 
 PZ="${PZ_APP:-$HOME/Library/Application Support/Steam/steamapps/common/ProjectZomboid/Project Zomboid.app/Contents}"
 JAVA="$PZ/PlugIns/jre-$(uname -m | sed 's/arm64/aarch64/')/Contents/Home/bin/java"
+# Where bin/review.sh and bin/package.sh leave their files.
+REVIEW_DIR="${REVIEW_DIR:-$HOME/Nextcloud/ProjectZomboid}"
 
 # The value of `key=` in a mod.info.
 mod_info() {

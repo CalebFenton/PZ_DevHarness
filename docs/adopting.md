@@ -9,7 +9,8 @@ How a mod takes the harness on, what it tells the harness about itself, and the 
 | `bin/run-client.sh` | The client runner behind a mod's `dev/run-debug-client.sh`, single player and multiplayer (`--mp`). |
 | `bin/validate-server.sh` | Boots a throwaway dedicated server with the mod and fails on anything the mod logs. |
 | `bin/static-check.sh` | The static check behind a mod's `dev/static-check.sh`: compiles the Lua with the game's compiler and cross-checks the mod against the installed game ([static-check.md](static-check.md)). |
-| `bin/review.sh`, `lib/review.css` | The review copy behind a mod's `dev/review.sh`: lays out the README images, renders `REVIEW_DOCS` to HTML as GitHub shows them, the first also to a PDF, and zips the mod, its libraries and the dev mods as players install them, into `REVIEW_DIR` (`~/Nextcloud` by default); `--art` adds the mod's `art/models/preview.py` page. Its header lists the files and what it needs. |
+| `bin/review.sh`, `lib/review.css` | The review pages behind a mod's `dev/review.sh`: lays out the README images and renders `REVIEW_DOCS` to HTML as GitHub shows them, the first also to a PDF, into `REVIEW_DIR` (`~/Nextcloud/ProjectZomboid` by default); `--art` adds the mod's `art/models/preview.py` page. Its header lists the files and what it needs. |
+| `bin/package.sh` | The local test build behind a mod's `dev/package.sh`: one `REVIEW_DIR/mods.zip` holding every harness mod repository beside this one, each with its libraries and dev mod, and the harness mod, to unzip into `~/Zomboid/mods`. It prints the commit of each folder and stops while one has uncommitted changes; `--dirty` zips them anyway. A folder two repositories ship, such as a library or the harness mod, must be the same in both. |
 | `check/` | The static check's Java probe and Python checker, and the `.pack`, `.tiles` and `.lotheader` readers it and a mod's plugins use. |
 | `lib/harness.sh` | Paths, JVM arguments, the game lock and a kept `--stay` game's reruns, `install_mod`, `compile_java`, the client cache (`prepare_cache`) and the dedicated server the scripts start (`prepare_server`, `prepare_mp_server`, `start_server`, `server_started`, `stop_server`, `server_problems`). A mod's own dev scripts may source it. |
 | `lib/tests.py`, `lib/results.py` | Which tests a run runs and what a failure points at: `TEST_MAP`, `--changed`'s batch, `--failed`'s record and the suspects ([running.md](running.md#choosing-tests)); and the one reader of a `--test` run's result lines, for those and the verdict. |
@@ -108,6 +109,12 @@ Thin scripts that source the harness, so `$0` and the usage line name the mod's 
 #!/usr/bin/env bash
 # dev/review.sh
 . "$(dirname "$0")/harness/bin/review.sh"
+```
+
+```sh
+#!/usr/bin/env bash
+# dev/package.sh
+. "$(dirname "$0")/harness/bin/package.sh"
 ```
 
 ### The dev mod
