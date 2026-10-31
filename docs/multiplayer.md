@@ -125,13 +125,13 @@ player behaves as before:
   vehicle id can ask for two full updates, the server sends the second in place of pending part
   changes, and a client that has the vehicle takes only its position from it, so a part change
   made in between would never reach the copy.
-  `placeAsPlayer` gives the item (`give`), and the character places it with the moveables action,
-  whose `complete()` the server carries out; `PZHarness.trackPlaced` then removes it on the server
-  when the test ends, as above. `T.build` and `T.trackSquare` have the server note the looks of
-  what stands on a square and, when the test ends, remove whatever stands there that it didn't
-  note: by look rather than by object, so an OnCreate that swapped the object, or a chunk that
-  loaded again with a new copy, still goes. A server handler does the same for what it places with
-  `PZHarness.trackSquare(defer, player, at)`.
+  `placeAsPlayer` gives the item (`give`), or takes one the character carries, and the character
+  places it with the moveables action, whose `complete()` the server carries out;
+  `PZHarness.trackPlaced` then removes it on the server when the test ends, as above. `T.build`
+  and `T.trackSquare` have the server note the looks of what stands on a square and, when the
+  test ends, remove whatever stands there that it didn't note: by look rather than by object, so
+  an OnCreate that swapped the object, or a chunk that loaded again with a new copy, still goes. A
+  server handler does the same for what it places with `PZHarness.trackSquare(defer, player, at)`.
   A running generator taken away while this client's copy of its square holds other objects keeps
   its squares powered here: the switch-off names it by its place on the square and misses.
   `T.setGrid(self, false)` and a dev mod's generator fixture clear such power with

@@ -34,9 +34,9 @@ function PZHarness.squareAt(at)
         .. tostring(at and at.z) .. " loaded on the server")
 end
 
---- The vehicle `at` names ({ id, x, y, z }: T.vehicleArgs; single player finds it by the squares
---- around x, y, z), or the running handler ends as missing it when there is none or it has been
---- taken out of the world.
+--- The vehicle `at` names ({ id, x, y, z } of a T.placeVehicle handle; single player finds it by
+--- the squares around x, y, z), or the running handler ends as missing it when there is none or it
+--- has been taken out of the world.
 function PZHarness.vehicleAt(at)
     local vehicle = at and Fixtures.vehicleById(at.id, at)
     return need(vehicle and not vehicle:isRemovedFromWorld() and vehicle,

@@ -263,14 +263,6 @@ function T.goNextTo(self, square)
     T.server(self, "PZHarness.moveTo", function() return at end)
 end
 
---- Stands the character next to `square` so vanilla's walkAdj has nowhere to go, then makes that
---- walk, as a menu does before an action: a multiplayer server refuses a job from afar. Missing
---- "a walk to `what`" if it can't.
-function T.walkTo(self, square, what)
-    T.standNextTo(square)
-    return T.need(self, luautils.walkAdj(T.player(), square, true), "a walk to " .. what)
-end
-
 --- Queues a job at `square`: the character goes next to it (T.goNextTo) unless it already stands
 --- where the last T.doJob put it, then `makeAction()`'s timed action is queued. Decided when the
 --- queue reaches it, so a teleport between jobs counts.
@@ -303,17 +295,22 @@ end
 
 --- Queues placing a new `itemType`, with `modData` on the item, on `square` the way a player does:
 --- the character is given it (T.give), walks next to the square and places it with the moveables
---- action, which a multiplayer server carries out. What it placed goes when the test ends, as
---- T.placeTile's does. Returns a handle { x, y, z, square } at once; handle.object is this client's
---- copy of the placed object, drawn as `sprite`, once it has arrived.
-function T.placeAsPlayer(self, square, itemType, sprite, modData)
-    self.placedAsPlayer = (self.placedAsPlayer or 0) + 1
-    local key = "PZHarness.placeAsPlayer" .. self.placedAsPlayer
+--- action, which a multiplayer server carries out. Given `carried`, it places the `itemType` the
+--- character already carries instead, as it is, such as one it picked up. What it placed goes when
+--- the test ends, as T.placeTile's does. Returns a handle { x, y, z, square } at once;
+--- handle.object is this client's copy of the placed object, drawn as `sprite`, once it has arrived.
+function T.placeAsPlayer(self, square, itemType, sprite, modData, carried)
     local handle = T.where(square)
-    T.give(self, key, { { type = itemType, modData = modData } })
+    local key
+    if not carried then
+        self.placedAsPlayer = (self.placedAsPlayer or 0) + 1
+        key = "PZHarness.placeAsPlayer" .. self.placedAsPlayer
+        T.give(self, key, { { type = itemType, modData = modData } })
+    end
     T.goNextTo(self, square)
     Runtime.wait(1, function()
-        if not T.need(self, moveablesAction(square, "place", sprite, self.items[key][1], nil), "a way to place a " .. itemType) then
+        local item = key and self.items[key][1] or T.carried(itemType)
+        if not T.need(self, item and moveablesAction(square, "place", sprite, item, nil), "a way to place a " .. itemType) then
             return
         end
         Runtime.waitUntil(function() return T.objectWithSprite(square, sprite) ~= nil end, RECEIVE_MS)
