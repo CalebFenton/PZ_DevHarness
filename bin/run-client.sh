@@ -194,8 +194,9 @@ run_fingerprint() {
 if [ "$MODE" = test ]; then
     RUN_FINGERPRINT=$(run_fingerprint)
     previous=$(grep " fingerprint=$RUN_FINGERPRINT\$" "$RUNS_LOG" 2>/dev/null | grep -v " passed=- " | tail -1 || true)
-    # A traced run is for its timings, which differ from run to run.
-    if [ -n "$previous" ] && [ -z "${RERUN:-}" ] && [ -z "$TRACE" ]; then
+    # A traced run is for its timings, which differ from run to run, and a telemetry run for its
+    # lines.
+    if [ -n "$previous" ] && [ -z "${RERUN:-}" ] && [ -z "$TRACE" ] && [ -z "${TELEMETRY:-}" ]; then
         echo "this exact run already ran at ${previous%% *}, with $(grep -o 'passed=[^ ]* failed=[^ ]* skipped=[^ ]*' <<< "$previous"), and nothing it loads has changed since"
         echo "change the code or the selection first; REPEAT=<n> measures a flaky test, and RERUN=1 runs it again when the game rather than a test failed"
         exit "$(sed -n 's/.* exit=\([0-9]*\) .*/\1/p' <<< "$previous")"

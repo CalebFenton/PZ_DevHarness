@@ -56,6 +56,7 @@ Sourced bash. Paths are relative to the repository. The mod's id and name come f
 | `TEST_SANDBOX` | Optional: a bash array of the mod's own sandbox options for a `--test` world, as `Table.Key=value` (a number, `true` or `false`), such as `(MyMod.RandomSpawns=1)`. They are set with `QUIET_WORLD`'s, in single player before the scenario's `setSandbox` and on the `--mp` server where `harness_server_setup` set nothing ([running.md](running.md#a-quiet-world)). |
 | `SERVER_PROBLEMS` | Optional: an extended regex of server log lines that count as the mod's problems, besides stack traces through it. |
 | `SERVER_IGNORE` | Optional: an extended regex of matching lines that don't count. |
+| `TELEMETRY_FILE` | Optional: the switch file, in `<cachedir>/Lua`, that the mod's libraries read their telemetry channels from, such as `cf_telemetry.txt`. `TELEMETRY` writes it for a run ([running.md](running.md#flags-and-environment)). |
 | `WORKSHOP_REPO` | Optional: the GitHub repository, as `owner/name`, whose `README.md` [`dev/workshop-txt.sh`](workshop-page.md) turns into `workshop.txt`'s description; its relative images and links point there. With it set, the static check fails while `workshop.txt` is out of date or over Steam's limit. |
 | `WORKSHOP_BRANCH` | Optional: the branch those images and links point to; `master` by default. |
 | `WORKSHOP_SKIP` | Optional: a bash array of the README's `##` headings to leave off the Workshop page, such as `(Install Development)`. |

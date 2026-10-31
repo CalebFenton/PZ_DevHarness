@@ -26,7 +26,11 @@ game and ends with a `<TAG> REPEAT <name> passed=<n> failed=<n>` line per test, 
 first; `ORDER=reverse` runs the tests in reverse order, and `ORDER=shuffle` in an order from a
 seed the script picks and prints, which `ORDER=shuffle:<seed>` repeats; `LEAKS=fail` (the
 default), `warn` or `off` sets what the [leak check](#leaks-and-desyncs) does; `TRACE=1` reports
-[where the time went](#where-the-time-goes), test by test; `TIMEOUT` caps a
+[where the time went](#where-the-time-goes), test by test; `TELEMETRY=<channel>,...` (or `*`)
+turns on those channels of the libraries' telemetry for the run, client and server alike, by
+writing the conf's `TELEMETRY_FILE`, and a run without it removes that file; a game kept by
+`--stay` keeps the channels it started with, and a telemetry run, like a traced one, is never
+refused as a repeat; `TIMEOUT` caps a
 run in seconds (default 300 for `--test`, times `REPEAT`, enough for a cold `--mp` run of a
 whole suite, so it only catches a game that died; 1200 for the other modes); `CACHE` moves the
 cache dir (with `--mp` the client's; `SERVER_CACHE` the server's); `SERVER_PORT` moves the

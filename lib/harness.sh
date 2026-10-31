@@ -524,8 +524,25 @@ prepare_server() {
     if declare -F harness_server_setup > /dev/null; then
         harness_server_setup
     fi
+    write_telemetry_switch
     # A new world each time, so whatever the mod does for a new world runs every time.
     rm -rf "$CACHE/Saves/Multiplayer/$SERVER_NAME"
+}
+
+# The switch file of the libraries' telemetry, the conf's TELEMETRY_FILE in <cachedir>/Lua: the
+# channels TELEMETRY names, one a line, `*` for every one; without TELEMETRY no file, so a run
+# logs nothing it wasn't asked to.
+write_telemetry_switch() {
+    if [ -z "${TELEMETRY_FILE:-}" ]; then
+        [ -z "${TELEMETRY:-}" ] || echo "TELEMETRY is set, but the conf names no TELEMETRY_FILE: no channel is on"
+        return 0
+    fi
+    mkdir -p "$CACHE/Lua"
+    if [ -n "${TELEMETRY:-}" ]; then
+        tr ',' '\n' <<< "$TELEMETRY" > "$CACHE/Lua/$TELEMETRY_FILE"
+    else
+        rm -f "$CACHE/Lua/$TELEMETRY_FILE"
+    fi
 }
 
 prepare_cache() {
@@ -551,6 +568,7 @@ prepare_cache() {
     link_dev_mods
     mkdir -p "$CACHE/Lua"
     rm -f "$REQUEST_FILE" "$CONNECT_FILE" "$TRACE_FILE" "$TEST_FILES_FILE"
+    write_telemetry_switch
     # Written when playing by hand too: the tests take their console tag from it. A --test world
     # is quiet (QUIET_WORLD) and has the mod's TEST_SANDBOX options; the runner sets them before the
     # scenario's own setSandbox, which may override them.
