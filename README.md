@@ -139,4 +139,5 @@ You need macOS, Project Zomboid Build 42 installed through Steam, and a Java JDK
 - [Multiplayer](docs/multiplayer.md): how `--mp` works, the server channel, two-sided fixtures, and what a multiplayer client can't do.
 - [Writing a mod's Workshop page](docs/workshop-page.md): what players look for, the voice, the description's sections in order, the gallery, and the scripts that turn the README into `workshop.txt` and upload the gallery.
 - [The art library](docs/art.md): the Blender helpers, renderer, FBX export and tile and pack writers a tile and item mod's `art/models/make.sh` builds with, and how its output stays byte for byte the same.
+- [Finding loot on the map](docs/find-loot.md): `lib/findloot.py`, which lists the rooms that roll an item and where on the map those rooms stand, from the installed game's files.
 - [`TestLib.lua`](mod/42/media/lua/client/PZHarness/TestLib.lua): the test spec, the restore stack, and the rules that keep each test independent of the ones before it.
