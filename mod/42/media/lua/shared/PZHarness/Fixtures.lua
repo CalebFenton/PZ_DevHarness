@@ -458,6 +458,26 @@ function Fixtures.newSince(before, now)
     return new
 end
 
+--- A stand-in for an IsoRoom, to fire OnSeeNewRoom with (triggerEvent("OnSeeNewRoom", room)) as
+--- the game does for a room seen for the first time (IsoCell.ProcessSpottedRooms), where the
+--- authority fires it: the server, or the one game in single player. It answers what a room
+--- handler asks: getName() is `name`, getSquares() an ArrayList of `squares` (a list of squares),
+--- and getRandomFreeSquare() the first of `free` (a list; `squares` by default), so a test knows
+--- where a spawn lands, or nil when it is empty. A handler that walks the room's squares sees only
+--- `squares`: give `{}` with `free` to keep it off them.
+function Fixtures.fakeRoom(name, squares, free)
+    local list = ArrayList.new()
+    for _, square in ipairs(squares) do
+        list:add(square)
+    end
+    free = free or squares
+    return {
+        getName = function() return name end,
+        getSquares = function() return list end,
+        getRandomFreeSquare = function() return free[1] end,
+    }
+end
+
 --- Turns `car` and `trailer` square to `facing` ("N", "E", "S" or "W") and moves the trailer so its
 --- coupler sits on the car's tow bar: vanilla hitches only with the two points within a square and
 --- the vehicles near parallel (BaseVehicle.canAttachTrailer), and addVehicleDebug skews headings at

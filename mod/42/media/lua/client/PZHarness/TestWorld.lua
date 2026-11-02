@@ -337,6 +337,44 @@ function T.pickUpAsPlayer(self, at, sprite)
     end)
 end
 
+-- The first object on `square` that `isTarget(object)` picks, or nil. Takes a nil square.
+local function objectOn(square, isTarget)
+    local objects = square and square:getObjects()
+    for i = 0, (objects and objects:size() or 0) - 1 do
+        if isTarget(objects:get(i)) then
+            return objects:get(i)
+        end
+    end
+    return nil
+end
+
+--- Queues giving the character a sledgehammer and smashing the object on `handle`'s square (a
+--- T.where handle) that `isTarget(object)` picks, through vanilla's Destroy cursor and action, as a
+--- player does; then a wait for this client to lose it. `what` names it in the waits. The cursor is
+--- server Lua (BuildingObjects/ISDestroyCursor), which loads after client Lua, so it is reached
+--- when the step runs.
+function T.smash(self, handle, isTarget, what)
+    T.give(self, "PZHarness.sledgehammer", { { type = "Base.Sledgehammer" } })
+    T.goNextTo(self, handle.square)
+    local cursor
+    -- The cursor lists what it can smash on the square it hovers, once the character sees it.
+    T.waitFor(self, function()
+        cursor = cursor or ISDestroyCursor:new(T.player(), false, self.items["PZHarness.sledgehammer"][1])
+        cursor:isValid(handle.square)
+        for i, object in ipairs(cursor:getObjectList()) do
+            if isTarget(object) then
+                cursor.objectIndex = i
+                return true
+            end
+        end
+        return false
+    end, "the Destroy cursor offering " .. what)
+    T.step(function() cursor:create(handle.x, handle.y, handle.z) end)
+    T.waitFor(self, function()
+        return objectOn(getSquare(handle.x, handle.y, handle.z), isTarget) == nil
+    end, "this client to lose the smashed " .. what)
+end
+
 -- The squares T.placeVehicle tries, nearest first: `opts.square`, else open ground near
 -- `opts.near` (the character by default), far enough that the vehicle doesn't land on it.
 local function vehicleSquares(self, opts)

@@ -3,7 +3,8 @@ require "PZHarness/TestLearning"
 local Runtime = require "PZHarness/TestRuntime"
 local Report = require "PZHarness/Report"
 
--- Recipe inputs, crafting through the game's menus, and diagnostics for refused/dropped crafts.
+-- Recipe inputs, crafting through the game's menus, several crafts in turn in one test, and
+-- diagnostics for refused/dropped crafts.
 local T = PZHarness.Test
 
 --- The vanilla items an input naming several takes when the caller's `prefer` names none of
@@ -123,8 +124,51 @@ local function craftLogic(recipe, from, bench)
     return logic
 end
 
--- Why the game would refuse to start this craft, or nil if it would start it. The menu and the
--- crafting windows refuse without saying why.
+--- The input line of `recipe` that takes `fullType`: the definition of its first input that does
+--- (InputScript.getOriginalLine), or nil.
+function T.inputLineFor(recipe, fullType)
+    local item, inputs = getScriptManager():getItem(fullType), recipe:getInputs()
+    for i = 0, inputs:size() - 1 do
+        if item and inputs:get(i):containsItem(item) then
+            return inputs:get(i):getOriginalLine()
+        end
+    end
+    return nil
+end
+
+--- T.craftRefusal's reason when `recipe`'s OnTest turns down the `fullType` given for the input
+--- that takes it: "OnTest turned down <that input's line>".
+function T.onTestRefusal(recipe, fullType)
+    return "OnTest turned down " .. tostring(T.inputLineFor(recipe, fullType))
+end
+
+-- Whether `containers` (an ArrayList of ItemContainers) hold items of a type `input` takes and
+-- `recipe`'s OnTest turns every one of them down. The game asks OnTest of each such item before
+-- its other tests (CraftRecipeManager.consumeInputItemInternal), and an input it gets no item for
+-- reads as unsatisfied, as a missing one does.
+local function turnedDown(recipe, input, containers)
+    local p, found = T.player(), false
+    for i = 0, containers:size() - 1 do
+        local items = containers:get(i):getItems()
+        for j = 0, items:size() - 1 do
+            local item = items:get(j)
+            local script = item:getScriptItem()
+            if script and input:containsItem(script) then
+                if recipe:OnTestItem(item, p) then
+                    return false
+                end
+                found = true
+            end
+        end
+    end
+    return found
+end
+
+--- Why the game would refuse to start this craft, or nil if it would start it. The menu and the
+--- crafting windows refuse without saying why. In the game's order: "recipe not known", "skills
+--- too low", "no table in reach", "too dark", else each input left unsatisfied, joined by "; ":
+--- T.onTestRefusal's reason where the recipe's OnTest turned down every item there for it, else
+--- "missing <its line>".
 function T.craftRefusal(recipe, from, bench)
     local p = T.player()
     local logic = craftLogic(recipe, from, bench)
@@ -139,15 +183,17 @@ function T.craftRefusal(recipe, from, bench)
     elseif p:tooDarkToRead() then
         return "too dark"
     end
-    local missing = {}
+    local reasons, containers = {}, ISInventoryPaneContextMenu.getContainers(p)
     local inputs = recipe:getInputs()
     for i = 0, inputs:size() - 1 do
-        local data = logic:getRecipeData():getDataForInputScript(inputs:get(i))
+        local input = inputs:get(i)
+        local data = logic:getRecipeData():getDataForInputScript(input)
         if data and not data:isInputItemsSatisfied() then
-            table.insert(missing, inputs:get(i):getOriginalLine())
+            local line = input:getOriginalLine()
+            table.insert(reasons, turnedDown(recipe, input, containers) and "OnTest turned down " .. line or "missing " .. line)
         end
     end
-    return "missing " .. table.concat(missing, "; ")
+    return #reasons > 0 and table.concat(reasons, "; ") or "refused with every input satisfied"
 end
 
 local function addRefusal(self, recipe, reason)
@@ -300,6 +346,19 @@ function T.craft(self, name, from, counted, opts)
     return craft(self, name, from, counted, opts, false)
 end
 
+-- What `self.refusal` holds when the game refuses `recipe` for `refused` alone: T.craftRefusal's
+-- reason (a string, such as "skills too low"), or `{ onTest = fullType }`, the recipe's OnTest
+-- turning down the `fullType` given for the input that takes it (T.onTestRefusal). Nil for
+-- anything else, `true` among it, which would pass on any refusal.
+local function refusalOf(recipe, refused)
+    if type(refused) == "string" then
+        return recipe:getName() .. ": " .. refused
+    elseif type(refused) == "table" and refused.onTest then
+        return recipe:getName() .. ": " .. T.onTestRefusal(recipe, refused.onTest)
+    end
+    return nil
+end
+
 --- Registers a test around the queued craft operation, instantly unless `spec.instant` is false.
 --- Crafts `spec.recipe` from the first `spec.from` via the right-click menu or `spec.bench`'s
 --- window. Knows all the mod's recipes until the test ends, ensures a table, and by default raises
@@ -308,7 +367,8 @@ end
 --- runs once its queued preparation has finished and may queue more changes before the craft.
 --- Counts into self.counts.craft, including dropped items unless `spec.dropped` is false, then
 --- runs `spec.after(self)` in a step for further reads. validate expects `spec.counts` and, with
---- `spec.refused`, a refusal, then runs `spec.validate(self)`. Failures include craft diagnostics.
+--- `spec.refused`, the game's refusal for that reason alone (see refusalOf), then runs
+--- `spec.validate(self)`. Failures include craft diagnostics.
 function T.craftTest(name, spec)
     local counted = {}
     for fullType in pairs(spec.counts or {}) do
@@ -329,10 +389,193 @@ function T.craftTest(name, spec)
                 T.expectEqual(fullType, counts[fullType], count)
             end
             if spec.refused then
-                T.expect(self.refusal ~= nil, "the game would start the craft")
+                local recipe = getScriptManager():getCraftRecipe(spec.recipe)
+                local expected = recipe and refusalOf(recipe, spec.refused)
+                if T.expect(expected ~= nil, "spec.refused names no reason: give T.craftRefusal's, or { onTest = <full type> }") then
+                    T.expectEqual("why the game refused", self.refusal, expected)
+                end
             end
             if spec.validate then
                 spec.validate(self)
+            end
+        end,
+    })
+end
+
+-- Crafting in turn: one test crafting several times
+
+--- Queues knowing the recipes `names` until the test ends, the highest level each skill they
+--- require (T.setPerk), and a table in reach: a test that crafts them in turn (T.craftFrom) pays
+--- the setup of one craft test however many it crafts. Returns the CraftRecipes by name, or nil
+--- when a name doesn't resolve, which the test then misses.
+function T.readyToCraft(self, names)
+    local recipes, levels = {}, {}
+    for _, name in ipairs(names) do
+        local recipe = T.need(self, getScriptManager():getCraftRecipe(name), "the recipe " .. name)
+        if not recipe then return nil end
+        recipes[name] = recipe
+        for i = 0, recipe:getRequiredSkillCount() - 1 do
+            local skill = recipe:getRequiredSkill(i)
+            levels[skill:getPerk()] = math.max(levels[skill:getPerk()] or 0, skill:getLevel())
+        end
+    end
+    T.knowRecipes(self, names)
+    T.placeWorkTable(T.player())
+    for perk, level in pairs(levels) do
+        T.setPerk(self, perk, level)
+    end
+    return recipes
+end
+
+-- `items` (T.give items) less one of `fullType`.
+local function withoutOne(items, fullType)
+    for i, item in ipairs(items) do
+        if item.type == fullType then
+            item.count = item.count - 1
+            if item.count == 0 then
+                table.remove(items, i)
+            end
+            return
+        end
+    end
+end
+
+--- Queues one craft of the CraftRecipe `recipe` (T.readyToCraft's) from `from`: a T.give item
+--- ({ type, condition, repaired, uses, modData }) given for it, or the full type of one the
+--- character already carries, such as an earlier craft's output. The rest of one craft's inputs
+--- come with it (T.recipeInputs, preferring `from`'s type, then `opts.prefer`); `opts.inputs(items)`
+--- may change that list before it is given, and `opts.setup(self)` queues what else the craft needs,
+--- such as water in a bottle. Afterwards it reads the authority's items of `from`'s type and of
+--- `opts.read` (T.readCarried, under `result.label`), and waits until this client's copy of `from`,
+--- which the inventory and its tooltip show, matches the authority's. The `from` left is taken away
+--- then, so that a later craft can't pick it. Returns `result`, filled in as the queue runs:
+--- `label`, `item`, the authority's `from` (T.carriedItems' entry, nil once the craft used it up),
+--- and `refusal`, why the game wouldn't start the craft ("<recipe>: <T.craftRefusal's reason>", nil
+--- if it started), kept out of the test's own refusal so that a craft expected to be refused
+--- doesn't read as the test's failure.
+function T.craftFrom(self, recipe, from, opts)
+    opts = opts or {}
+    self.crafts = (self.crafts or 0) + 1
+    local label = "craft" .. self.crafts
+    local result = { label = label }
+    local fromType = type(from) == "table" and from.type or from
+    local prefer = { fromType }
+    for _, other in ipairs(opts.prefer or {}) do
+        table.insert(prefer, other)
+    end
+    local items, unmatched = T.recipeInputs(recipe, prefer)
+    if not T.need(self, #unmatched == 0, "an item for " .. table.concat(unmatched, "; ")) then return result end
+    withoutOne(items, fromType)
+    if opts.inputs then
+        opts.inputs(items)
+    end
+    if type(from) == "table" then
+        table.insert(items, 1, from)
+    end
+    T.give(self, label, items)
+    if opts.setup then
+        opts.setup(self)
+    end
+    local what = "this client's " .. fromType .. " to craft " .. recipe:getName() .. " from"
+    if type(from) ~= "table" then
+        T.waitForCarried(self, fromType, what)
+    end
+    T.step(function()
+        local item
+        if type(from) == "table" then
+            item = (self.items[label] or {})[1]
+        else
+            item = T.carried(fromType)
+        end
+        if not T.need(self, item, what) then return end
+        local id, refusal = item:getID(), self.refusal
+        self.refusal = nil
+        T.startCraft(self, recipe, item)
+        T.step(function() result.refusal, self.refusal = self.refusal, refusal end)
+        local types = { fromType }
+        for _, other in ipairs(opts.read or {}) do
+            table.insert(types, other)
+        end
+        T.readCarried(self, types, nil, label)
+        T.step(function()
+            local served = T.findIn(T.carriedItems(self, fromType, label), "id", id)
+            result.item = served
+            if not served then return end
+            T.waitFor(self, function()
+                local copy = T.player():getInventory():getItemWithIDRecursiv(id)
+                return copy ~= nil and copy:getCondition() == served.condition
+                    and copy:getHaveBeenRepaired() == served.repaired and math.abs(copy:getCurrentUsesFloat() - served.uses) < 0.001
+            end, "this client's copy of the " .. fromType .. " matching the authority's after " .. recipe:getName())
+            T.takeItems(self, { id })
+        end)
+    end)
+    return result
+end
+
+--- Expects the craft T.craftFrom's `result` to have started, saying why the game refused if not.
+function T.expectCrafted(result, what)
+    return T.expect(result.refusal == nil, what .. ": the game refused: " .. tostring(result.refusal))
+end
+
+--- Expects the game to have refused the craft T.craftFrom's `result` started from a `fullType` for
+--- that item alone: the recipe's OnTest turned it down, for the input line that takes it
+--- (T.onTestRefusal). A craft refused for the dark, a skill or another input would otherwise pass
+--- for the rule under test.
+function T.expectRefusedFor(result, recipe, fullType, what)
+    return T.expectEqual(what .. ": why the game refused", result.refusal,
+        recipe:getName() .. ": " .. T.onTestRefusal(recipe, fullType))
+end
+
+-- `name` without the `recipePrefix` setting, for the rows' messages.
+local function shortName(name)
+    local prefix = PZHarness.testSettings.recipePrefix or ""
+    return name:sub(1, #prefix) == prefix and name:sub(#prefix + 1) or name
+end
+
+--- Registers the test `name`, which crafts each row of `rows` in turn (T.craftFrom, after
+--- T.readyToCraft) from a new `fullType` at condition `row.before`, repaired `row.repaired` times
+--- and charged to `opts.uses` when given. A row is { recipe name, behaviour, before, repaired, and
+--- one of: `after` and `repairedAfter`, what the authority's item comes out at; `refused`, the
+--- recipe's OnTest turning the item down (T.expectRefusedFor), which leaves it as it was; `used`,
+--- the craft using it up }. Messages name a row by its recipe, less the `recipePrefix` setting, and
+--- behaviour. `opts.prefer` adds to the inputs preferred, `opts.setup(self)` to every craft's
+--- setup, and `opts.validate(row, item, what)` checks more of each item left.
+function T.conditionCraftsTest(name, fullType, rows, opts)
+    opts = opts or {}
+    T.test(name, {
+        instant = true,
+        run = function(self)
+            local names = {}
+            for _, row in ipairs(rows) do
+                table.insert(names, row[1])
+            end
+            local recipes = T.readyToCraft(self, names)
+            if not recipes then return end
+            self.rows = {}
+            for i, row in ipairs(rows) do
+                self.rows[i] = T.craftFrom(self, recipes[row[1]],
+                    { type = fullType, condition = row.before, repaired = row.repaired, uses = opts.uses },
+                    { prefer = opts.prefer, setup = opts.setup })
+            end
+        end,
+        validate = function(self)
+            for i, row in ipairs(rows) do
+                local result, what = self.rows[i], shortName(row[1]) .. ", " .. row[2]
+                if row.refused then
+                    T.expectRefusedFor(result, getScriptManager():getCraftRecipe(row[1]), fullType, what)
+                else
+                    T.expectCrafted(result, what)
+                end
+                local item = result.item
+                if row.used then
+                    T.expect(item == nil, what .. ": the " .. fullType .. " is still there")
+                elseif T.expect(item ~= nil, what .. ": the " .. fullType .. " is gone") then
+                    T.expectEqual(what .. ": its condition", item.condition, row.refused and row.before or row.after)
+                    T.expectEqual(what .. ": its repairs", item.repaired, row.refused and row.repaired or row.repairedAfter)
+                    if opts.validate then
+                        opts.validate(row, item, what)
+                    end
+                end
             end
         end,
     })

@@ -159,6 +159,8 @@ player behaves as before:
   crafts. Waiting more than 5 seconds for that prints a `FAIL` of its own. For the same reason
   `setPerk` on a multiplayer client puts its level back on this client whenever such a sync
   changes it, until the test ends; a stale sync otherwise made a mid-run craft "skills too low".
+  A later `setPerk` for the same perk in the test replaces the level held, rather than holding
+  both and setting the two in turn every tick.
 - After each reset the runner refreshes the inventory windows at once, in both modes. Crafts and
   the craft menu take their inputs from the containers those windows list, which otherwise catch up
   only when the UI next draws; a multiplayer character starts with a key ring, and its removed

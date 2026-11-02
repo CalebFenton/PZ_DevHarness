@@ -170,7 +170,7 @@ Every setting is optional:
 | `sandbox` | both | The mod's table in `SandboxVars`, which `setSandbox` tries before the game's options and `saveOptions` saves from. |
 | `sandboxChanged()` | both | Called on each side after its copy of a sandbox option is set or restored, for state the mod derives from its options. |
 | `setup(self, spec)` | client | Called before every `spec.run`, after its hour and sandbox options; may push undos with `defer`. |
-| `recipePrefix` | client | The name prefix of the mod's craftRecipes, for `recipeNames`, `learnRecipes`, `learnableRecipeNames`, `craftTest`. |
+| `recipePrefix` | client | The name prefix of the mod's craftRecipes, for `recipeNames`, `learnRecipes`, `learnableRecipeNames`, `craftTest`, and the rows' messages of `conditionCraftsTest`, which leave it out. |
 | `isFreeSquare(square, indoors)` | client | Where `squares` may put a fixture; by default a walkable square without a vehicle, indoors or outdoors as asked. |
 | `remove(object, player)` | both | Removes a placed object of the mod the way the mod does and returns true; anything it returns false for goes the vanilla way, a running generator switched off first. Every fixture removed when a test ends goes through it, whichever side placed it; `player` is the character whose test placed it, when the remover knows it. |
 | `spawnVehicle(script, square, facing, args, defer)` | server | Makes the vehicles `placeVehicle` asks for, with the test's `opts.args`, returning one, or nil to leave it to `addVehicleDebug`; `defer` takes undos, as a handler's does. |
@@ -341,18 +341,18 @@ what it does, so read those rather than a list here:
 
 | Module | What it has |
 | --- | --- |
-| `PZHarness/TestLib.lua` | Registering (`test`; its spec's `hour`, `instant`, `sandbox`, `spOnly` or `mpOnly`, `timeoutSeconds`), expectations and `need`, the restore stack (`defer`, `onTick`), the two-sided setters (`setTime`, `setPerk`, `setSandbox`, `setMultiplier`, `setGrid`, `setMechanicsCheat`, `makeDark`, `changeItem`; see [two-sided fixtures](multiplayer.md#two-sided-fixtures)), the server's copy of the character (`setStat`, `takeItems`) and its rolls (`forceRoll`, `UNDER`). Its header has the rules that keep each test independent of the ones before it. |
+| `PZHarness/TestLib.lua` | Registering (`test`; its spec's `hour`, `instant`, `sandbox`, `spOnly` or `mpOnly`, `timeoutSeconds`), expectations and `need`, the restore stack (`defer`, `onTick`), the two-sided setters (`setTime`, `setPerk`, `setSandbox`, `setMultiplier`, `setGrid`, `setMechanicsCheat`, `makeDark`, `changeItem`; see [two-sided fixtures](multiplayer.md#two-sided-fixtures) and [setters in a run](#setters-in-a-run)), the server's copy of the character (`setStat`, `takeItems`) and its rolls (`forceRoll`, `UNDER`). Its header has the rules that keep each test independent of the ones before it. |
 | `PZHarness/TestRuntime.lua` | Loaded by `TestLib.lua`: the queue (`wait`, `waitUntil`, `waitFor`, `waitForLight`, `step`, `describeAction`) and the server channel (`server`, `serverUntil`, `give`, `count`, `batch`; [multiplayer.md](multiplayer.md#the-server-channel)). |
-| `PZHarness/TestWorld.lua` | Squares and handles (`squares`, `square`, `where`, `at`, `copyOf`), fixtures placed by the server or by the character as a player does, this game's own (`track`), what the test leaves on a square (`trackSquare`), floor items and floors (`floorItem`, `takeFloorItems`, `floorAbove`, `ringOfTiles`), vehicles, and walking and jobs (`standNextTo`, `goNextTo`, `doJob`). The server handlers `PZHarness.objectModData` and `PZHarness.worldFrame` (`ServerFixtures.lua`) take `read` and `serverUntil` directly. |
+| `PZHarness/TestWorld.lua` | Squares and handles (`squares`, `square`, `where`, `at`, `copyOf`), fixtures placed by the server or by the character as a player does, this game's own (`track`), what the test leaves on a square (`trackSquare`), floor items and floors (`floorItem`, `takeFloorItems`, `floorAbove`, `ringOfTiles`), vehicles, walking and jobs (`standNextTo`, `goNextTo`, `doJob`), and smashing an object as a player does (`smash`). The server handlers `PZHarness.objectModData` and `PZHarness.worldFrame` (`ServerFixtures.lua`) take `read` and `serverUntil` directly. |
 | `PZHarness/TestLearning.lua`, `server/PZHarness/ServerLearning.lua` | Recipe names, knowing and forgetting recipes on both sides, recipe skills, level ups as the game awards them, and the AutoLearn tests (`autoLearnTests`). |
-| `PZHarness/TestCraft.lua` | Recipe inputs (`inputItem`, `inputCount`, `recipeInputs`), work tables, crafting through the game's menus (`startCraft`, `craft`) and `craftTest`; requires `TestWorld` and `TestLearning`. |
+| `PZHarness/TestCraft.lua` | Recipe inputs (`inputItem`, `inputCount`, `recipeInputs`, `inputLineFor`), work tables, crafting through the game's menus (`startCraft`, `craft`), why the game refuses a craft (`craftRefusal`, `onTestRefusal`), `craftTest`, and several crafts in one test (`readyToCraft`, `craftFrom`, `expectCrafted`, `expectRefusedFor`, `conditionCraftsTest`; see [crafts in turn](#crafts-in-turn)); requires `TestWorld` and `TestLearning`. |
 | `PZHarness/TestBuild.lua` | Building from the build menu (`buildEntry`, `placeable`, `buildSite`, `build`, which tracks its square); requires `TestCraft`. |
 | `PZHarness/TestMenus.lua` | Context menus: building, finding, reading, noting and choosing options; tooltip text laid out (`runTogether`); requires `TestWorld`. |
 | `PZHarness/TestReads.lua`, `server/PZHarness/ServerChecks.lua` | Reads kept on the test (`read`, `readUntil`, `findIn`), server checks (`expectNoFailures`, `serverCheck`), the server's copy of the character (`readCharacter`, `xpAward`), and what the character carries on either side. |
 | `PZHarness/TestRecords.lua`, `server/PZHarness/ServerRecords.lua` | The record kit, for the kinds of the `records` setting: `placeRecord`, `setRecord`, `fillRecord`, `ageRecord`, `readRecord`, `reloadRecord`, `onRecord`, `recordSummary`, `waitForSummary`; `PZHarness.Records` for a dev mod's handlers (`at`, `set`, `read`, `track`). |
 | `PZHarness/TestJobs.lua`, `server/PZHarness/ServerJobs.lua` | The job kit, for the `jobAction` setting's class: `job` (with reads before and after in the same call), `expectOk`, `expectRefused`. |
 | `PZHarness/TestChunks.lua` | Trips away: chunk reload trips (`reloadChunk`) and visits to far places (`startVisits`, `visitUntil`, `returnHome`). |
-| `shared/PZHarness/Fixtures.lua` | What both sides do, for a dev mod's server handlers too: lookups (`squareAt`, `overlaysOf`, `fieldsOf`, `ring`, `buildingNear`, `worldItems`, `newSince`, `teleportToMiddle`), building and removing (`newTile`, `newBench`, `removePlaced`, `releaseGeneratorPower`), and undoing (`deferOnce`, `replace`, `saveOptions`). `server/PZHarness/ServerFixtures.lua` adds the handlers' `PZHarness.squareAt`, `vehicleAt`, `squareFor` and `trackSquare`, `ServerHandlers.lua` `PZHarness.readsAround`. |
+| `shared/PZHarness/Fixtures.lua` | What both sides do, for a dev mod's server handlers too: lookups (`squareAt`, `overlaysOf`, `fieldsOf`, `ring`, `buildingNear`, `worldItems`, `newSince`, `teleportToMiddle`), building and removing (`newTile`, `newBench`, `removePlaced`, `releaseGeneratorPower`), undoing (`deferOnce`, `replace`, `saveOptions`), and a stand-in room to fire `OnSeeNewRoom` with (`fakeRoom`). `server/PZHarness/ServerFixtures.lua` adds the handlers' `PZHarness.squareAt`, `vehicleAt`, `squareFor` and `trackSquare`, `ServerHandlers.lua` `PZHarness.readsAround`. |
 | `shared/PZHarness/Rolls.lua` | Setting the `chance` setting's rolls in a server handler: `PZHarness.Rolls.force`, `with`, `eachTrial`, `trialRoll`, `UNDER`. |
 
 The runner (`PZHarness/Schedule.lua`) fails a test still busy after 30 seconds of real time with
@@ -360,6 +360,56 @@ what it was waiting on (`describeAction`), clears its queue, runs its undos and 
 `spec.timeoutSeconds` raises the limit for a test that is slow on purpose. A test whose starting
 square still hasn't loaded some seconds after the test before took the character far away fails
 without running.
+
+### Setters in a run
+
+The two-sided setters (`setTime`, `setSandbox`, `setPerk` and the rest) change this game's copy
+when they are called, not when the queue reaches them, and in single player that is the only
+copy: called in `run`, they take effect before any step queued there has run. A test that loops
+over rows, setting an option or a level for each, wraps each row's setters in `T.step` so they
+change it in the row's turn; otherwise every row runs with the last row's values. `setPerk` on a
+multiplayer client also holds the level against the server's perk syncs until the test ends; a
+later call for the same perk replaces the level held rather than adding a second hold, so two
+calls in one test don't fight.
+
+### Crafts in turn
+
+- `craftRefusal(recipe, from, bench)` says why the game would refuse a craft, in its own order:
+  `recipe not known`, `skills too low`, `no table in reach`, `too dark`, else one entry per input
+  left unsatisfied, joined by `; `: `OnTest turned down <line>` when the recipe's OnTest turned
+  down every item there of a type the input takes, else `missing <line>`, each the input's line
+  as the script has it. `onTestRefusal(recipe, fullType)` is the first form for the input that
+  takes `fullType` (`inputLineFor(recipe, fullType)`). A refused craft adds
+  `<recipe>: <reason>` to `self.refusal`.
+- `craftTest`'s `spec.refused` names the refusal expected, and the test fails on any other: a
+  `craftRefusal` reason (`"skills too low"`), or `{ onTest = <full type> }` for the recipe's
+  OnTest turning that item down. `refused = true` names none and fails.
+- `readyToCraft(self, names)` knows the recipes until the test ends, sets the highest level each
+  required skill needs and puts a table in reach, and returns the CraftRecipes by name (nil if
+  one is missing). `craftFrom(self, recipe, from, opts)` then queues one craft from `from`, a
+  `give` item or the full type of one already carried, with the rest of one craft's inputs
+  (`opts.prefer`, `opts.inputs(items)`, `opts.setup(self)`, `opts.read`), and returns a result
+  filled in as the queue runs: `label` (its `readCarried` answer), `item` (the authority's
+  `from` after the craft, nil if used up) and `refusal`, kept out of the test's own.
+  `expectCrafted(result, what)` and `expectRefusedFor(result, recipe, fullType, what)` (refused
+  by OnTest for that item alone) check it.
+- `conditionCraftsTest(name, fullType, rows, opts)` registers a test of those: each row
+  `{ recipe, behaviour, before =, repaired =, ... }` crafts from a new `fullType` at condition
+  `before`, repaired `repaired` times, and expects `after` and `repairedAfter`, `refused = true`
+  (OnTest turned it down, so it stays as it was) or `used = true`. `opts.uses`, `opts.prefer`,
+  `opts.setup(self)` and `opts.validate(row, item, what)` apply to every row.
+
+### Smashing and rooms
+
+- `smash(self, handle, isTarget, what)` (`TestWorld.lua`) gives a sledgehammer and smashes the
+  object `isTarget(object)` picks on the handle's square (a `where` handle) through vanilla's
+  Destroy cursor and action, as a player does, then waits for this client to lose it; `what`
+  names it in the waits.
+- `PZHarness.Fixtures.fakeRoom(name, squares, free)` is a room for a server handler to fire
+  `OnSeeNewRoom` with, as the game does for a room seen for the first time: `getName()`,
+  `getSquares()` (an ArrayList of `squares`) and `getRandomFreeSquare()` (the first of `free`,
+  `squares` by default, so the test knows where a spawn lands). Pass `{}` as `squares` with `free`
+  to keep a handler that walks the room's squares off the test's.
 
 ## Loot
 

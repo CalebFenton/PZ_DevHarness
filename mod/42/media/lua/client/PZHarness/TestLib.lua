@@ -118,17 +118,22 @@ end
 
 --- Sets the character's level of `perk` for the test. On a multiplayer client a periodic server
 --- perk sync (PlayerXpPacket) sent before the change can land after the answer and revert the
---- level, so until the test ends the client reapplies it whenever a sync changes it.
+--- level, so until the test ends the client reapplies it whenever a sync changes it. A later call
+--- for the same perk replaces the level held, so two calls in one test don't fight.
 function T.setPerk(self, perk, level)
-    local p = T.player()
     setPerk(self, { perk = perk:getId(), level = level })
-    if isClient() then
-        T.onTick(self, function()
-            if p:getPerkLevel(perk) ~= level then
-                p:setPerkLevelDebug(perk, level)
-            end
-        end)
-    end
+    if not isClient() then return end
+    self.perkHolds = self.perkHolds or {}
+    local holds, id = self.perkHolds, perk:getId()
+    local held = holds[id] ~= nil
+    holds[id] = level
+    if held then return end
+    local p = T.player()
+    T.onTick(self, function()
+        if p:getPerkLevel(perk) ~= holds[id] then
+            p:setPerkLevelDebug(perk, holds[id])
+        end
+    end)
 end
 
 --- Sets a sandbox option of the mod (SandboxVars[settings.sandbox]) or, failing that, of the
