@@ -28,12 +28,12 @@ T.test("mymod_kettle_makes_tea", {
 The character performs the same timed action a player would, animation and all, so the test exercises the mod's real code. Here is a trimmed run of a real Renewable Energy test that caught a multiplayer bug: after a player pulled the bulb out of a garden light, the lamp kept shining on their screen until the next game minute.
 
 ```text
-$ TESTS==renewable_energy_gadgets_garden_light_remove_bulb dev/run-debug-client.sh --test --mp
+$ TESTS==renewable_energy_gadgets_garden_light_bulb_swap dev/run-debug-client.sh --test --mp
 RETest START 1
-RETest FAIL renewable_energy_gadgets_garden_light_remove_bulb: this client's lamp went out only at a later game minute (7.75 s)
+RETest FAIL renewable_energy_gadgets_garden_light_bulb_swap: this client's lamp went out only at a later game minute (7.75 s)
 RETest DONE passed=0 failed=1 skipped=0
 FAIL: not every test passed
---failed reruns: renewable_energy_gadgets_garden_light_remove_bulb
+--failed reruns: renewable_energy_gadgets_garden_light_bulb_swap
 ```
 
 The script exits 0 only when every test passed and no Lua error was logged, so it can gate a commit or a release.
