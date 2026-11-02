@@ -11,9 +11,9 @@ local T = PZHarness.Test
 local AWAY = 600
 -- Squares along a chunk's side, to tell which chunk a LoadChunk event loaded.
 local CHUNK_SQUARES = 8
--- How long the character stays away once the chunk has unloaded, in real milliseconds. Back at
--- once, a chunk has been seen to load with a vehicle a test had removed before the trip, as an
--- earlier save of it held it; the game hot-saves loaded chunks every second
+-- How long after a test removed a vehicle a chunk reload has to wait, in real milliseconds. Back
+-- sooner, a chunk has been seen to load with a vehicle a test had removed shortly before the trip,
+-- as an earlier save of it held it; the game hot-saves loaded chunks every second
 -- (IsoChunkMap.hotSaveFrequency).
 local AWAY_MS = 2000
 
@@ -40,14 +40,15 @@ function T.teleporter(self)
 end
 
 --- Queues a trip that unloads the chunk of `at` ({ x, y, z }) and loads it again: the character
---- goes far east of it, stays away a moment once the chunk has gone, and comes back to the square
---- they stood on when the trip set off. `whileAway()`, if given, queues what happens while the
---- chunk is gone. In single player the server is the same game and its chunk goes too; a
---- multiplayer server keeps chunks loaded long after the character leaves, so there the trip
---- reloads only this client's copy, sent again by the server (a test that needs the authority's
---- chunk gone is `spOnly = T.CHUNK_RELOAD_SP_ONLY`). A chunk that doesn't unload or load again
---- within T.CHUNK_MS, or comes back without LoadChunk (from a cache, with its state), fails the
---- test as missing it. A test that ends before the character is back puts them home.
+--- goes far east of it, stays away once the chunk has gone only if a test removed a vehicle in the
+--- last moments, and comes back to the square they stood on when the trip set off. `whileAway()`,
+--- if given, queues what happens while the chunk is gone. In single player the server is the
+--- same game and its chunk goes too; a multiplayer server keeps chunks loaded long after the
+--- character leaves, so there the trip reloads only this client's copy, sent again by the server
+--- (a test that needs the authority's chunk gone is `spOnly = T.CHUNK_RELOAD_SP_ONLY`). A chunk
+--- that doesn't unload or load again within T.CHUNK_MS, or comes back without LoadChunk (from a
+--- cache, with its state), fails the test as missing it. A test that ends before the character is
+--- back puts them home.
 function T.reloadChunk(self, at, whileAway)
     local p = T.player()
     local teleport = T.teleporter(self)
@@ -73,7 +74,10 @@ function T.reloadChunk(self, at, whileAway)
     end)
     T.waitFor(self, function() return getSquare(at.x, at.y, at.z) == nil end, "the trip's chunk unloaded on this client",
         T.CHUNK_MS)
-    T.waitUntil(function() return false end, AWAY_MS, "a stay away from the trip's chunk")
+    T.waitUntil(function()
+        local removed = PZHarness.Fixtures.vehicleRemovedMs
+        return removed == nil or getTimestampMs() - removed >= AWAY_MS
+    end, AWAY_MS, "a save of the trip's chunk after a vehicle's removal")
     if whileAway then
         whileAway()
     end

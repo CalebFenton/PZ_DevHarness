@@ -189,19 +189,42 @@ function Runtime.lit()
     return not T.player():tooDarkToRead()
 end
 
+-- How far the clock may move in one tick without being a jump the light has yet to follow: well
+-- past the fastest clock a test runs.
+local CLOCK_JUMP_HOURS = 0.25
+-- The light where the character stands as last noted, with the square, clock and grid it follows,
+-- and since when (real ms) none of them has changed.
+local light = {}
+
+-- Notes the light where the character stands, restarting its time when it or the square changes,
+-- the clock jumps or the grid switches: the lighting thread follows those only at its next update.
+local function noteLight()
+    local p = T.player()
+    local square = p and p:getCurrentSquare()
+    if not square then
+        light.sinceMs = nil
+        return
+    end
+    local lit, age, grid = Runtime.lit(), getGameTime():getWorldAgeHours(), getWorld():isHydroPowerOn()
+    if light.sinceMs == nil or lit ~= light.lit or square ~= light.square or grid ~= light.grid
+        or math.abs(age - light.age) >= CLOCK_JUMP_HOURS then
+        light.sinceMs = getTimestampMs()
+    end
+    light.lit, light.square, light.age, light.grid = lit, square, age, grid
+end
+Events.OnTick.Add(noteLight)
+
 -- A condition that holds once it has been light (`wantLit`) or dark where the character stands
--- for two of the lighting thread's updates (LightingThread, PerformanceSettings.lightingFps). A
--- single reading can be a square's light from before a clock change, which the next update
--- replaces: a build has been seen refused in the dark one tick after a wait read it light.
+-- for two of the lighting thread's updates (LightingThread, PerformanceSettings.lightingFps) with
+-- nothing it follows changing. A single reading can be a square's light from before a clock
+-- change, which the next update replaces: a build has been seen refused in the dark one tick after
+-- a wait read it light. Light that has held that long already is steady at once, so a craft after
+-- a craft doesn't wait again.
 local function steadyLight(wantLit)
-    local sinceMs
     return function()
-        if Runtime.lit() ~= wantLit then
-            sinceMs = nil
-            return false
-        end
-        sinceMs = sinceMs or getTimestampMs()
-        return getTimestampMs() - sinceMs >= 2000 / getPerformance():getLightingFPS()
+        noteLight()
+        return light.lit == wantLit and light.sinceMs ~= nil
+            and getTimestampMs() - light.sinceMs >= 2000 / getPerformance():getLightingFPS()
     end
 end
 

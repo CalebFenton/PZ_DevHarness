@@ -529,6 +529,10 @@ function Fixtures.newBench(square, entity, sprite, player)
     return bench
 end
 
+--- When a test last removed a vehicle, in real milliseconds (getTimestampMs), or nil: until a
+--- chunk save has followed the removal, a chunk reload can bring the vehicle back (T.reloadChunk).
+Fixtures.vehicleRemovedMs = nil
+
 --- Removes what a test placed (an IsoObject or a vehicle) the way the game does, so the mods'
 --- removal handlers run, and a server sends the removal to its clients: the dev mod's `remove`
 --- setting first, given `player`, the character whose test placed it, if known; then vanilla's.
@@ -536,6 +540,7 @@ end
 function Fixtures.removePlaced(thing, player)
     if instanceof(thing, "BaseVehicle") then
         thing:permanentlyRemove()
+        Fixtures.vehicleRemovedMs = getTimestampMs()
         return
     end
     if thing:getObjectIndex() == -1 then
