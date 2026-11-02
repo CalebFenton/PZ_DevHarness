@@ -108,6 +108,7 @@ end
 local setTime, setPerk, setSandbox = twoSided("setTime"), twoSided("setPerk"), twoSided("setSandbox")
 local setMultiplier, setMechanicsCheat = twoSided("setMultiplier"), twoSided("setMechanicsCheat")
 local setGrid, setInstant = twoSided("setGrid"), twoSided("setInstant")
+local cutOffWater, setTileProperty = twoSided("cutOffWater"), twoSided("setTileProperty")
 
 function T.setTime(self, hour)
     setTime(self, { hour = hour }, function()
@@ -180,6 +181,24 @@ function T.setGrid(self, on)
     if square then
         PZHarness.Fixtures.releaseGeneratorPower(square:getX(), square:getY(), square:getZ())
     end
+end
+
+--- The map cuts the town's water off at each of `squares` (handles, or any tables with x and y),
+--- on every storey of their columns (Fixtures.cutOffWater), as on a square vanilla's map marks
+--- NoWater or in a derelict room. Removed when the test ends.
+function T.cutOffWater(self, squares)
+    local at = {}
+    for _, square in ipairs(squares) do
+        table.insert(at, { x = square.x, y = square.y })
+    end
+    cutOffWater(self, { squares = at })
+end
+
+--- Gives the tile `sprite`, and so every object of it, the property `name` = `value` (a string; nil
+--- takes it away) until the test ends (Fixtures.setTileProperty). A value no tile of the game gives
+--- that property is recorded as missing: take it from a vanilla tile that has it.
+function T.setTileProperty(self, sprite, name, value)
+    setTileProperty(self, { sprite = sprite, name = name, value = value })
 end
 
 --- Midnight with the grid off, dark where the character stands; queues a wait for the light to

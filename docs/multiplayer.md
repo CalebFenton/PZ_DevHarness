@@ -93,17 +93,22 @@ The library's fixtures act on both copies, so a test written once runs in both m
 player behaves as before:
 
 - Setters (`setSandbox`, `setTime`, `setMultiplier`, `setGrid`, `setPerk`, `setMechanicsCheat`,
-  `changeItem`, the test's `instant` and `perks`) change this game's copy at once; on a multiplayer
-  client they also send the change to the server (handlers named `PZHarness.*`) at once and queue
-  a wait for its answer, so actions queued after them start once the server has it (server calls
-  may go out before that, as above). The server undoes it when the test ends; for `perks` a
-  multiplayer client takes back the server's levels, not its own: the server's perk sync can leave
-  this client's a level behind for up to a second, and a stale level put back after every test
-  would outlast the syncs. Each side calls the dev mod's `sandboxChanged` setting after its own
-  copy of an option changes. Each such setter is an entry of `PZHarness.Fixtures.TWO_SIDED`
-  (`shared/PZHarness/Fixtures.lua`), `apply(player, args)`, which changes one side's copy and
-  returns its undo, or nil and what is missing; `ServerFixtures.lua` serves it as the handler
-  `PZHarness.<name>`, and `TestLib.lua` makes its client setter.
+  `cutOffWater`, `setTileProperty`, `changeItem`, the test's `instant` and `perks`) change this
+  game's copy at once; on a multiplayer client they also send the change to the server (handlers
+  named `PZHarness.*`) at once and queue a wait for its answer, so actions queued after them start
+  once the server has it (server calls may go out before that, as above). The server undoes it
+  when the test ends; for `perks` a multiplayer client takes back the server's levels, not its
+  own: the server's perk sync can leave this client's a level behind for up to a second, and a
+  stale level put back after every test would outlast the syncs. Each side calls the dev mod's
+  `sandboxChanged` setting after its own copy of an option changes. Each such setter is an entry
+  of `PZHarness.Fixtures.TWO_SIDED` (`shared/PZHarness/Fixtures.lua`), `apply(player, args)`,
+  which changes one side's copy and returns its undo, or nil and what is missing;
+  `ServerFixtures.lua` serves it as the handler `PZHarness.<name>`, and `TestLib.lua` makes its
+  client setter.
+  `cutOffWater` registers a zone of vanilla's type NoWater on each side's map, and
+  `setTileProperty` changes the tile itself, which every object of it shares; it takes only a
+  value some tile of the game gives that property, since the game stores a property's values as
+  an index into those.
   A client lights its squares with the daylight the server sends it, which the server does only
   every ten game minutes, so the server's `setTime` (and its undo) makes its next climate tick
   send it; `makeDark` then waits, up to 10 seconds, for this client's light to follow.

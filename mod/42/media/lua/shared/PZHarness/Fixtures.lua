@@ -229,6 +229,51 @@ function Fixtures.setMechanicsCheat(player, on)
     return function() player:setMechanicsCheat(saved) end
 end
 
+--- The map cuts the town's water off at each of `squares` ({ x, y }), as a zone of vanilla's type
+--- NoWater does: IsoGridSquare.isNoWater, which reads the zones of level 0 for every storey, holds
+--- on their whole columns. Returns the undo, which removes the zones.
+function Fixtures.cutOffWater(squares)
+    local grid, zones = getWorld():getMetaGrid(), {}
+    for _, at in ipairs(squares) do
+        table.insert(zones, grid:registerZone("PZHarness.cutOffWater", "NoWater", at.x, at.y, 0, 1, 1))
+    end
+    return function()
+        for _, zone in ipairs(zones) do
+            grid:removeZone(zone)
+        end
+    end
+end
+
+--- Gives the tile `spriteName`, and so every object of it, the property `name` (one with a value,
+--- not a flag) = `value`, or none with `value` nil. Returns the undo, which puts back what the tile
+--- had, none included, or nil and what is missing. A property holds only the values some tile of
+--- the game gives it (TilePropertyAliasMap): any other would read back as one of those, so it is
+--- missing instead.
+function Fixtures.setTileProperty(spriteName, name, value)
+    local sprite = getSprite(spriteName)
+    if not sprite then
+        return nil, "the sprite " .. tostring(spriteName)
+    end
+    if IsoFlagType.FromString(name) ~= IsoFlagType.MAX then
+        return nil, "a tile property with a value named " .. name .. ", not a flag"
+    end
+    local props = sprite:getProperties()
+    local saved = props:get(name)
+    local function put(v)
+        if v == nil then
+            props:unset(name)
+        else
+            props:set(name, v)
+        end
+    end
+    put(value)
+    if props:get(name) ~= value then
+        put(saved)
+        return nil, "the value " .. tostring(value) .. " of the tile property " .. name
+    end
+    return function() put(saved) end
+end
+
 --- The two-sided fixtures, by name: `apply(player, args)` changes one side's copy and returns the
 --- undo, or nil and what is missing (a noun phrase). The server serves each as the handler
 --- "PZHarness.<name>" (ServerFixtures.lua), and TestLib makes its client setter.
@@ -239,6 +284,8 @@ Fixtures.TWO_SIDED = {
     setPerk = function(player, args) return Fixtures.setPerk(player, Perks.FromString(args.perk), args.level) end,
     setInstant = function(player, args) return Fixtures.setInstant(player, args.on) end,
     setMechanicsCheat = function(player, args) return Fixtures.setMechanicsCheat(player, args.on) end,
+    cutOffWater = function(_, args) return Fixtures.cutOffWater(args.squares) end,
+    setTileProperty = function(_, args) return Fixtures.setTileProperty(args.sprite, args.name, args.value) end,
     -- An option in neither the mod's table nor the game's is missing rather than created.
     setSandbox = function(_, args)
         local options, name = sandboxOptions(args.table, args.key)
