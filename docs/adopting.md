@@ -497,7 +497,10 @@ end
   `icon_build_<recipe>` for the build menu's; `catalog:iconList()` lists every icon the entries
   name so far, for `run:addIconSheet`. `opts.prefer` lists the full types an input that takes any
   item with a tag shows (as `PZHarness.Test.inputItem` picks) and `opts.fluidContainers` the
-  container, by fluid type, a line that takes or fills any container shows. `learn.magazines`
+  container, by fluid type, a line that takes or fills any container shows. `opts.moveables`
+  names, by recipe, the picked-up tile (`Moveables.<sprite>`) a line of `Base.Moveable` shows:
+  every picked-up tile is that one script item, so only the mod knows which tile its OnTest takes,
+  and a recipe that takes one without a stand-in fails the run. `learn.magazines`
   names the items whose script teaches the recipe (`LearnedRecipes`), sorted by name, as
   `learn.research` names those that research it.
 

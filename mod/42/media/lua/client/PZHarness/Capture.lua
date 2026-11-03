@@ -352,7 +352,8 @@ end
 --- (IconsForTexture) is always its first rather than the look a new item rolls; or else the item's
 --- own.
 function Capture.iconTexture(fullType)
-    return getScriptManager():getItem(fullType):getNormalTexture() or instanceItem(fullType):getTex()
+    local script = getScriptManager():getItem(fullType)
+    return script and script:getNormalTexture() or instanceItem(fullType):getTex()
 end
 
 local Catalog = {}
@@ -361,11 +362,13 @@ Catalog.__index = Catalog
 --- The item and recipe entries a mod's pages are laid out from, in the game's language, and the
 --- icons they name, for Run:addIconSheet. `opts.prefer`: the full types an input that takes any
 --- item with a tag shows, as PZHarness.Test.inputItem picks; `opts.fluidContainers`: by fluid type,
---- the container a line that takes or fills any fluid container shows.
+--- the container a line that takes or fills any fluid container shows; `opts.moveables`: by recipe
+--- name, the picked-up tile (a `Moveables.<sprite>` full type) a line of `Base.Moveable` shows,
+--- since every picked-up tile is that one script item and only the recipe's code knows which.
 function Capture.newCatalog(opts)
     opts = opts or {}
-    return setmetatable({ prefer = opts.prefer or {}, fluidContainers = opts.fluidContainers or {}, icons = {},
-        order = {} }, Catalog)
+    return setmetatable({ prefer = opts.prefer or {}, fluidContainers = opts.fluidContainers or {},
+        moveables = opts.moveables or {}, icons = {}, order = {} }, Catalog)
 end
 
 -- Registers `texture` for the icon sheet as `key`, named `name`, once.
@@ -413,12 +416,16 @@ local function fluidEntry(fluid, litres)
     return { name = fluid:getTranslatedName(), litres = litres }, fluid:getFluidTypeString()
 end
 
--- One input line: the items it names (every one, as alternatives, with what each takes), or for a
--- tag or any item the preferred one. A line that takes a fluid from a container (`fluid`), or
--- pours one into an empty container the player keeps (`fills`), says which and how much; `tag`
--- marks a line whose item only stands for the many it takes, and `uses` one that counts a
--- drainable's uses rather than items.
-function Catalog:input(input)
+-- The script item every picked-up tile is, whatever the tile.
+local MOVEABLE = "Base.Moveable"
+
+-- One input line of the recipe `recipeName`: the items it names (every one, as alternatives, with
+-- what each takes), or for a tag or any item the preferred one, and for picked-up tiles the
+-- recipe's stand-in. A line that takes a fluid from a container (`fluid`), or pours one into an
+-- empty container the player keeps (`fills`), says which and how much; `tag` marks a line whose
+-- item only stands for the many it takes, and `uses` one that counts a drainable's uses rather
+-- than items.
+function Catalog:input(input, recipeName)
     local names, counts = {}, {}
     local listed = input:getItems()
     for i = 0, listed:size() - 1 do
@@ -451,6 +458,10 @@ function Catalog:input(input)
     -- A drainable input counts uses unless it says ItemCount.
     entry.uses = first:isItemType(ItemType.DRAINABLE) and not input:isItemCount()
     for i, fullType in ipairs(names) do
+        if fullType == MOVEABLE then
+            fullType = self.moveables[recipeName]
+                or error(recipeName .. " takes a picked-up tile (" .. MOVEABLE .. "): name the one it shows in Capture.newCatalog's moveables")
+        end
         table.insert(entry.items, self:item(fullType, counts[i]))
     end
     return entry
@@ -524,7 +535,7 @@ function Catalog:recipe(name, build)
     }
     local inputs = recipe:getInputs()
     for i = 0, inputs:size() - 1 do
-        table.insert(entry.inputs, self:input(inputs:get(i)))
+        table.insert(entry.inputs, self:input(inputs:get(i), name))
     end
     local outputs = recipe:getOutputs()
     for i = 0, outputs:size() - 1 do

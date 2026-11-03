@@ -209,6 +209,13 @@ promo.save_gallery([("items", promo.page("Everything you can make", ITEMS.draw(w
                    REPO / "art" / "promo" / "gallery")
 ```
 
+The captures are release output, remade before a Workshop upload rather than after every change:
+reshoot when the game's look, a name the images show, or one of the mod's items or recipes changed
+since the last capture. The item and recipe sheets fail while an item or recipe the game has is
+missing from their layout, but a changed input or count shows only in the images, so after any
+item or recipe change reshoot the catalog (`PROMO=icons`, the group a mode with a `catalog` gets)
+and run `compose.py`.
+
 Pinning Pillow keeps a rerun from unchanged captures writing the same bytes. What it has:
 
 - **Captures.** `Captures(folder)` reads the folder's `promo.json`: `strings` (`modName`, the
