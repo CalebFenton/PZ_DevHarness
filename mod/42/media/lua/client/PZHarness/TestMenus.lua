@@ -100,9 +100,9 @@ function T.inSubmenu(menu, nameKey, matches)
 end
 
 --- The option in `menu` or any submenu under it that acts on `item`, passed as its third
---- parameter, as vanilla's item menus pass it, or its fourth, as cf_commonlib's JobOptions passes
---- what a job works with; nil without one. Matched by id, since a server's sync can replace this
---- client's item objects.
+--- parameter, as vanilla's item menus pass it, or its fourth, as a job menu may pass what a job
+--- works with; nil without one. Matched by id, since a server's sync can replace this client's
+--- item objects.
 function T.optionFor(menu, item)
     local function isIt(param)
         return instanceof(param, "InventoryItem") and param:getID() == item:getID()

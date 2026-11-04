@@ -4,10 +4,10 @@ require "PZHarness/ServerFixtures"
 -- Development only, not published. The authority's half of the job kit
 -- (client/PZHarness/TestJobs.lua): a job of the mod's job action done on the authority by the
 -- server's character, as the server does the one a client's action asks for. Written against the
--- job action contract cf_commonlib's JobAction.forFeatures gives the class the `jobAction` test
--- setting names, by method name: new(character, feature, job, target, with), complete(),
--- completeJob(character, feature, job, target, with), jobsOf(feature).refusal(character, job,
--- target, with) and targetOn(feature, square).
+-- job action contract of the class the `jobAction` test setting names, by method name:
+-- new(character, feature, job, target, with), complete(), completeJob(character, feature, job,
+-- target, with), jobsOf(feature).refusal(character, job, target, with) and targetOn(feature,
+-- square).
 
 local handler, need = PZHarness.serverHandler, PZHarness.need
 

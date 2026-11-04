@@ -82,7 +82,7 @@ fi
 # after the mode in capitals, PROMO for --promo.
 SELECTION=
 # The mark of the run's console lines: TAG for --test, else TAG without its "Test" and the mode
-# capitalised, REPromo for RETest's --promo.
+# capitalised, MyModPromo for MyModTest's --promo.
 MARK=$TAG
 # The test runs' settings, which the runner reads with the selection.
 LEAKS=${LEAKS:-fail} ORDER=${ORDER:-} ROUNDS=${REPEAT:-1} TRACE=${TRACE:-}

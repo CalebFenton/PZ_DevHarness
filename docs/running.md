@@ -117,9 +117,9 @@ where the copies still differ a `DESYNC` line, at most a handful per test with a
 rest, before the test's verdict. With `LEAKS=fail` they fail the test, as its reasons; with
 `LEAKS=warn` they only print; `LEAKS=off` skips the snapshots. A check that finds nothing costs one
 snapshot, taken on both sides at once in multiplayer, a few tens of milliseconds: about 19 ms for
-the 4,000 squares and 6,000 objects around Renewable Energy's start, most of it the Lua loop
-itself rather than its calls into the game, and caching the strings it builds saved under 5%. The
-last `SLOWEST` line says how long the checks took in all. When the character's square isn't loaded
+4,000 squares and 6,000 objects, most of it the Lua loop itself rather than its calls into the
+game, and caching the strings it builds saved under 5%. The last `SLOWEST` line says how long the
+checks took in all. When the character's square isn't loaded
 the check is skipped, and the next one only takes new snapshots, so what the unchecked test left
 isn't blamed on the next. A kept `--stay` game prints what its last run left behind as `DIRTY`
 lines when the next run starts, since that run starts on top of it.
@@ -266,9 +266,9 @@ the worktree; `dev/.runs-failed` stays with each checkout. The mod should gitign
   sends all but the highest only on its next pass, about every 10 ms, so a server call's round
   trip took a median 27 ms on one computer. In multiplayer ClickToStart and FastServer's
   NetLatency give every packet type that highest priority once the game's networking starts,
-  which cut the median to 12 ms and Renewable Energy's 315 multiplayer tests from 189 to 163
-  seconds. Every type has the same priority, so packets keep the order the game sends them in;
-  only the waits for the library's pass go. A real network's delay was never in the tests anyway:
+  which cut the median to 12 ms and a suite of 315 multiplayer tests from 189 to 163 seconds.
+  Every type has the same priority, so packets keep the order the game sends them in; only the
+  waits for the library's pass go. A real network's delay was never in the tests anyway:
   client and server share one computer.
 - Settling by loaded chunks. A run starts once one square in every chunk 40 squares around the
   character has loaded, not after a fixed delay.

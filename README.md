@@ -95,7 +95,7 @@ An assistant left alone with a test suite tends to rerun the same failing run ho
 
 ### It runs more than tests
 
-A mod can register its own modes, each a `--<mode>` flag that starts the scenario, runs the mod's code and quits. Renewable Energy and Hearing Aid use them to take the screenshots for their Workshop pages, with the weather held clear so the same shot looks the same tomorrow. The harness's [capture library](docs/adopting.md#capture-modes) shoots UI on black and on white to recover its transparency, crops each shot into named images, and reshoots one group of them without touching the rest.
+A mod can register its own modes, each a `--<mode>` flag that starts the scenario, runs the mod's code and quits, such as a mode that takes the screenshots for its Workshop page, with the weather held clear so the same shot looks the same tomorrow. The harness's [capture library](docs/adopting.md#capture-modes) shoots UI on black and on white to recover its transparency, crops each shot into named images, and reshoots one group of them without touching the rest.
 
 ## Quick start
 

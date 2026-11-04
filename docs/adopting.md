@@ -174,9 +174,9 @@ Every setting is optional:
 | `isFreeSquare(square, indoors)` | client | Where `squares` may put a fixture; by default a walkable square without a vehicle, indoors or outdoors as asked. |
 | `remove(object, player)` | both | Removes a placed object of the mod the way the mod does and returns true; anything it returns false for goes the vanilla way, a running generator switched off first. Every fixture removed when a test ends goes through it, whichever side placed it; `player` is the character whose test placed it, when the remover knows it. |
 | `spawnVehicle(script, square, facing, args, defer)` | server | Makes the vehicles `placeVehicle` asks for, with the test's `opts.args`, returning one, or nil to leave it to `addVehicleDebug`; `defer` takes undos, as a handler's does. |
-| `chance()` | server | The mod's roll module, whose `roll()` every chance of the mod draws through (cf_commonlib's `Chance`), for `forceRoll` and `PZHarness.Rolls`. |
+| `chance()` | server | The mod's roll module, a table whose `roll()` every chance of the mod draws through, for `forceRoll` and `PZHarness.Rolls`. |
 | `records` | both | The kinds of Global Object System record the record kit drives, by name: `{ owner(), build(square, tile)?, containers(object)?, extras(record, object, state)? }` (`server/PZHarness/ServerRecords.lua`). |
-| `jobAction()` | server | The mod's job action class (cf_commonlib's `JobAction.forFeatures`), for the job kit's `job`. |
+| `jobAction()` | server | The mod's job action class, with the methods the job kit calls by name (`new`, `complete`, `completeJob`, `jobsOf(feature).refusal`, `targetOn`; `server/PZHarness/ServerJobs.lua`), for the job kit's `job`. |
 | `leakRadius` | client | Squares each way the [leak check](running.md#leaks-and-desyncs) reads; by default a little past where `squares` looks. |
 | `leakLevels` | client | The z levels the leak check reads; the character's own by default. |
 | `leakIgnore` | client | Lua patterns over `"<sprite>@<class>"` the leak check leaves out, past the built-in ones. |

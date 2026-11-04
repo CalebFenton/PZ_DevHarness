@@ -3,8 +3,8 @@ require "PZHarness/ServerFixtures"
 require "PZHarness/Fixtures"
 
 -- Development only, not published. The authority's half of the record kit
--- (client/PZHarness/TestRecords.lua). Written against the record contract cf_commonlib's
--- ObjectSystem and GlobalObjects keep, by method name, so it needs no library: a record has its
+-- (client/PZHarness/TestRecords.lua). Written against a Global Object System record contract, by
+-- method name, so it needs no library: a record has its
 -- class's SAVED_FIELDS, lastHour (the world hour time last reached it), update() (a pass up to now)
 -- and afterChange() (shows and tells what changed), and its system (record.luaSystem) rebuilds
 -- records from what a save keeps (initLuaObjects). Each kind of the `records` test setting is
