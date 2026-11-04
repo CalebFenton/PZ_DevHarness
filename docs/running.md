@@ -276,10 +276,11 @@ the worktree; `dev/.runs-failed` stays with each checkout. The mod should gitign
   `RELOAD_FILES` again with `reloadLuaFile` and reruns. `reloadLuaFile` ignores a file's
   `Events.*.Add` calls (`LuaCompiler.rewriteEvents`), so only files that just register tests or
   server handlers reload safely; a change to anything else in the dev mod, to the harness mod, to
-  the published mod or to a library restarts the game. What earlier runs left in the kept world
-  stays there, so finish with a plain `--test`. The kept game shows and logs `<TAG> IDLE`, draws
-  24 frames a second while it waits, and quits after 30 minutes without a run or when another run
-  needs the game.
+  the published mod, to a library, to the harness's scripts, libraries or Java launchers or to
+  `dev/harness.conf` (the files a [repeat](#repeats)'s fingerprint covers) restarts the game. What
+  earlier runs left in the kept world stays there, so finish with a plain `--test`. The kept game
+  shows and logs `<TAG> IDLE`, draws 24 frames a second while it waits, and quits after 30
+  minutes without a run or when another run needs the game.
 - Early stop. In debug mode a Lua error stops the game in its error handler, so it never quits on
   its own. A Lua stack trace through any of the run's mods, a library's included, or any
   Lua failure once the harness has started, ends the run at once and prints the trace. An

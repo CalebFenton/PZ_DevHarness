@@ -11,9 +11,9 @@
 # path), and for --art Blender (BLENDER overrides its path). A mod's dev/review.sh sources this.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../lib/harness.sh"
+. "$HARNESS/lib/blender.sh"
 
 CHROME="${CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
-BLENDER="${BLENDER:-/Applications/Blender.app/Contents/MacOS/Blender}"
 ART=false
 [ "${1:-}" = --art ] && ART=true
 NAME="$(mod_info "$MOD_DIR" name)"
@@ -60,7 +60,6 @@ for file in "${OUTPUTS[0]}" "$PDF" "${OUTPUTS[@]:1}"; do
     echo "wrote $REVIEW_DIR/$file"
 done
 if $ART; then
-    PREVIEWS="$REVIEW_DIR/$MOD_FOLDER-art" PYTHONHASHSEED=0 \
-        "$BLENDER" -b --factory-startup --python-use-system-env -P "$REPO/art/models/preview.py" >/dev/null
+    PREVIEWS="$REVIEW_DIR/$MOD_FOLDER-art" blender "$REPO/art/models/preview.py" >/dev/null
     echo "wrote $REVIEW_DIR/$MOD_FOLDER-art/index.html"
 fi

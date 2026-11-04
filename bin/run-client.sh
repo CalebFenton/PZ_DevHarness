@@ -174,17 +174,15 @@ fi
 
 # What a --test run's verdict depends on: the kind of run, the selection and settings, the game
 # install and its code, which a Steam update changes, and the contents of the files the game loads
-# from the mods, the harness and the conf. RUNS_LOG keeps it with each run. The files are named
-# relative to the repository, so a worktree of it with the same files has the same fingerprint, as
-# its runs go to the same RUNS_LOG; the libraries by the conf's paths, which are relative to it too.
+# from the mods, the harness and the conf (run_sources). RUNS_LOG keeps it with each run. The files
+# are named relative to the repository, so a worktree of it with the same files has the same
+# fingerprint, as its runs go to the same RUNS_LOG; the libraries by the conf's paths, which are
+# relative to it too.
 run_fingerprint() {
     {
         printf '%s\n' "$MP" "$STAY" "$SELECTION" "$LEAKS" "$ORDER" "$ROUNDS" "$PZ"
         md5 -r "$PZ/Java/projectzomboid.jar"
-        (cd "$REPO" && find ${LIBRARY_MODS[@]+"${LIBRARY_MODS[@]}"} "${MOD_DIR#"$REPO/"}" \
-            "${DEV_MOD_DIR#"$REPO/"}" "${HARNESS_MOD_DIR#"$REPO/"}" \
-            "${HARNESS#"$REPO/"}/bin" "${HARNESS#"$REPO/"}/lib" "${HARNESS#"$REPO/"}/java" dev/harness.conf \
-            -type f -print0 | sort -z | xargs -0 md5 -r)
+        (cd "$REPO" && run_sources -print0 | sort -z | xargs -0 md5 -r)
     } | md5 -q
 }
 

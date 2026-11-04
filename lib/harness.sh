@@ -327,6 +327,18 @@ reloaded() {
     return 1
 }
 
+# What a run's games load or start from, relative to the repository: the libraries, the mod, the
+# dev mod, the harness mod, the harness's scripts, libraries and Java launchers, and the conf,
+# without Python's caches. Runs find over them with the rest of its arguments, which end in the
+# action (-print, -print0). run_fingerprint (bin/run-client.sh) hashes them; session_stale looks
+# for those changed since a kept game started.
+run_sources() {
+    (cd "$REPO" && find ${LIBRARY_MODS[@]+"${LIBRARY_MODS[@]}"} "${MOD_DIR#"$REPO/"}" \
+        "${DEV_MOD_DIR#"$REPO/"}" "${HARNESS_MOD_DIR#"$REPO/"}" \
+        "${HARNESS#"$REPO/"}/bin" "${HARNESS#"$REPO/"}/lib" "${HARNESS#"$REPO/"}/java" dev/harness.conf \
+        -name __pycache__ -prune -o -type f "$@")
+}
+
 # Why a kept game can't rerun the tests: it belongs to another cache dir, part of it has stopped,
 # or something it loaded only at start changed since. Prints nothing if it can.
 session_stale() {
@@ -341,13 +353,16 @@ session_stale() {
             return
         fi
     done
-    local file
+    # Any of run_sources newer than the session's settings file, which only a new game writes,
+    # but the dev mod's files a rerun loads again.
+    local file dev_mod="${DEV_MOD_DIR#"$REPO/"}/"
     while read -r file; do
-        if [[ $file != "$DEV_MOD_DIR/"* ]] || ! reloaded "${file#"$DEV_MOD_DIR/"}"; then
-            echo "${file#"$REPO/"} changed"
+        if [[ $file != "$dev_mod"* ]] || ! reloaded "${file#"$dev_mod"}"; then
+            echo "$file changed"
             return
         fi
-    done < <(find "$DEV_MOD_DIR" "$HARNESS_MOD_DIR" -newer "$HARNESS_FILE" -type f)
+    done < <(run_sources -newer "$HARNESS_FILE" -print)
+    # A file removed from a library or the mod since leaves no newer file: compare the copies.
     # "Files <ours> and <copy> differ" or "Only in <folder>: <name>", for every changed file.
     local changed i
     for ((i = 0; i < ${#LIBRARY_DIRS[@]}; i++)); do
