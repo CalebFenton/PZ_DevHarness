@@ -79,7 +79,7 @@ def main(argv):
         at, mode = argv[4], argv[5]
         for name, status, seconds in results.timed:
             print(f"{at} mode={mode} test={name} status={status} seconds={seconds}")
-    else:
+    elif command == "verdict":
         passed, failed, skipped = results.done or (0, 1, 0)
         if passed == 0 and failed == 0:
             print(f"FAIL: no test ran in this mode ({skipped} skipped)")
@@ -89,6 +89,9 @@ def main(argv):
             print("PASS")
             return 0
         return 1
+    else:
+        print(__doc__, file=sys.stderr)
+        return 2
     return 0
 
 

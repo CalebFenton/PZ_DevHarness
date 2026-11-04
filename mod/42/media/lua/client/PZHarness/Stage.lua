@@ -256,8 +256,12 @@ end
 local savedZoomLevels
 
 --- Adds the closest zoom the game draws to the zoom levels, which the options leave out, without
---- saving them; Stage.popClosestZoom puts them back.
+--- saving them; Stage.popClosestZoom puts them back. A push while one is in effect keeps the
+--- levels the first one found, and a pop without a push does nothing.
 function Stage.pushClosestZoom()
+    if savedZoomLevels then
+        return
+    end
     local core = getCore()
     savedZoomLevels = { core:getOptionZoomLevels1x(), core:getOptionZoomLevels2x() }
     core:setOptionZoomLevels1x(savedZoomLevels[1] .. ";" .. CLOSEST_ZOOM)
@@ -266,6 +270,9 @@ function Stage.pushClosestZoom()
 end
 
 function Stage.popClosestZoom()
+    if not savedZoomLevels then
+        return
+    end
     local core = getCore()
     core:setOptionZoomLevels1x(savedZoomLevels[1])
     core:setOptionZoomLevels2x(savedZoomLevels[2])

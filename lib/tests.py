@@ -316,13 +316,16 @@ def main(argv):
         return 0
     if command == "failed":
         selection = select_failed(conf, env, argv[2])
-    else:
+    elif command in ("changed", "check"):
         problems = check(conf)
         for problem in problems:
             print(problem, file=sys.stderr)
         if problems or command == "check":
             return 2 if problems else 0
         selection = select_changed(conf, env)
+    else:
+        print(__doc__, file=sys.stderr)
+        return 2
     if selection is None:
         return NOTHING
     print(f"SELECTION={selection}")

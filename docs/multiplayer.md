@@ -62,6 +62,10 @@ early when `isClient()`) is empty, so what only the authority can do goes throug
   requests in the order they were sent, holding one that comes early, and the client hands out the
   answers in that order too, so the undos stay in the order the calls were made. Client delivery
   advances a sequential queue head rather than searching all pending requests for each answer.
+  A request that never reaches the server, which takes a server that dropped a reliable packet
+  while it kept running, holds every later request of that session on the server for good: each
+  then fails after its own 15 seconds, so after one lost call the rest of the run fails slowly
+  rather than at once; start a fresh game.
 - A round trip takes about 25 ms, so a call need not wait for the answer before it when nothing
   in between happens on this client: one whose `args` is a table goes out as soon as only waits
   for answers that change nothing on the server are queued before it (the setters' and

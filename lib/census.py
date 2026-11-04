@@ -97,6 +97,8 @@ def chunk_squares(pack, index, levels):
                     if skip > 0:
                         skip -= 1
                         continue
+                # count ints follow: the room, then count - 1 tiles. A count of 0 or 1 reads nothing
+                # more, as in IsoLot's loader, which the map files are written for.
                 if count > 1:
                     tiles = struct.unpack_from("<%di" % (count - 1), pack, at + 4)
                     at += 4 * count
