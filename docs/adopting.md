@@ -255,18 +255,20 @@ end)
 
 A handler that checks many things on the server registers with `PZHarness.checkHandler(name, fn)`,
 from `PZHarness/ServerChecks.lua`, and answers with what it found wrong for the test to report.
-`fn(expect, expectNear, player, args, defer)` gets the pair `PZHarness.Checks.new()` makes
-(`PZHarness/Checks.lua`), which work as the test library's do and fill the answer's `failures`;
-what it can't find it takes through `PZHarness.need`, as any handler does. A
+`fn(expect, expectNear, expectEqual, player, args, defer)` gets the functions
+`PZHarness.Checks.new()` makes (`PZHarness/Checks.lua`), the same the test library's `expect`,
+`expectNear` and `expectEqual` are built on, which fill the answer's `failures`; what it can't
+find it takes through `PZHarness.need`, as any handler does. A
 test expects the answer empty with `expectNoFailures`, or `serverCheck` registers a whole test of
 one check:
 
 ```lua
 require "PZHarness/ServerChecks"
 
-PZHarness.checkHandler("thingsStocked", function(expect, expectNear)
+PZHarness.checkHandler("thingsStocked", function(expect, expectNear, expectEqual)
     expect(MyMod.stock ~= nil, "no stock table")
     expectNear("the stock's weight", MyMod.stockWeight(), 2.5)
+    expectEqual("the stock's shelves", MyMod.shelfCount(), 3)
 end)
 ```
 

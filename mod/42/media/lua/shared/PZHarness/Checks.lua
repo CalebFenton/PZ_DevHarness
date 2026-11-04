@@ -1,6 +1,7 @@
--- Development only, not published. Expectations outside a test's validate, such as a dev mod's
--- server handler that checks many things and answers with what it found wrong. Shared, so the test
--- library's own expectNear (client/PZHarness/TestLib.lua) compares and words a miss the same way.
+-- Development only, not published. Expectations: a test's validate (client/PZHarness/TestLib.lua's
+-- T.expect, expectNear and expectEqual) and a dev mod's server check handler, which checks many
+-- things and answers with what it found wrong (server/PZHarness/ServerChecks.lua), both use
+-- Checks.new, so the two compare and word a miss the same way.
 
 PZHarness = PZHarness or {}
 local Checks = {}
@@ -20,11 +21,12 @@ function Checks.equal(label, actual, expected)
     return actual == expected, label .. " is " .. tostring(actual) .. ", expected " .. tostring(expected)
 end
 
---- A fresh list of failures and the two functions that fill it: `expect(condition, message)`
---- records `message` when `condition` is nil or false, and `expectNear(label, actual, expected,
+--- A fresh list of failures and the three functions that fill it: `expect(condition, message)`
+--- records `message` when `condition` is nil or false; `expectNear(label, actual, expected,
 --- tolerance)` records "<label> is <actual>, expected <expected>" when `actual` isn't a number
---- within `tolerance` of `expected`. Both return whether the expectation held. Returns `expect,
---- expectNear, failures`.
+--- within `tolerance` of `expected`; `expectEqual(label, actual, expected)` records the same words
+--- when `actual ~= expected`. Each returns whether the expectation held. Returns `expect,
+--- expectNear, expectEqual, failures`.
 function Checks.new()
     local failures = {}
     local function expect(condition, message)
@@ -34,10 +36,12 @@ function Checks.new()
         return condition
     end
     local function expectNear(label, actual, expected, tolerance)
-        local ok, message = Checks.near(label, actual, expected, tolerance)
-        return expect(ok, message)
+        return expect(Checks.near(label, actual, expected, tolerance))
     end
-    return expect, expectNear, failures
+    local function expectEqual(label, actual, expected)
+        return expect(Checks.equal(label, actual, expected))
+    end
+    return expect, expectNear, expectEqual, failures
 end
 
 return Checks

@@ -12,12 +12,13 @@ local handler = PZHarness.serverHandler
 
 --- Registers the server check `name`, which only reads the authority's state and answers
 --- { failures = { message, ... } }, which the test expects to be empty (T.expectNoFailures,
---- T.serverCheck). `fn(expect, expectNear, player, args, defer)` records what it finds wrong
---- through the PZHarness.Checks.new pair.
+--- T.serverCheck). `fn(expect, expectNear, expectEqual, player, args, defer)` records what it
+--- finds wrong through the functions PZHarness.Checks.new makes, which word a miss as the test
+--- library's do.
 function PZHarness.checkHandler(name, fn)
     handler(name, function(player, args, defer)
-        local expect, expectNear, failures = PZHarness.Checks.new()
-        fn(expect, expectNear, player, args, defer)
+        local expect, expectNear, expectEqual, failures = PZHarness.Checks.new()
+        fn(expect, expectNear, expectEqual, player, args, defer)
         return { failures = failures }
     end)
 end

@@ -47,24 +47,20 @@ end
 
 -- Expectations
 
--- Unmet expectations of the test being validated.
-local failures = {}
+-- The expectations of the test being validated and their unmet ones, fresh for each
+-- (validateEntry).
+local expect, expectNear, expectEqual, failures = PZHarness.Checks.new()
 
 function T.expect(condition, message)
-    if not condition then
-        table.insert(failures, message)
-    end
-    return condition
+    return expect(condition, message)
 end
 
 function T.expectNear(label, actual, expected, tolerance)
-    local ok, message = PZHarness.Checks.near(label, actual, expected, tolerance)
-    return T.expect(ok, message)
+    return expectNear(label, actual, expected, tolerance)
 end
 
 function T.expectEqual(label, actual, expected)
-    local ok, message = PZHarness.Checks.equal(label, actual, expected)
-    return T.expect(ok, message)
+    return expectEqual(label, actual, expected)
 end
 
 --- Returns `value`; when it is nil or false, records `what` (a noun phrase: "a free indoor square
@@ -324,7 +320,7 @@ end
 local function validateEntry(entry, name, spec, problem)
     local self = entry.state or { undo = {}, missing = { "a run before validate" } }
     entry.state = nil
-    failures = {}
+    expect, expectNear, expectEqual, failures = PZHarness.Checks.new()
     if problem then
         table.insert(failures, problem)
     elseif entry.timedOut then
