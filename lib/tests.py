@@ -218,8 +218,8 @@ def select_changed(conf, env):
 
 
 def failed_record(path, key):
-    """The last record of runs of kind `key` in RUNS_FAILED: test name to how many such runs in a
-    row it has failed; None without one."""
+    """The record of runs of kind `key` in RUNS_FAILED: test name to how many such runs in a row it
+    has failed; None without one."""
     path = Path(path)
     found = [line for line in path.read_text().splitlines() if line.startswith(key + " ")] if path.exists() else []
     if not found:
@@ -229,15 +229,15 @@ def failed_record(path, key):
 
 
 def select_failed(conf, env, key):
-    """The exact names of the tests that failed in the last run of kind `key`, as a selection."""
+    """The exact names of the tests failing in runs of kind `key`, as a selection."""
     record = failed_record(env["RUNS_FAILED"], key)
     if record is None:
         raise SystemExit(f"--failed: no {key} run has been recorded in {conf.relative(env['RUNS_FAILED'])} yet")
     if not record:
-        print(f"--failed: nothing failed in the last {key} run; no tests to run")
+        print(f"--failed: no test failed the last {key} run that ran it; no tests to run")
         return None
     names = list(record)
-    print(f"--failed: rerunning what failed in the last {key} run: {', '.join(names)}")
+    print(f"--failed: rerunning what failed the last {key} run that ran it: {', '.join(names)}")
     return ",".join("=" + name for name in names)
 
 
@@ -278,26 +278,32 @@ def read_test_files(path):
 
 
 def record(conf, env, key, log, tag, test_files_path):
-    """Records the tests that failed in the run, or were running when it stopped, for the next
-    --failed run of kind `key`, each with how many such runs in a row it has failed, then prints
-    them and their suspects. A run that never started its tests leaves the last record alone."""
+    """Records, for the next --failed run of kind `key`, the tests that failed in the run, or were
+    running when it stopped, each with how many such runs in a row it has failed, then prints them
+    and their suspects. The record is per test: the run updates only the tests it ran, so a run of
+    other tests in between, an agent's beside yours, leaves your failures for --failed; a test the
+    mod no longer registers goes. A run that never started its tests leaves the record alone."""
     run = results.parse(log, tag)
     if not run.started:
         return
     names = sorted(run.failed)
+    ran = {name for name, status, _ in run.timed if status != "skip"} | run.failed
+    registered = read_test_files(test_files_path)
     previous = failed_record(env["RUNS_FAILED"], key) or {}
-    counts = {name: previous.get(name, 0) + 1 for name in names}
+    counts = {name: runs for name, runs in previous.items()
+              if name not in ran and (not registered or name in registered)}
+    counts.update({name: previous.get(name, 0) + 1 for name in names})
     path = Path(env["RUNS_FAILED"])
     kept = [line for line in path.read_text().splitlines() if not line.startswith(key + " ")] \
         if path.exists() else []
-    kept.append(f"{key} " + ",".join(f"{name}:{runs}" for name, runs in counts.items()))
-    tmp = path.with_name(path.name + ".tmp")
+    kept.append(f"{key} " + ",".join(f"{name}:{runs}" for name, runs in sorted(counts.items())))
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     tmp.write_text("\n".join(kept) + "\n")
     tmp.replace(path)
     if names:
-        print(f"--failed reruns: {', '.join(names)}")
-        print_suspects(conf, env, names, read_test_files(test_files_path))
-    stuck = [f"{name} ({runs})" for name, runs in counts.items() if runs >= STUCK_RUNS]
+        print(f"--failed reruns: {', '.join(sorted(counts))}")
+        print_suspects(conf, env, names, registered)
+    stuck = [f"{name} ({counts[name]})" for name in names if counts[name] >= STUCK_RUNS]
     if stuck:
         print(f"failed {STUCK_RUNS} or more runs in a row: {' '.join(stuck)}. Rerunning won't narrow it; "
               f"read {conf.submodule}/docs/debugging.md and change approach first")

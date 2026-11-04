@@ -13,7 +13,7 @@ What `dev/run-debug-client.sh` does with each flag, why a run is fast, and the r
 | `--test --stay` | The same, but the game stays open; the next `--test --stay` reruns the tests in it. |
 | `--test --mp` | The same in multiplayer: a dedicated server and a client that joins it; see [multiplayer.md](multiplayer.md). |
 | `--test --mp --stay` | Both stay open; the next `--test --mp --stay` reruns the tests in them. |
-| `--test --failed` | Runs only the tests that failed in the last `--test` run of the same kind (with or without `--mp`), and the one a stopped run was in. |
+| `--test --failed` | Runs only the tests whose last `--test` run of the same kind (with or without `--mp`) failed them or stopped in them, whichever run that was ([choosing tests](#choosing-tests)). |
 | `--test --changed` | Runs the tests the conf's `TEST_MAP` gives for the files the batch changed: since the branch left its upstream, committed or not, untracked files included ([choosing tests](#choosing-tests)). Prints the base and each file's share and why. A changed test file runs the tests it registers; a deleted file under the mods that no glob covers any more runs every test; with nothing changed under the mods, nothing runs. A library's changes are never in the batch: after one, run every test. |
 | `--<mode>` | Runs the mod's handler for the mode and quits. A capture mode with `MODE_CAPTURES_<mode>` then crops its shots into the mod's captures ([adopting.md](adopting.md#capture-modes)); one with `MODE_GROUPS_<mode>` shoots only the groups its selection variable (the mode in capitals, `PROMO` for `--promo`) names, every group if it names none, and refuses an unknown name before the game starts. |
 
@@ -127,12 +127,15 @@ lines when the next run starts, since that run starts on top of it.
 ## Choosing tests
 
 `--failed` reads `dev/.runs-failed` in the checkout, which every `--test` run that got as far as
-its tests rewrites for its kind (`test` or `test-mp`): the tests with a `FAIL` line, and the test
-a Lua error or the timeout stopped, each with the number of runs of that kind in a row it has
-failed. A run whose tests all passed leaves the list empty, and `--failed` then runs nothing. The
-mod should gitignore it, as it does `dev/.runs.log`. At the end of a run with failures the script
-prints `--failed reruns: <names>`, and, for a test that has failed three runs in a row, a line
-that says reruns aren't narrowing it down and points at [debugging.md](debugging.md).
+its tests updates for its kind (`test` or `test-mp`), test by test: a test with a `FAIL` line, or
+the one a Lua error or the timeout stopped, goes in with the number of runs of that kind in a row
+it has failed; a test the run passed comes out; the tests the run didn't run (or skipped) keep
+what an earlier run left, unless the mod no longer registers them. So `--failed` reruns each test
+whose last run of that kind failed, and a run of other tests in between, another agent's in the
+same checkout included, neither clears nor replaces yours. The mod should gitignore it, as it does
+`dev/.runs.log`. At the end of a run with failures the script prints `--failed reruns: <names>`,
+what a `--failed` run would now run, and, for a test of the run that has failed three runs in a
+row, a line that says reruns aren't narrowing it down and points at [debugging.md](debugging.md).
 
 `--changed` runs what the batch reaches: the files changed since its base, committed, staged,
 unstaged or untracked, of the repository and of the harness submodule, mapped through the conf's

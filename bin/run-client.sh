@@ -20,8 +20,8 @@
 #                    a problem in either log. With --stay both stay open, and the next
 #                    --test --mp --stay reruns the tests, the server loading its share of the
 #                    RELOAD_FILES again too.
-#   --test --failed  runs only the tests that failed, or were running when the game stopped, in
-#                    the last --test run of the same kind (with or without --mp)
+#   --test --failed  runs only the tests whose last --test run of the same kind (with or without
+#                    --mp) failed them or stopped in them
 #   --test --changed runs the tests the conf's TEST_MAP gives for the files changed in the batch:
 #                    since the branch left its upstream (SINCE=<ref> sets the base), uncommitted
 #                    work included
@@ -86,8 +86,8 @@ SELECTION=
 MARK=$TAG
 # The test runs' settings, which the runner reads with the selection.
 LEAKS=${LEAKS:-fail} ORDER=${ORDER:-} ROUNDS=${REPEAT:-1} TRACE=${TRACE:-}
-# Where --failed finds what failed last: "<test or test-mp> <name>:<runs>,...", each test that
-# failed with the number of runs of that kind in a row it has failed (lib/tests.py).
+# Where --failed finds what failed: "<test or test-mp> <name>:<runs>,...", each test whose last run
+# of that kind failed it, with the number of such runs in a row it has failed (lib/tests.py).
 FAILED_KEY="test${MP:+-mp}"
 
 # Runs `tests_py "$@"` for a selection: prints what it decided and sets SELECTION, or ends the
