@@ -109,6 +109,9 @@ class Game:
         self.item_types = set(data["item_types"])
         self.models = set(data["models"])
         self.translations = {name: set(keys) for name, keys in data["translations"].items()}
+        # Game translation files that didn't parse, path -> why: their keys count as missing from
+        # the game, so rules_translations fails on each rather than blame the mod's keys alone.
+        self.unreadable_translations = data["unreadable_translations"]
         self.languages = set(data["languages"])
         self.sprites = set(data["sprites"])
         self.tilesets = data["tilesets"]
@@ -155,17 +158,19 @@ class Game:
         data.update(items=sorted(items), tags=sorted(tags), recipes=sorted(recipes),
                     item_types=sorted(item_types), models=sorted(models))
 
-        translations = {}
+        translations, unreadable = {}, {}
         translate = os.path.join(self.media, "lua", "shared", "Translate")
         english = os.path.join(translate, "EN")
         for name in os.listdir(english):
             if name.endswith(".json"):
-                with open(os.path.join(english, name), encoding="utf-8", errors="replace") as f:
+                path = os.path.join(english, name)
+                with open(path, encoding="utf-8", errors="replace") as f:
                     try:
                         translations[name[:-5]] = sorted(json.load(f))
-                    except ValueError:
-                        pass
+                    except ValueError as e:
+                        unreadable[path] = str(e)
         data["translations"] = translations
+        data["unreadable_translations"] = unreadable
         # Languages.init offers each folder of Translate that has a language.json.
         data["languages"] = sorted(name for name in os.listdir(translate)
                                    if os.path.exists(os.path.join(translate, name, "language.json")))

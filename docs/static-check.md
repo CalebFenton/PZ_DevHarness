@@ -73,6 +73,7 @@ mistake, never report a correct name. Run over the game's own 1,400 Lua files, `
 | `lua-syntax` | A file the game's compiler refuses. |
 | `translation-file` | A `Translate/<LANG>/<Name>.json` whose name `Translator` never loads, or a `<LANG>` folder that is no language of the game's and has no `language.json` of its own. `language.json` declares a language; it is not a translation table. |
 | `translation-json` | Invalid JSON, a non-object file, or a key given twice (only the last counts). Translation tables also reject non-string values; language metadata permits the game's numeric and boolean fields. |
+| `game-translation` | A game English translation file the check can't parse as JSON: its keys would count as missing from the game, so the `translation-*` checks would blame the mod's. |
 | `translation-key` | A literal `getText`/`getTextOrNull` key, or a string literal shaped like one of the mod's keys (one with the mod's folder name in it), that no translation answers. `getTextInternal` picks the file by the key's prefix, so an `IGUI_` key in `Tooltip.json` is reported as being in the wrong file. |
 | `translation-extra` | A language with keys English lacks. |
 | `translation-missing` | With `CHECK_ALL_LANGUAGES`, a language of the game's without a translation file or key English has. Without it, missing keys are a note. |

@@ -14,7 +14,11 @@ PLACEHOLDER_LANGUAGES = {"STREW"}
 def translation_file(mod, game, report):
     # Translator.loadFiles fills each table from one file name; a file by any other name is
     # never opened. Languages.init offers only folders with a language.json, the game's or a mod's
-    # own, so a folder named for no such language is never read either.
+    # own, so a folder named for no such language is never read either. A game file the check
+    # couldn't parse leaves its keys unknown, so every mod key in that table would look missing.
+    for path, why in sorted(game.unreadable_translations.items()):
+        report.fail("game-translation", path, None, "the check couldn't read this game translation file, so "
+                    "its keys count as missing from the game: %s" % why)
     for language, name, path, _ in sorted(mod.translation_files):
         report.saw("translation files")
         if name not in game.translation_files:

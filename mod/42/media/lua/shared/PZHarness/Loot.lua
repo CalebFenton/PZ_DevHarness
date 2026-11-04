@@ -139,10 +139,14 @@ end
 --- Runs fn(parsed) with `containers` (key -> container table, as a room's in SuburbsDistributions)
 --- and `lists` (optional, name -> ProceduralDistributions list for the procedural ones to pick)
 --- parsed by the game, and returns its result. parsed[key] is the game's copy of the container, to
---- roll with Loot.rollFill, or nil if the game didn't take it. Afterwards takes both out and parses
---- the loot again, even when fn throws.
+--- roll with Loot.rollFill, or nil if the game didn't take it. Afterwards takes both out, putting
+--- back a list `lists` replaced, and parses the loot again, even when fn throws.
 function Loot.withParsed(containers, lists, fn)
     lists = lists or {}
+    local before = {}
+    for name in pairs(lists) do
+        before[name] = ProceduralDistributions.list[name]
+    end
     return Loot.restoring(function()
         for name, list in pairs(lists) do
             ProceduralDistributions.list[name] = list
@@ -158,7 +162,7 @@ function Loot.withParsed(containers, lists, fn)
     end, function()
         SuburbsDistributions[PROBE_ROOM] = nil
         for name in pairs(lists) do
-            ProceduralDistributions.list[name] = nil
+            ProceduralDistributions.list[name] = before[name]
         end
         ItemPickerJava.Parse()
     end)
