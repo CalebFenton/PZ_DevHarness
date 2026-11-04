@@ -14,3 +14,4 @@
 ## Read when needed
 
 - Before changing the runner, the leak check or the server channel, read `mod/42/media/lua/client/PZHarness/TestLib.lua`'s header and `docs/multiplayer.md`: the rules that keep each test independent, and what a multiplayer client can and can't do.
+- Before drawing or changing a mod's art, read `docs/art.md`'s "References before drawing": every item, tile and model is drawn against what it is in the game, the vanilla art it sits with, and real photos.

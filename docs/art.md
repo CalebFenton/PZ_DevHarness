@@ -6,6 +6,21 @@ the FBX models, the `.tiles` file and the texture pack. The mod keeps what is it
 palette, builders, tile tables, the game's props it replicates, and its paths and names, which it
 passes in. [adopting.md](adopting.md) covers the rest of what a mod gives the harness.
 
+## References before drawing
+
+Art is drawn from references, never from an idea of the thing alone. Before building or changing
+an item, tile or model, gather these and keep them on its review sheet beside the render:
+
+- **What it is in the game.** The recipe or job that makes it, its weight, and what uses it up.
+  Draw only that. A prop it doesn't contain, such as a container for loose stuff, is wrong.
+- **The game's own art.** The closest vanilla item, and the items and objects it goes with: what
+  it is made from, what it is used in, and where it sits. A gas bag is checked against the
+  digester it fits; a filter's packing against the hay it was made from and the gasifier that
+  burns it. These set the style, the colours, the size of an icon in its cell and of a model on
+  the floor. Measure a vanilla mesh for size rather than guessing it. `preview.vanilla_sprite`
+  reads tiles; the texture packs' `Item_*` sprites are the icons.
+- **Photographs.** A couple of real-world photos of the thing, for its shape, material and wear.
+
 ## Layout
 
 A mod's scripts put `dev/harness/lib` on `sys.path` and import from the package:
