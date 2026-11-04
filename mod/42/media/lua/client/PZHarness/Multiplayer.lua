@@ -107,9 +107,16 @@ end
 
 --- Joins the server and, once the character is in the game, moves it to the scenario's `startLoc`
 --- (the server places a new character in a spawn region), then calls `arrived()`. Only with --mp.
+--- A scenario the dev mod never registered, or a start the character never reached, fails the run
+--- (Report.lateFailure), whose tests still run where the character is.
 function Multiplayer.join(arrived)
     local function onGameStart()
-        local scenario = debugScenarios[PZHarness.config.scenario] or {}
+        local name = PZHarness.config.scenario
+        local scenario = debugScenarios[name]
+        if not scenario then
+            Report.lateFailure("PZHarness.join", "the dev mod registered no scenario " .. tostring(name))
+            scenario = {}
+        end
         local loc = scenario.startLoc
         local sinceMs, teleported = getTimestampMs(), false
         local function onTick()
@@ -123,7 +130,8 @@ function Multiplayer.join(arrived)
                 if getTimestampMs() - sinceMs < START_WAIT_MS then
                     return
                 end
-                print("PZHarness: the character didn't reach the scenario's start; the tests run where it is")
+                Report.lateFailure("PZHarness.join", "the character didn't reach the scenario's start "
+                    .. loc.x .. "," .. loc.y .. "," .. loc.z .. " in " .. START_WAIT_MS / 1000 .. " s")
             end
             Events.OnTick.Remove(onTick)
             arrived(scenario)

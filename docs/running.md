@@ -45,7 +45,10 @@ Console lines, in `<cache>/console.txt`: `<TAG> START <n>`, `<TAG> ORDER <order>
 and `<TAG> DESYNC <name>: <square> client [...] server [...]` for what a test left behind,
 `<TAG> PASS <name>`, `<TAG> FAIL <name>: <reasons>`, `<TAG> SKIP <name>: <why>` for each test that
 opted out of this mode, each of those three ending with the test's wall time, `(<s> s)`, and
-`<TAG> FAIL <entry>: the selection names no test` for a `TESTS` entry that matches no test; then the
+`<TAG> FAIL <entry>: the selection names no test` for a `TESTS` entry that matches no test, and
+`<TAG> FAIL <what>: <why>` for a failure outside any test (a server undo after its test's verdict,
+a multiplayer start that never reached the scenario's start or whose scenario isn't registered, a
+kept game's reload that failed on the server), which the next `DONE` line counts; then the
 `REPEAT` counts, `<TAG> SLOWEST` lines, `<TAG> TIME <s> s, <n> frames`,
 `<TAG> DONE passed=<n> failed=<n> skipped=<n>`; with `--stay` also `<TAG> RUN <id>`,
 `<TAG> DIRTY <name>: <what>` for what the last run in the kept game left behind, and

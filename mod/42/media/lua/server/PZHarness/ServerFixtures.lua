@@ -402,7 +402,7 @@ handler("PZHarness.moveTo", function(player, args)
 end)
 
 handler("PZHarness.changeItem", function(player, args)
-    local item = need(player:getInventory():getItemById(args.id), "the server's copy of item " .. tostring(args.id))
+    local item = need(player:getInventory():getItemWithIDRecursiv(args.id), "the server's copy of item " .. tostring(args.id))
     Fixtures.changeItem(item, args.changes)
     item:syncItemFields()
     return {}
@@ -477,7 +477,7 @@ handler("PZHarness.dress", function(player, args)
     local inventory = player:getInventory()
     local worn, equipped = false, false
     for _, entry in ipairs(args.given or {}) do
-        local item = need(inventory:getItemById(entry.id), "the server's copy of given item " .. tostring(entry.id))
+        local item = need(inventory:getItemWithIDRecursiv(entry.id), "the server's copy of given item " .. tostring(entry.id))
         if entry.worn then
             player:setWornItem(item:getBodyLocation(), item)
             worn = true

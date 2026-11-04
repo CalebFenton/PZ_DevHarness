@@ -4,6 +4,7 @@ require "ISUI/ISUIElement"
 require "PZHarness/ServerCalls"
 local Run = require "PZHarness/Run"
 local Schedule = require "PZHarness/Schedule"
+local Report = require "PZHarness/Report"
 
 local Stay = {}
 
@@ -89,8 +90,15 @@ function Stay.serve()
             rerun()
             return
         end
-        -- A failure is in the server's log as SERVER FAIL, which fails the run.
-        PZHarness.ServerCalls.send("reload", { run = request.id, files = request.serverFiles }, rerun)
+        -- A reload that failed on the server, or whose answer never came, fails the run (its DONE
+        -- line counts the late failure); the tests still run, against whatever server Lua is
+        -- loaded.
+        PZHarness.ServerCalls.send("reload", { run = request.id, files = request.serverFiles }, function(answer)
+            if answer.error then
+                Report.lateFailure("reload", tostring(answer.error))
+            end
+            rerun()
+        end)
     end
     idle()
 end

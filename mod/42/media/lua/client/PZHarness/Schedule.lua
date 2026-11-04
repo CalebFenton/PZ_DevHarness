@@ -369,8 +369,9 @@ local function finishRun(state)
     local seconds = (getTimestampMs() - state.startedMs) / 1000
     Report.line("TIME", string.format("%.1f s, %d frames (%.0f a second)", seconds, state.ticks,
         state.ticks / math.max(seconds, 0.001)))
-    Report.line("DONE", "passed=" .. state.passed .. " failed=" .. (state.failed + Report.lateFailures - state.lateAtStart)
+    Report.line("DONE", "passed=" .. state.passed .. " failed=" .. (state.failed + Report.lateFailures)
         .. " skipped=" .. #state.skipped)
+    Report.lateFailures = 0
     state.onDone()
 end
 
@@ -425,7 +426,6 @@ function Schedule.runTests(selection, onDone)
         names = names, skipped = skipped, tests = tests, onDone = onDone, rounds = rounds,
         leaks = leaks, leakRadius = leakRadius, leakLevels = settings.leakLevels, leakIgnore = leakIgnore,
         passed = 0, failed = #unmatched, index = 0, ticks = 0, startedMs = startedMs, doneMs = startedMs,
-        lateAtStart = Report.lateFailures,
         -- For the summary: per-test timings, time between tests and its leak-check share, server
         -- waits (accumulated across a kept game's runs) and per-test pass/fail counts.
         times = {}, gapMs = 0, leakMs = 0, leakWaitedFull = 0, serverStartMs = PZHarness.ServerCalls.waitedMs(), tally = {},

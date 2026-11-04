@@ -7,8 +7,9 @@ local Report = {}
 
 local run = PZHarness.run
 
--- Failures that arrive after their test's verdict, such as a server undo that failed, over the
--- game's life; a run's DONE line counts those since its start.
+-- Failures that arrive after their test's verdict or outside any test, such as a server undo that
+-- failed or a multiplayer start's setup, that no DONE line has counted yet: the next one counts
+-- them (Schedule), so one before a run's start fails that run too.
 Report.lateFailures = 0
 -- Whether the harness runner is running the tests: it prints each verdict once the leak check
 -- after the test is done, and the test's own validate (TestLib) leaves it to the runner.

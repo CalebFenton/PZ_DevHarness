@@ -286,7 +286,7 @@ local function clientCopies(given)
     local inventory = T.player():getInventory()
     local items = {}
     for _, entry in ipairs(given) do
-        local item = inventory:getItemById(entry.id)
+        local item = inventory:getItemWithIDRecursiv(entry.id)
         if not item then
             return nil
         end
