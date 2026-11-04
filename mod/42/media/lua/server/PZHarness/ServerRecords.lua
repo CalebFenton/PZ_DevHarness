@@ -73,8 +73,7 @@ function Records.read(kind, record, object)
     local state = Fixtures.fieldsOf(record, record.SAVED_FIELDS)
     state.loaded = object ~= nil
     if object then
-        local sprite = object:getSprite()
-        state.sprite = sprite and sprite:getName()
+        state.sprite = Fixtures.spriteName(object)
         state.overlays = Fixtures.overlaysOf(object)
         state.summary = spec.owner().currentSummary(object)
     end

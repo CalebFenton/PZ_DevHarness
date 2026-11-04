@@ -92,7 +92,7 @@ end
 --- tell them from other objects), and litter.
 function Stage.isGroundCover(object)
     local props = object:getProperties()
-    local sprite = object:getSprite() and object:getSprite():getName()
+    local sprite = PZHarness.Fixtures.spriteName(object)
     return (props ~= nil and (props:has(IsoFlagType.canBeRemoved)
         or (props:has(IsoFlagType.vegitation) and object:getType() ~= IsoObjectType.tree)))
         or (sprite ~= nil and luautils.stringStarts(sprite, LITTER))

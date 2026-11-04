@@ -12,7 +12,7 @@ Stage.NATURAL_FLOOR = "blends_natural"
 
 local function floorName(square)
     local floor = square:getFloor()
-    return floor and floor:getSprite() and floor:getSprite():getName()
+    return floor and PZHarness.Fixtures.spriteName(floor)
 end
 
 -- Whether `wall`, a square's wall on one edge or nil, leaves it open ground of `opts`: checked apart

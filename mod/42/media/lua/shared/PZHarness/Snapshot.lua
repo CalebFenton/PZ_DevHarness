@@ -3,6 +3,7 @@
 -- vehicles, power, the character's lasting state, sandbox options, grid, clock and climate.
 -- Shared so the server snapshots its own copy the same way (see client/PZHarness/Leaks.lua).
 
+require "PZHarness/Fixtures"
 PZHarness = PZHarness or {}
 local Snapshot = {}
 PZHarness.Snapshot = Snapshot
@@ -49,7 +50,7 @@ local function objectToken(object)
         local item = object:getItem()
         look = "item:" .. (item and item:getFullType() or "?")
     else
-        look = object:getTextureName() or "-"
+        look = PZHarness.Fixtures.spriteName(object) or "-"
     end
     if (class == "IsoGenerator" or class == "LightSwitch") and object:isActivated() then
         look = look .. "*"

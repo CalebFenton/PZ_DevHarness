@@ -98,7 +98,7 @@ function T.placeWorkTable(player)
     end
     Runtime.outside("PZHarness.workTable", {}, function(at)
         local square = getSquare(at.x, at.y, at.z)
-        return T.objectWithSprite(square, PZHarness.Fixtures.WORK_TABLE_SPRITE) ~= nil
+        return PZHarness.Fixtures.objectWithSprite(square, PZHarness.Fixtures.WORK_TABLE_SPRITE) ~= nil
     end)
 end
 

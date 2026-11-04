@@ -83,7 +83,7 @@ function T.copyOf(handle, sprite)
     local square = getSquare(handle.x, handle.y, handle.z)
     sprite = sprite or handle.sprite
     if sprite then
-        return T.objectWithSprite(square, sprite)
+        return PZHarness.Fixtures.objectWithSprite(square, sprite)
     end
     local records = PZHarness.testSettings.records
     local isObject = records and records[handle.kind] and records[handle.kind].owner().feature.isObject
@@ -193,7 +193,7 @@ function T.placeTile(self, square, sprite, modData)
     local handle = T.where(square)
     local args = T.at(handle, { sprite = sprite, modData = modData })
     return placeOnServer(self, handle, "PZHarness.tile", args, function()
-        return T.objectWithSprite(getSquare(handle.x, handle.y, handle.z), sprite)
+        return PZHarness.Fixtures.objectWithSprite(getSquare(handle.x, handle.y, handle.z), sprite)
     end, "a " .. sprite)
 end
 
@@ -210,7 +210,7 @@ function T.placeBench(self, entity, sprite)
     local handle = T.where(square)
     local args = T.at(handle, { entity = entity, sprite = sprite })
     return placeOnServer(self, handle, "PZHarness.bench", args, function()
-        local bench = T.objectWithSprite(getSquare(handle.x, handle.y, handle.z), sprite)
+        local bench = PZHarness.Fixtures.objectWithSprite(getSquare(handle.x, handle.y, handle.z), sprite)
         return bench and bench:getComponent(ComponentType.CraftBench) and bench
     end, "a " .. entity)
 end
@@ -313,10 +313,10 @@ function T.placeAsPlayer(self, square, itemType, sprite, modData, carried)
         if not T.need(self, item and moveablesAction(square, "place", sprite, item, nil), "a way to place a " .. itemType) then
             return
         end
-        Runtime.waitUntil(function() return T.objectWithSprite(square, sprite) ~= nil end, RECEIVE_MS)
+        Runtime.waitUntil(function() return PZHarness.Fixtures.objectWithSprite(square, sprite) ~= nil end, RECEIVE_MS)
         T.server(self, "PZHarness.trackPlaced", T.at(handle, { sprite = sprite }))
         Runtime.wait(1, function()
-            handle.object = T.need(self, T.objectWithSprite(square, sprite), "this client's copy of a placed " .. itemType)
+            handle.object = T.need(self, PZHarness.Fixtures.objectWithSprite(square, sprite), "this client's copy of a placed " .. itemType)
         end)
     end)
     return handle
@@ -329,11 +329,11 @@ function T.pickUpAsPlayer(self, at, sprite)
     local square = type(at) == "table" and at.square or at
     T.goNextTo(self, square)
     Runtime.wait(1, function()
-        local object = T.objectWithSprite(square, sprite)
+        local object = PZHarness.Fixtures.objectWithSprite(square, sprite)
         if not T.need(self, object and moveablesAction(square, "pickup", sprite, nil, object), "a way to pick up the " .. sprite) then
             return
         end
-        Runtime.waitUntil(function() return T.objectWithSprite(square, sprite) == nil end, RECEIVE_MS)
+        Runtime.waitUntil(function() return PZHarness.Fixtures.objectWithSprite(square, sprite) == nil end, RECEIVE_MS)
     end)
 end
 

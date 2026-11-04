@@ -93,8 +93,7 @@ end)
 
 -- What an object on a square is drawn as, to tell it from the others there.
 local function lookOf(object)
-    local sprite = object:getSprite()
-    return sprite and sprite:getName() or object:getObjectName()
+    return Fixtures.spriteName(object) or object:getObjectName()
 end
 
 --- Has what stands on the square at `at` ({ x, y, z }) when the test ends, and didn't now, go then

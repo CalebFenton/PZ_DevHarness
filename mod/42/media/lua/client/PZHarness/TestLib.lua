@@ -400,9 +400,4 @@ function T.refreshInventoryWindows()
     end
 end
 
--- In shared/PZHarness/Fixtures.lua, so a dev mod's server handlers have them too.
-T.lineUpTrailer = PZHarness.Fixtures.lineUpTrailer
-T.objectWithSprite = PZHarness.Fixtures.objectWithSprite
-T.countPairs = PZHarness.Fixtures.countPairs
-
 return T

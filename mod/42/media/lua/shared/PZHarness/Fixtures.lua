@@ -394,11 +394,17 @@ function Fixtures.fieldsOf(source, keys)
     return fields
 end
 
+--- The name of the sprite `object` is drawn as, or nil: how the harness tells tiles apart, in its
+--- fixtures and in the leak check's tokens (Snapshot) alike.
+function Fixtures.spriteName(object)
+    return object:getTextureName()
+end
+
 --- The first object on `square` drawn as `sprite`, or nil. Takes a nil square.
 function Fixtures.objectWithSprite(square, sprite)
     local objects = square and square:getObjects()
     for i = 0, (objects and objects:size() or 0) - 1 do
-        if objects:get(i):getTextureName() == sprite then
+        if Fixtures.spriteName(objects:get(i)) == sprite then
             return objects:get(i)
         end
     end
@@ -648,8 +654,7 @@ function Fixtures.releaseGeneratorPower(x, y, z, going)
 end
 
 local function isWorkTable(object)
-    local sprite = object:getSprite()
-    return sprite ~= nil and sprite:getName() == Fixtures.WORK_TABLE_SPRITE
+    return Fixtures.spriteName(object) == Fixtures.WORK_TABLE_SPRITE
 end
 
 --- The work table next to the character, or nil.
