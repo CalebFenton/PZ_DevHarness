@@ -455,13 +455,14 @@ def slot_caption(slot):
 def learn_line(recipe):
     """How the recipe is learned: the magazines that teach it, the items whose research teaches
     it, among them often its own result, and the skill level at which a character works it out
-    alone."""
+    alone. A magazine goes by its name without vanilla's "Magazine: " in front, which says only
+    what kind of item it is."""
     learn = recipe["learn"]
     if not learn["needed"]:
         return "No need to learn it"
     ways = []
     if learn["magazines"]:
-        ways.append("from " + ", or ".join(name.split(":")[0] for name in learn["magazines"]))
+        ways.append("from " + ", or ".join(name.removeprefix("Magazine: ") for name in learn["magazines"]))
     results = {item["name"] for item in recipe["outputs"]}
     research = [name for name in learn["research"] if name not in results]
     if len(research) < len(learn["research"]):
