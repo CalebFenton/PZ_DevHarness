@@ -65,6 +65,12 @@ if __name__ == "__main__":
   `"icon_turn"`, degrees about the vertical. `Art.build_icons` maps a build-menu icon's name to its
   layers. The mod's preview reads the files back through `Art.tile_file`, `icon_file` and
   `build_icon_file`.
+- An icon is rendered `ICON_OVERSAMPLE` times larger and averaged down (`pixel_icon`): a little
+  more contrast about mid-grey, no change to saturation or brightness, a fixed ±`ICON_DITHER`
+  brightness jitter by pixel position, and an outline as dark as vanilla's (the fill × 0.28, at
+  most 0.12), so pale items keep their silhouette. A material's grime follows each part's own
+  extent as well as its metres, so a small part gets blotches too. `kit.text(..., bold=metres)`
+  thickens lettering whose strokes a small icon would lose.
 - A layer is `render.layer(build, holdout=False, at=(0, 0, 0), turn=0, scale=1, **options)`:
   `build(collection, **options)`'s parts, placed, turned about the vertical and scaled. A `holdout`
   layer draws invisible, so an overlay tile drawn over its base keeps only what the base doesn't

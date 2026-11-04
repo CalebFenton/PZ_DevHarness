@@ -347,12 +347,15 @@ def mound(collection, name, mat, radii, at=(0, 0, 0), rotate=None, squareness=1.
     return obj
 
 
-def text(collection, name, mat, body, size, at=(0, 0, 0), rotate=(90, 0, 0), align="CENTER"):
+def text(collection, name, mat, body, size, at=(0, 0, 0), rotate=(90, 0, 0), align="CENTER", bold=0.0):
     """Flat lettering as a mesh, by default standing upright and reading from the front (-Y), its
-    baseline centre at `at`. Lift it a millimetre off the surface it is printed on."""
+    baseline centre at `at`. Lift it a millimetre off the surface it is printed on. `bold` thickens
+    every stroke by that many metres on each side (the font curve's offset), for lettering whose
+    strokes would come out thinner than a pixel on a small icon."""
     curve = bpy.data.curves.new(name, "FONT")
     curve.body = body
     curve.size = size
+    curve.offset = bold
     curve.align_x = align
     curve.align_y = "BOTTOM_BASELINE"
     curve.resolution_u = 3

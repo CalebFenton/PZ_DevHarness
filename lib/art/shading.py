@@ -30,9 +30,12 @@ _MATERIALS = {}
 # peeled off the log, its figure broad and wavy. Weathered planks, as the game draws its own crates
 # and composters, are dark with grain cut deep by the rain. Small wood, a tray's sides or a carved
 # blade, takes a finer figure, or a board's would cross it once or not at all and leave it flat.
-GRAIN = {"board": (0.08, 12.0, 3.0, 0.5), "veneer": (0.09, 4.0, 3.0, 0.5), "weathered": (0.05, 14.0, 4.0, 0.3),
+GRAIN = {"board": (0.08, 12.0, 3.0, 0.5), "veneer": (0.09, 4.0, 3.0, 0.3), "weathered": (0.05, 14.0, 4.0, 0.3),
          "fine": (0.025, 10.0, 3.0, 0.45)}
 GRAIN_EARLY = 1.1  # the pale wood between grain lines
+# Grime blotches across any one part, on top of those its size in metres gives it: a part a few
+# centimetres long, an icon's whole item, would otherwise sit inside one blotch and look flat.
+GRIME_PER_PART = 3.5
 
 
 def _math(nodes, links, operation, a, b=None, c=None, clamp=False):
@@ -106,7 +109,14 @@ def material(name, colour, roughness=0.6, metallic=0.0, grime=0.12, scale=40.0, 
     ramp.color_ramp.elements[0].color = (1 - grime, 1 - grime, 1 - grime, 1)
     ramp.color_ramp.elements[1].position = 0.7
     ramp.color_ramp.elements[1].color = (1, 1, 1, 1)
-    links.new(_noise(nodes, links, coords.outputs["Object"], scale / 8, 6.0), ramp.inputs["Fac"])
+    # The blotches follow the part's metres and its own extent (Generated runs 0 to 1 across it),
+    # so a small part gets some too; a part a metre or more long gets somewhat finer ones than before.
+    per_part = nodes.new("ShaderNodeVectorMath")
+    per_part.operation = "MULTIPLY_ADD"
+    links.new(coords.outputs["Generated"], per_part.inputs[0])
+    per_part.inputs[1].default_value = (GRIME_PER_PART / (scale / 8),) * 3
+    links.new(coords.outputs["Object"], per_part.inputs[2])
+    links.new(_noise(nodes, links, per_part.outputs["Vector"], scale / 8, 6.0), ramp.inputs["Fac"])
     reach = None
     if turf or fade:
         # How far out from the part's centre, give or take a ragged few centimetres.

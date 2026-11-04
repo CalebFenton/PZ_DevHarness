@@ -36,6 +36,7 @@ STOREY = 2.44949
 ICON_SIZE = 32
 BUILD_ICON_SIZE = 48
 ICON_OVERSAMPLE = 8  # rendered larger, then averaged down, so edges stay clean
+ICON_DITHER = 0.03  # each icon pixel's brightness jitter, either way (pixel_icon)
 
 
 @dataclass
@@ -253,20 +254,25 @@ def icon_camera(camera, stage, elevation, icon_size):
 
 def pixel_icon(pixels, size):
     """Averages a large render down to `size` and draws the game's dark outline: vanilla icons
-    are pixel art with a solid silhouette whose edge pixels are a dark shade of the object."""
+    are pixel art with a solid silhouette whose edge pixels are a near-black shade of the object."""
     factor = pixels.shape[0] // size
     alpha = pixels[..., 3:4]
     blocks = (pixels[..., :3] * alpha).reshape(size, factor, size, factor, 3).mean(axis=(1, 3))
     coverage = alpha.reshape(size, factor, size, factor).mean(axis=(1, 3))
     colour = blocks / np.maximum(coverage, 1e-4)[..., None]
-    # A little more contrast and saturation, as the hand-drawn icons have.
-    grey = colour.mean(axis=2, keepdims=True)
-    colour = np.clip(grey + (colour - grey) * 1.4, 0, 1)
-    colour = np.clip((colour - 0.5) * 1.15 + 0.56, 0, 1)
+    # A little more contrast about mid-grey: averaging blurs the shading inside a silhouette,
+    # and vanilla's hand-drawn icons spread their brightness wider than a downsampled render.
+    colour = np.clip((colour - 0.5) * 1.15 + 0.5, 0, 1)
+    # Vanilla's icons are drawn pixel by pixel and never quite flat; a fixed ±3% brightness jitter
+    # by position gives a render the same grain, the same on every run.
+    y, x = np.mgrid[0:size, 0:size].astype(np.uint32)
+    jitter = ((x * np.uint32(73856093)) ^ (y * np.uint32(19349663))) % np.uint32(1021) / 1020.0 * 2 - 1
+    colour = np.clip(colour * (1 + ICON_DITHER * jitter[..., None]), 0, 1)
     solid = coverage > 0.35
     padded = np.pad(solid, 1, constant_values=False)
     edge = solid & ~(padded[:-2, 1:-1] & padded[2:, 1:-1] & padded[1:-1, :-2] & padded[1:-1, 2:])
-    colour[edge] = colour[edge] * 0.28
+    # Capped, so a pale object's edge is as dark as a dark one's, as vanilla's are.
+    colour[edge] = np.minimum(colour[edge] * 0.28, 0.12)
     out = np.zeros((size, size, 4), dtype=np.float32)
     out[..., :3] = colour
     out[..., 3] = solid
