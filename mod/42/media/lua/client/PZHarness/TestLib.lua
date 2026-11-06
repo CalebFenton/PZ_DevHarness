@@ -370,13 +370,16 @@ end
 
 --- Registers test `name`. `spec`: run(self), validate(self), cleanup(self), all optional; `hour`;
 --- `instant`; `sandbox` (option = value, see T.setSandbox); `spOnly` or `mpOnly`, the reason the
---- test runs only in single player or only in multiplayer; anything else the mod's setup reads.
+--- test runs only in single player or only in multiplayer; `needsMod`, the id of another mod
+--- without which the runner skips the test (a run loads one through EXTRA_MODS); anything else the
+--- mod's setup reads.
 function T.test(name, spec)
     local problem = optOutProblem(spec)
     TimedActionTests.getTests()[name] = {
         -- The runner reads these to skip the test in the other mode.
         spOnly = not problem and spec.spOnly or nil,
         mpOnly = not problem and spec.mpOnly or nil,
+        needsMod = spec.needsMod,
         -- The runner's per-test limit in real seconds, if the test needs more than its default.
         timeoutSeconds = spec.timeoutSeconds,
         -- The file's name, which "@<file>" selects (Schedule.lua).

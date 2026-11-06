@@ -2,12 +2,13 @@
 
     python3 check.py --game <game Java folder> --api <GameProbe API file> --cache <folder>
                      --name <mod folder name> [--library <mod folder>]... [--plugin <file>]...
-                     [--all-languages] <mod root>...
+                     [--all-languages] [--other-global <name>]... <mod root>...
 
 bin/static-check.sh runs it after GameProbe has compiled every Lua file, with what the mod's
 dev/harness.conf says. The roots are the published mod's version folders, its mod.info's first,
 then the dev mod's and the harness mod's (moddata.Mod); each --library is a library mod's folder,
-from the conf's LIBRARY_MODS in load order.
+from the conf's LIBRARY_MODS in load order; each --other-global a global of a mod the mod works
+alongside without requiring it, from the conf's OTHER_MOD_GLOBALS.
 """
 import argparse
 import importlib.util
@@ -34,6 +35,7 @@ def main(argv):
     parser.add_argument("--library", action="append", default=[])
     parser.add_argument("--plugin", action="append", default=[])
     parser.add_argument("--all-languages", action="store_true")
+    parser.add_argument("--other-global", action="append", default=[])
     parser.add_argument("roots", nargs="+")
     args = parser.parse_args(argv)
 
@@ -47,7 +49,8 @@ def main(argv):
     # Messages name files from the folder every root is in; a library's from there too, by a path
     # out of it.
     report = moddata.Report(os.path.commonpath(roots) if len(roots) > 1 else os.path.dirname(roots[0]))
-    mod = moddata.Mod(roots, args.name, report, args.all_languages, [os.path.abspath(f) for f in args.library])
+    mod = moddata.Mod(roots, args.name, report, args.all_languages, [os.path.abspath(f) for f in args.library],
+                      args.other_global)
     # An empty scan means the paths are wrong, not that the mod is clean.
     if not mod.lua:
         report.fail("no-input", roots[0], None, "found no Lua files under %s" % ", ".join(roots))

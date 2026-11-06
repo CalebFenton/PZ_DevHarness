@@ -49,9 +49,25 @@ local function matchesFilter(name, entry, filter)
     return luautils.stringStarts(name, filter)
 end
 
--- Why the test `entry` doesn't run in this game, or nil: the opt-out of its spec (TestLib's
--- spOnly and mpOnly) for the other mode.
+-- Whether the mod of id `id` is active. Build 42 may list an id with the backslash its mod.info's
+-- require lines put before one.
+local function modActive(id)
+    local mods = getActivatedMods()
+    for i = 0, mods:size() - 1 do
+        local active = mods:get(i)
+        if active == id or active == "\\" .. id then
+            return true
+        end
+    end
+    return false
+end
+
+-- Why the test `entry` doesn't run in this game, or nil: the mod its spec needs isn't loaded
+-- (TestLib's needsMod), or its opt-out (spOnly and mpOnly) for the other mode.
 local function skipReason(entry)
+    if entry.needsMod and not modActive(entry.needsMod) then
+        return "needs the mod " .. entry.needsMod .. ", which this run doesn't load (EXTRA_MODS)"
+    end
     if isClient() then
         return entry.spOnly and "single player only: " .. entry.spOnly
     end

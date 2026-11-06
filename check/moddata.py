@@ -78,7 +78,7 @@ class Mod:
     libraries are the folders of the library mods the published mod requires, in load order; they
     ship too, so their files are read and checked as the published mod's are."""
 
-    def __init__(self, roots, name, report, all_languages=False, libraries=()):
+    def __init__(self, roots, name, report, all_languages=False, libraries=(), other_globals=()):
         published = [r for r in roots if os.path.dirname(r) == os.path.dirname(roots[0])]
         self.libraries = []
         for folder in libraries:
@@ -96,6 +96,8 @@ class Mod:
         self.report = report
         # Whether every language the game offers must have every translation English has.
         self.all_languages = all_languages
+        # Globals of mods the mod works alongside without requiring them, which no file here defines.
+        self.other_globals = set(other_globals)
 
         # The published mod's mod.info, in the first root; the dev mod's and the harness mod's
         # describe other mods.
@@ -391,7 +393,8 @@ def lua_globals(mod, game, published=False):
     """Every global some Lua or the engine defines; optionally only the Lua that ships."""
     cache = "_published_globals" if published else "_globals"
     if not hasattr(mod, cache):
-        known = set(game.globals) | set(game.classes) | game.lua_globals | game.lua_members.get("_G", set())
+        known = (set(game.globals) | set(game.classes) | game.lua_globals | game.lua_members.get("_G", set())
+                 | mod.other_globals)
         for lua in mod.lua:
             if not published or lua.published:
                 # _G.name = ... defines a global too.

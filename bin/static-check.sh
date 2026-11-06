@@ -62,6 +62,11 @@ if declare -p CHECK_PLUGINS > /dev/null 2>&1; then
     done
 fi
 [ -z "${CHECK_ALL_LANGUAGES:-}" ] || options+=(--all-languages)
+if declare -p OTHER_MOD_GLOBALS > /dev/null 2>&1; then
+    for name in ${OTHER_MOD_GLOBALS[@]+"${OTHER_MOD_GLOBALS[@]}"}; do
+        options+=(--other-global "$name")
+    done
+fi
 
 status=0
 # Kahlua reads stdlib.lua from the working directory.

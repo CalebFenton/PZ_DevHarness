@@ -55,6 +55,30 @@ done
 unset library
 PUBLISHED_MODS="$PUBLISHED_MODS$MOD_ID"
 
+# Other mods a client or server run loads too, from EXTRA_MODS: mod folders joined by ":", each as
+# the Workshop installs it, its id read from the last 42* version folder's mod.info by name. They
+# load after the libraries and before the mod, for running the tests alongside a mod the published
+# one doesn't require; the static check and validate-server.sh never load them. RUN_MODS is
+# PUBLISHED_MODS with them in, as a server's Mods= line takes them.
+EXTRA_DIRS=() EXTRA_FOLDERS=() EXTRA_IDS=() RUN_MODS=
+if [ -n "${EXTRA_MODS:-}" ]; then
+    IFS=: read -ra extras <<< "$EXTRA_MODS"
+    for extra in "${extras[@]}"; do
+        info=$(find "$extra" -maxdepth 2 -path "$extra/42*/mod.info" 2>/dev/null | sort | tail -1)
+        if [ -z "$info" ]; then
+            echo "EXTRA_MODS names $extra, which has no 42*/mod.info: name a mod folder, the one holding common/" >&2
+            exit 2
+        fi
+        EXTRA_DIRS+=("$(cd "$extra" && pwd)")
+        EXTRA_FOLDERS+=("$(basename "$extra")")
+        # A mod.info written on Windows ends its lines with a carriage return.
+        EXTRA_IDS+=("$(sed -n 's/^id=//p' "$info" | head -1 | tr -d '\r')")
+        RUN_MODS="$RUN_MODS${EXTRA_IDS[${#EXTRA_IDS[@]} - 1]};"
+    done
+    unset extras extra info
+fi
+RUN_MODS="${PUBLISHED_MODS%"$MOD_ID"}$RUN_MODS$MOD_ID"
+
 # Lua stack traces name a mod as "(MOD:<name in mod.info>)". MOD_ERROR matches the published mod
 # and its libraries, and OUR_LUA_ERROR any mod a harness run loads but vanilla. A library's error is
 # ours too: its code ships for the mod and runs in every player's game the mod is in.
@@ -138,12 +162,15 @@ copy_mod() {
     rsync -a --delete "$1/" "$CACHE/mods/$2/"
 }
 
-# The published mod and its libraries, for a client or a server of a harness run: real copies, as
-# the Workshop installs them.
+# The published mod, its libraries and EXTRA_MODS, for a client or a server of a harness run: real
+# copies, as the Workshop installs them.
 install_mod() {
     local i
     for ((i = 0; i < ${#LIBRARY_DIRS[@]}; i++)); do
         copy_mod "${LIBRARY_DIRS[$i]}" "${LIBRARY_FOLDERS[$i]}"
+    done
+    for ((i = 0; i < ${#EXTRA_DIRS[@]}; i++)); do
+        copy_mod "${EXTRA_DIRS[$i]}" "${EXTRA_FOLDERS[$i]}"
     done
     copy_mod "$MOD_DIR" "$MOD_FOLDER"
 }
@@ -598,7 +625,7 @@ prepare_cache() {
     # Libraries first, in their load order, as a player's game loads a mod's require= mods first.
     {
         printf 'VERSION = 1,\n\nmods\n{\n'
-        printf '    mod = %s,\n' ${LIBRARY_IDS[@]+"${LIBRARY_IDS[@]}"} "$MOD_ID" "$HARNESS_MOD_ID" "$DEV_MOD_ID"
+        printf '    mod = %s,\n' ${LIBRARY_IDS[@]+"${LIBRARY_IDS[@]}"} ${EXTRA_IDS[@]+"${EXTRA_IDS[@]}"} "$MOD_ID" "$HARNESS_MOD_ID" "$DEV_MOD_ID"
         printf '}\n\nmaps\n{\n}\n'
     } > "$CACHE/mods/default.txt"
     # The harness sets the scenario's forceLaunch; this debug option lets it start from the main
@@ -626,7 +653,7 @@ prepare_mp_server() {
     local client_cache=$CACHE sandbox option key
     CACHE=$SERVER_CACHE
     link_dev_mods
-    prepare_server "$PUBLISHED_MODS;$HARNESS_MOD_ID;$DEV_MOD_ID" "DefaultPort=$SERVER_PORT" \
+    prepare_server "$RUN_MODS;$HARNESS_MOD_ID;$DEV_MOD_ID" "DefaultPort=$SERVER_PORT" \
         "UDPPort=$((SERVER_PORT + 1))" Open=true PauseEmpty=false
     sandbox="$CACHE/Server/${SERVER_NAME}_SandboxVars.lua"
     if [ -f "$sandbox" ]; then

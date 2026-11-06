@@ -39,6 +39,12 @@ cache dir (with `--mp` the client's; `SERVER_CACHE` the server's); `SERVER_PORT`
 game `Contents` folder; `RERUN=1` runs a `--test` run the script would refuse as a
 [repeat](#repeats); `SINCE=<ref>` sets the commit the batch starts after, for `--changed` and the
 `suspects` lines.
+`EXTRA_MODS=<mod folder>:...` loads other mods in a client or server run too, after the
+libraries and before the mod: each a mod folder as the Workshop installs it (holding `common/` and
+a `42*` version folder with its `mod.info`), copied into the cache like the mod. It is for testing
+alongside a mod the published one doesn't require, so the static check and `validate-server.sh`
+leave it out, and a stack trace through it doesn't fail the run. A test whose spec sets
+`needsMod = "<id>"` is skipped in a game without that mod.
 
 Console lines, in `<cache>/console.txt`: `<TAG> START <n>`, `<TAG> ORDER <order>` and
 `<TAG> REPEAT <n> rounds` when set, `<TAG> LEAKS <mode>`, `TEST: <name>`, `<TAG> LEAK <name>: <what>`
